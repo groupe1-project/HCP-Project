@@ -34,6 +34,9 @@ class SousTheme(models.Model):
     nom = models.CharField(max_length=200)
     theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='sous_themes')
     ordre = models.IntegerField(default=0)
+
+    # Visibilité (Public / Privé) pour le sous-thème
+    is_visible = models.BooleanField(default=True)
     
     # Stockage des données Excel (votre logique actuelle)
     data_json = models.JSONField(null=True, blank=True) 

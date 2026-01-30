@@ -48,7 +48,10 @@ function App() {
     try {
       const res = await axios.get('http://127.0.0.1:8000/api/themes/');
       setThemes(res.data);
-    } catch (err) { console.error("Erreur thèmes", err); }
+    } catch (err) {
+      // Affiche la réponse du serveur si disponible pour aider le debug
+      console.error("Erreur thèmes", err.response?.data ?? err.message ?? err);
+    }
   };
 
   // Logique de filtrage du tableau
@@ -118,6 +121,25 @@ function App() {
     } catch (err) {
       console.error('Erreur suppression graphique', err);
       alert('Erreur lors de la suppression');
+    }
+  };
+
+  // Toggle publication status for a sous-thème
+  const toggleSubThemePublication = async (subThemeId, newVisibility) => {
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subThemeId}/`, { is_visible: newVisibility });
+      // refresh themes and update selectedTheme/selectedSubTheme
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedTheme) {
+        const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+        if (freshTheme) setSelectedTheme(freshTheme);
+        const freshSubTheme = freshTheme && freshTheme.sous_themes ? freshTheme.sous_themes.find(sub => sub.id === subThemeId) : null;
+        if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
+      }
+    } catch (err) {
+      console.error('Erreur changement statut sous-theme', err);
+      alert('Erreur lors du changement de statut');
     }
   };
 
@@ -321,13 +343,14 @@ function App() {
                         setShowAll(false);
                       } catch (err) { console.error(err); }
                     }}
-                    className="cursor-pointer bg-[#4a77b4] p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform"
+                    className="relative cursor-pointer bg-[#4a77b4] p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform"
                   >
                     {st.nom}
                     <div className="flex justify-center gap-2 mt-4 text-black">
                       <button className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
                       <button className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                     </div>
+                    <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                   </div>
                 ))}
               </div>
@@ -342,7 +365,23 @@ function App() {
                 <h3 className="bg-[#c2d9ff] px-6 py-2 border-2 border-black rounded-xl font-bold text-lg shadow-sm">
                   Sous thème : {selectedSubTheme.nom}
                 </h3>
-                <button onClick={() => setFormStep(3)} className="bg-orange-400 text-white px-4 py-1 border-2 border-black rounded-lg font-bold shadow-md">Fermer</button>
+                <div className="flex items-center gap-3">
+                  <div className={`w-5 h-5 rounded-full border border-black ${selectedSubTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                  <select
+                    value={selectedSubTheme.is_visible ? 'Public' : 'Privé'}
+                    onChange={async (e) => {
+                      const val = e.target.value;
+                      const newVis = val === 'Public';
+                      if (!confirm('Changer le statut du sous-thème ?')) return;
+                      await toggleSubThemePublication(selectedSubTheme.id, newVis);
+                    }}
+                    className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none"
+                  >
+                    <option value="Public">Public 📢</option>
+                    <option value="Privé">Privé 🔒</option>
+                  </select>
+                  <button onClick={() => setFormStep(3)} className="bg-orange-400 text-white px-4 py-1 border-2 border-black rounded-lg font-bold shadow-md">Fermer</button>
+                </div>
               </div>
 
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
@@ -495,15 +534,19 @@ function App() {
       )}
       {showThemeMeta && (
          <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
              <h2 className="text-xl font-black mb-4 text-center">Métadonnées du thème</h2>
              <div className="grid grid-cols-1 gap-4">
-               <textarea placeholder="Définition" className="p-2 border-2 border-black rounded" value={themeMeta.definition_text} onChange={e => setThemeMeta({...themeMeta, definition_text: e.target.value})} />
-               <textarea placeholder="Unité" className="p-2 border-2 border-black rounded" value={themeMeta.unite_text} onChange={e => setThemeMeta({...themeMeta, unite_text: e.target.value})} />
-               <textarea placeholder="Indication" className="p-2 border-2 border-black rounded" value={themeMeta.indication_text} onChange={e => setThemeMeta({...themeMeta, indication_text: e.target.value})} />
-               <textarea placeholder="Source" className="p-2 border-2 border-black rounded" value={themeMeta.source_text} onChange={e => setThemeMeta({...themeMeta, source_text: e.target.value})} />
-               <textarea placeholder="Périodicité" className="p-2 border-2 border-black rounded" value={themeMeta.periodicite_text} onChange={e => setThemeMeta({...themeMeta, periodicite_text: e.target.value})} />
-               <textarea placeholder="Couverture" className="p-2 border-2 border-black rounded" value={themeMeta.couverture_text} onChange={e => setThemeMeta({...themeMeta, couverture_text: e.target.value})} />
+               <textarea placeholder="Définition" className="p-2 border-2 border-black rounded h-32" value={themeMeta.definition_text} onChange={e => setThemeMeta({...themeMeta, definition_text: e.target.value})} />
+               <div className="flex gap-4">
+                 <textarea placeholder="Unité" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.unite_text} onChange={e => setThemeMeta({...themeMeta, unite_text: e.target.value})} />
+                 <textarea placeholder="Périodicité" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.periodicite_text} onChange={e => setThemeMeta({...themeMeta, periodicite_text: e.target.value})} />
+               </div>
+               <textarea placeholder="Indication" className="p-2 border-2 border-black rounded h-20" value={themeMeta.indication_text} onChange={e => setThemeMeta({...themeMeta, indication_text: e.target.value})} />
+               <div className="flex gap-4">
+                 <textarea placeholder="Source" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.source_text} onChange={e => setThemeMeta({...themeMeta, source_text: e.target.value})} />
+                 <textarea placeholder="Couverture" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.couverture_text} onChange={e => setThemeMeta({...themeMeta, couverture_text: e.target.value})} />
+               </div>
              </div>
              <div className="flex gap-4 mt-6">
                <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>

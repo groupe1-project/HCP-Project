@@ -10,7 +10,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = SousTheme
-        fields = ['id', 'nom', 'ordre', 'data', 'columns', 'charts_config']
+        fields = ['id', 'nom', 'ordre', 'is_visible', 'data', 'columns', 'charts_config']
 
     def get_data(self, obj):
         # Retourne le contenu JSON des données Excel
