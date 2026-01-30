@@ -94,10 +94,15 @@ function App() {
     });
 
     try {
-      await axios.post('http://127.0.0.1:8000/api/themes/enregistrer_complet/', formData);
+      const res = await axios.post('http://127.0.0.1:8000/api/themes/enregistrer_complet/', formData);
+      const newTheme = res.data && res.data.theme;
+      if (newTheme) {
+        setThemes(prev => [...prev, newTheme]);
+      } else {
+        fetchThemes();
+      }
       alert("Enregistré !");
       setFormStep(0);
-      fetchThemes();
     } catch (err) { alert("Erreur : " + err.message); }
   };
 

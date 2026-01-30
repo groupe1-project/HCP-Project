@@ -14,11 +14,13 @@ class ThemeViewSet(viewsets.ModelViewSet):
         try:
             # 1. Récupération et création du Thème
             titre = request.data.get('titre')
-            statut = request.data.get('statut')
-            is_visible = True if statut == 'Public' else False
+            # Acceptation tolérante du statut (insensible à la casse et aux espaces)
+            statut_raw = request.data.get('statut', '')
+            statut_clean = str(statut_raw).strip().lower()
+            is_visible = True if (statut_clean == 'public' or 'public' in statut_clean) else False
             
             nouveau_theme = Theme.objects.create(
-                titre=titre, 
+                titre=titre,
                 is_visible=is_visible
             )
 
@@ -73,9 +75,10 @@ class ThemeViewSet(viewsets.ModelViewSet):
 
                 index += 1
 
+            serializer = ThemeSerializer(nouveau_theme)
             return Response({
                 "message": "Succès : Thème et fichiers Excel importés avec leurs structures originales !",
-                "theme_id": nouveau_theme.id
+                "theme": serializer.data
             }, status=status.HTTP_201_CREATED)
 
         except Exception as e:
