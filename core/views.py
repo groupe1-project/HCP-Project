@@ -1,9 +1,65 @@
+import logging
+import uuid
 import pandas as pd
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser
-from .serializers import ThemeSerializer
+from .serializers import ThemeSerializer, SousThemeSerializer
+
+logger = logging.getLogger(__name__)
+
+class SousThemeViewSet(viewsets.ModelViewSet):
+    queryset = SousTheme.objects.all().order_by('id')
+    serializer_class = SousThemeSerializer
+
+    @action(detail=True, methods=['get', 'post'], url_path='charts')
+    def charts(self, request, pk=None):
+        """
+        GET: retourne la liste des charts configurés pour ce sous-thème.
+        POST: ajoute un nouveau chart à la configuration et le sauvegarde.
+        """
+        st = self.get_object()
+        if request.method == 'GET':
+            return Response(st.charts_config or [], status=status.HTTP_200_OK)
+
+        data = request.data
+        new_chart = {
+            'id': str(uuid.uuid4()),
+            'type': data.get('type', 'Histogramme'),
+            'x': data.get('x', ''),
+            'y': data.get('y', ''),
+            'mesure': data.get('mesure', ''),
+        }
+        config = st.charts_config or []
+        config.append(new_chart)
+        st.charts_config = config
+        st.save()
+        return Response(new_chart, status=status.HTTP_201_CREATED)
+
+    @action(detail=True, methods=['put', 'delete'], url_path='charts/(?P<chart_id>[^/.]+)')
+    def charts_detail(self, request, pk=None, chart_id=None):
+        st = self.get_object()
+        config = st.charts_config or []
+        for i, ch in enumerate(config):
+            if ch.get('id') == chart_id:
+                if request.method == 'DELETE':
+                    config.pop(i)
+                    st.charts_config = config
+                    st.save()
+                    return Response({'message': 'Supprimé'}, status=status.HTTP_200_OK)
+                else:
+                    data = request.data
+                    ch['type'] = data.get('type', ch.get('type'))
+                    ch['x'] = data.get('x', ch.get('x'))
+                    ch['y'] = data.get('y', ch.get('y'))
+                    ch['mesure'] = data.get('mesure', ch.get('mesure'))
+                    config[i] = ch
+                    st.charts_config = config
+                    st.save()
+                    return Response(ch, status=status.HTTP_200_OK)
+        return Response({'error': 'Chart non trouvé'}, status=status.HTTP_404_NOT_FOUND)
+
 
 class ThemeViewSet(viewsets.ModelViewSet):
     queryset = Theme.objects.all().order_by('id')

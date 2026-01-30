@@ -1,7 +1,7 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
 
-# 1. Gestion des Utilisateurs et Rôles
+# 1. GESTION DES UTILISATEURS
 class CustomUser(AbstractUser):
     ROLE_CHOICES = (
         ('ADMIN', 'Administrateur'),
@@ -13,11 +13,19 @@ class CustomUser(AbstractUser):
     def __str__(self):
         return f"{self.username} ({self.role})"
 
-# 2. Structure des Thématiques
+# 2. STRUCTURE DES THÉMATIQUES
 class Theme(models.Model):
     titre = models.CharField(max_length=200)
     ordre = models.IntegerField(default=0)
     is_visible = models.BooleanField(default=True)
+    statut = models.CharField(max_length=50, default='Public') # Pour correspondre au Front
+
+    # --- AJOUT DES MÉTADONNÉES TEXTUELLES (Ce qui manquait pour le bouton Métadonnées) ---
+    definition_text = models.TextField(null=True, blank=True)
+    unite_text = models.TextField(null=True, blank=True)
+    indication_text = models.TextField(null=True, blank=True)
+    source_text = models.TextField(null=True, blank=True)
+    periodicite_text = models.TextField(null=True, blank=True)
 
     def __str__(self):
         return self.titre
@@ -27,15 +35,23 @@ class SousTheme(models.Model):
     theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='sous_themes')
     ordre = models.IntegerField(default=0)
     
-    # --- AJOUT CLÉ ---
-    # Ce champ permet de stocker le tableau Excel complet sous forme de liste JSON.
-    # C'est ce qui permettra d'afficher exactement les colonnes du fichier importé.
+    # Stockage des données Excel (votre logique actuelle)
     data_json = models.JSONField(null=True, blank=True) 
+    
+    # Stockage des graphiques configurés (utilisé par le Front)
+    charts_config = models.JSONField(default=list, blank=True)
+
+    # Pour faciliter la lecture des colonnes dynamiques au Front
+    @property
+    def columns(self):
+        if self.data_json and len(self.data_json) > 0:
+            return list(self.data_json[0].keys())
+        return []
 
     def __str__(self):
         return f"{self.theme.titre} > {self.nom}"
 
-# 3. Les Indicateurs
+# 3. LES INDICATEURS (Inchangé)
 class Indicateur(models.Model):
     libelle = models.CharField(max_length=300)
     unite = models.CharField(max_length=50)
@@ -46,13 +62,9 @@ class Indicateur(models.Model):
     def __str__(self):
         return self.libelle
 
-# 4. Les Données (Utilisées pour la validation individuelle si nécessaire)
+# 4. LES DONNÉES (Inchangé - Pour la saisie manuelle)
 class Donnee(models.Model):
-    STATUT_CHOICES = (
-        ('PENDING', 'En attente'),
-        ('VALIDATED', 'Validé'),
-        ('REJECTED', 'Rejeté'),
-    )
+    STATUT_CHOICES = (('PENDING', 'En attente'), ('VALIDATED', 'Validé'), ('REJECTED', 'Rejeté'))
     valeur = models.DecimalField(max_digits=15, decimal_places=2)
     date_saisie = models.DateTimeField(auto_now_add=True)
     statut = models.CharField(max_length=20, choices=STATUT_CHOICES, default='PENDING')
@@ -60,10 +72,7 @@ class Donnee(models.Model):
     saisisseur = models.ForeignKey(CustomUser, on_delete=models.PROTECT)
     motif_refus = models.TextField(null=True, blank=True)
 
-    def __str__(self):
-        return f"{self.indicateur.libelle}: {self.valeur} ({self.statut})"
-
-# 5. Métadonnées
+# 5. MÉTADONNÉES DE DONNÉE (Spécifique aux saisies manuelles)
 class Metadata(models.Model):
     donnee = models.OneToOneField(Donnee, on_delete=models.CASCADE, related_name='metadata')
     source = models.CharField(max_length=255)

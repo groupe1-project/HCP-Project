@@ -24,6 +24,10 @@ function App() {
   const [themeData, setThemeData] = useState({ titre: '', nbSousThemes: 1, statut: 'Public' });
   const [rows, setRows] = useState([]);
 
+  // Métadonnées du Thème (UI)
+  const [showThemeMeta, setShowThemeMeta] = useState(false);
+  const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
+
   // États pour le Tableau & Filtres
   const [showAll, setShowAll] = useState(false);
   const [columnFilters, setColumnFilters] = useState({});
@@ -34,6 +38,11 @@ function App() {
   const [currentChartConfig, setCurrentChartConfig] = useState({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
 
   useEffect(() => { fetchThemes(); }, []);
+
+  // Sync savedCharts when selectedSubTheme changes
+  useEffect(() => {
+    setSavedCharts(selectedSubTheme?.charts_config || []);
+  }, [selectedSubTheme]);
 
   const fetchThemes = async () => {
     try {
@@ -50,16 +59,45 @@ function App() {
   }) || [];
 
   // Gestion des graphiques
-  const handleAddOrUpdateChart = () => {
+  const handleAddOrUpdateChart = async () => {
     if (!currentChartConfig.x || !currentChartConfig.y) return alert("Veuillez choisir les axes X et Y");
-    
-    if (currentChartConfig.id) {
-      setSavedCharts(savedCharts.map(c => c.id === currentChartConfig.id ? currentChartConfig : c));
-    } else {
-      setSavedCharts([...savedCharts, { ...currentChartConfig, id: Date.now() }]);
+
+    try {
+      if (currentChartConfig.id) {
+        // Update existing chart
+        const res = await axios.put(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${currentChartConfig.id}/`, {
+          type: currentChartConfig.type,
+          x: currentChartConfig.x,
+          y: currentChartConfig.y,
+          mesure: currentChartConfig.mesure,
+        });
+        const updated = res.data;
+        setSavedCharts(prev => prev.map(c => c.id === updated.id ? updated : c));
+      } else {
+        // Create new chart
+        const res = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/`, {
+          type: currentChartConfig.type,
+          x: currentChartConfig.x,
+          y: currentChartConfig.y,
+          mesure: currentChartConfig.mesure,
+        });
+        const created = res.data;
+        setSavedCharts(prev => [...prev, created]);
+      }
+
+      // Refresh selected subtheme in state (so charts_config matches)
+      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
+      const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
+      setSelectedSubTheme(freshSubTheme);
+      setSavedCharts(freshSubTheme.charts_config || []);
+
+      setIsModalOpen(false);
+      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
+    } catch (err) {
+      console.error('Erreur en sauvegarde du graphique', err);
+      alert('Erreur lors de la sauvegarde du graphique');
     }
-    setIsModalOpen(false);
-    setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
   };
 
   const openEditModal = (chart) => {
@@ -67,8 +105,20 @@ function App() {
     setIsModalOpen(true);
   };
 
-  const deleteChart = (id) => {
-    setSavedCharts(savedCharts.filter(c => c.id !== id));
+  const deleteChart = async (id) => {
+    if (!confirm('Supprimer ce graphique ?')) return;
+    try {
+      await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
+      setSavedCharts(prev => prev.filter(c => c.id !== id));
+      // refresh subtheme
+      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
+      const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
+      setSelectedSubTheme(freshSubTheme);
+    } catch (err) {
+      console.error('Erreur suppression graphique', err);
+      alert('Erreur lors de la suppression');
+    }
   };
 
   const goToTable = () => {
@@ -104,6 +154,23 @@ function App() {
       alert("Enregistré !");
       setFormStep(0);
     } catch (err) { alert("Erreur : " + err.message); }
+  };
+
+  const saveThemeMeta = async () => {
+    if (!selectedTheme) return alert('Aucun thème sélectionné');
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${selectedTheme.id}/`, themeMeta);
+      alert('Métadonnées sauvegardées');
+      setShowThemeMeta(false);
+      // refresh themes and selectedTheme
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      const fresh = res.data.find(t => t.id === selectedTheme.id);
+      setSelectedTheme(fresh);
+    } catch (err) {
+      console.error('Erreur sauvegarde métadonnées', err);
+      alert('Erreur lors de la sauvegarde des métadonnées');
+    }
   };
 
   const maxId = themes.length > 0 ? Math.max(...themes.map(t => t.id)) : 0;
@@ -239,7 +306,7 @@ function App() {
               <div className="flex justify-between items-center">
                 <button onClick={() => setFormStep(0)} className="bg-white px-4 py-2 border-2 border-black rounded-xl font-bold hover:bg-gray-100 shadow-md">⬅ Retour</button>
                 <h2 className="bg-[#c2d9ff] px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md text-center">Titre du thème : {selectedTheme.titre}</h2>
-                <button className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
+                <button onClick={() => { setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
               </div>
               <div className="grid grid-cols-4 gap-6">
                 {selectedTheme.sous_themes && selectedTheme.sous_themes.map((st, i) => (
@@ -250,8 +317,7 @@ function App() {
                         const res = await axios.get('http://127.0.0.1:8000/api/themes/');
                         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                         const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
-                        setSelectedSubTheme(freshSubTheme); 
-                        setFormStep(4); 
+                        setSelectedSubTheme(freshSubTheme);                         setSavedCharts(freshSubTheme.charts_config || []);                        setFormStep(4); 
                         setShowAll(false);
                       } catch (err) { console.error(err); }
                     }}
@@ -426,6 +492,25 @@ function App() {
             </div>
           </div>
         </div>
+      )}
+      {showThemeMeta && (
+         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+             <h2 className="text-xl font-black mb-4 text-center">Métadonnées du thème</h2>
+             <div className="grid grid-cols-1 gap-4">
+               <textarea placeholder="Définition" className="p-2 border-2 border-black rounded" value={themeMeta.definition_text} onChange={e => setThemeMeta({...themeMeta, definition_text: e.target.value})} />
+               <textarea placeholder="Unité" className="p-2 border-2 border-black rounded" value={themeMeta.unite_text} onChange={e => setThemeMeta({...themeMeta, unite_text: e.target.value})} />
+               <textarea placeholder="Indication" className="p-2 border-2 border-black rounded" value={themeMeta.indication_text} onChange={e => setThemeMeta({...themeMeta, indication_text: e.target.value})} />
+               <textarea placeholder="Source" className="p-2 border-2 border-black rounded" value={themeMeta.source_text} onChange={e => setThemeMeta({...themeMeta, source_text: e.target.value})} />
+               <textarea placeholder="Périodicité" className="p-2 border-2 border-black rounded" value={themeMeta.periodicite_text} onChange={e => setThemeMeta({...themeMeta, periodicite_text: e.target.value})} />
+               <textarea placeholder="Couverture" className="p-2 border-2 border-black rounded" value={themeMeta.couverture_text} onChange={e => setThemeMeta({...themeMeta, couverture_text: e.target.value})} />
+             </div>
+             <div className="flex gap-4 mt-6">
+               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+               <button onClick={saveThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">Enregistrer</button>
+             </div>
+           </div>
+         </div>
       )}
     </div>
   );
