@@ -1,5 +1,11 @@
 from rest_framework import serializers
-from .models import Theme, SousTheme, Indicateur, Donnee
+from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser
+
+class UserSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CustomUser
+        fields = ['id', 'username', 'email', 'role']
+        read_only_fields = ['username', 'role']
 
 class SousThemeSerializer(serializers.ModelSerializer):
     # Champs calculés dynamiquement pour le frontend

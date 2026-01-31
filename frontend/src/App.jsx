@@ -53,6 +53,8 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [savedCharts, setSavedCharts] = useState([]);
   const [currentChartConfig, setCurrentChartConfig] = useState({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
+  const [showSettings, setShowSettings] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({ email: '', newPassword: '', confirmPassword: '' });
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   useEffect(() => {
@@ -95,6 +97,27 @@ function App() {
     localStorage.removeItem('user_role');
     delete axios.defaults.headers.common['Authorization'];
     setIsAuthenticated(false);
+  };
+
+  const updateAccount = async () => {
+    if (settingsForm.newPassword && settingsForm.newPassword !== settingsForm.confirmPassword) {
+      showToast('Les mots de passe ne correspondent pas', 'error');
+      return;
+    }
+    try {
+      const userId = localStorage.getItem('user_id');
+      const payload = { email: settingsForm.email };
+      if (settingsForm.newPassword) payload.password = settingsForm.newPassword;
+      
+      await axios.patch(`http://127.0.0.1:8000/api/users/${userId}/`, payload);
+      localStorage.setItem('user_email', settingsForm.email);
+      showToast('Informations mises à jour', 'success');
+      setShowSettings(false);
+      setSettingsForm({ email: '', newPassword: '', confirmPassword: '' });
+    } catch (err) {
+      console.error(err);
+      showToast('Erreur lors de la mise à jour', 'error');
+    }
   };
 
   const showConfirm = (message, onConfirm) => {
@@ -521,7 +544,10 @@ function App() {
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
         <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => setActiveMenu('Admin')} />
-        <div className="mt-auto p-4 border-t-2 border-black bg-white">
+        <div className="mt-auto p-4 border-t-2 border-black bg-white space-y-2">
+          <button onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }} className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md flex items-center justify-center gap-2">
+            ⚙️ Paramètres
+          </button>
           <button onClick={handleLogout} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md">
             Déconnexion
           </button>
@@ -1099,6 +1125,54 @@ function App() {
                 else { await addSubTheme(actionModalThemeId, actionModalValue); }
                 setShowActionModal(false);
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Valider</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings modal */}
+      {showSettings && (
+        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 12000, backgroundColor: 'rgba(0,0,0,0.18)' }}>
+          <div className="bg-white border-4 border-black p-8 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-2xl font-bold mb-6 text-[#1a5d85]">Informations du compte</h2>
+            
+            <div className="space-y-4">
+              <div>
+                <label className="block font-bold text-gray-700 mb-2">Email</label>
+                <input
+                  type="email"
+                  value={settingsForm.email}
+                  onChange={(e) => setSettingsForm({...settingsForm, email: e.target.value})}
+                  className="w-full p-3 border-2 border-black rounded-lg outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-2">Nouveau mot de passe</label>
+                <input
+                  type="password"
+                  value={settingsForm.newPassword}
+                  onChange={(e) => setSettingsForm({...settingsForm, newPassword: e.target.value})}
+                  placeholder="Laisser vide si inchangé"
+                  className="w-full p-3 border-2 border-black rounded-lg outline-none"
+                />
+              </div>
+
+              <div>
+                <label className="block font-bold text-gray-700 mb-2">Confirmer le mot de passe</label>
+                <input
+                  type="password"
+                  value={settingsForm.confirmPassword}
+                  onChange={(e) => setSettingsForm({...settingsForm, confirmPassword: e.target.value})}
+                  placeholder="Confirmer le nouveau mot de passe"
+                  className="w-full p-3 border-2 border-black rounded-lg outline-none"
+                />
+              </div>
+            </div>
+
+            <div className="flex gap-4 mt-6">
+              <button onClick={() => setShowSettings(false)} className="flex-1 bg-gray-200 py-3 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={updateAccount} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 border-2 border-black rounded-xl font-bold">Enregistrer les modifications</button>
             </div>
           </div>
         </div>
