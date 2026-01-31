@@ -39,6 +39,7 @@ class ThemeSerializer(serializers.ModelSerializer):
             'titre', 
             'ordre', 
             'is_visible', 
+            'archived',
             'statut', 
             'sous_themes',
             # Ajout des nouveaux champs de métadonnées pour le Front-end

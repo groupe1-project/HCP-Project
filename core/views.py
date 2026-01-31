@@ -4,6 +4,7 @@ import pandas as pd
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
+from rest_framework.permissions import IsAuthenticated
 from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser
 from .serializers import ThemeSerializer, SousThemeSerializer
 
@@ -12,6 +13,7 @@ logger = logging.getLogger(__name__)
 class SousThemeViewSet(viewsets.ModelViewSet):
     queryset = SousTheme.objects.all().order_by('id')
     serializer_class = SousThemeSerializer
+    permission_classes = [IsAuthenticated]
 
     @action(detail=True, methods=['get', 'post'], url_path='charts')
     def charts(self, request, pk=None):
@@ -81,6 +83,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
 class ThemeViewSet(viewsets.ModelViewSet):
     queryset = Theme.objects.all().order_by('id')
     serializer_class = ThemeSerializer
+    permission_classes = [IsAuthenticated]
 
     @action(detail=False, methods=['post'])
     def enregistrer_complet(self, request):
@@ -158,3 +161,57 @@ class ThemeViewSet(viewsets.ModelViewSet):
             return Response({
                 "error": f"Erreur lors de l'importation : {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive(self, request, pk=None):
+        """Marque un thème comme archivé."""
+        try:
+            theme = self.get_object()
+            theme.archived = True
+            theme.save()
+            return Response({'message': 'Thème archivé'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='unarchive')
+    def unarchive(self, request, pk=None):
+        """Retire la marque d'archivage d'un thème."""
+        try:
+            theme = self.get_object()
+            theme.archived = False
+            theme.save()
+            return Response({'message': 'Thème désarchivé'}, status=status.HTTP_200_OK)
+        except Exception as e:
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='sous_themes')
+    def add_sous_theme(self, request, pk=None):
+        """Ajoute un sous-thème au thème courant."""
+        try:
+            theme = self.get_object()
+            nom = request.data.get('nom') or request.data.get('name')
+            if not nom:
+                return Response({'error': 'Le nom du sous-thème est requis'}, status=status.HTTP_400_BAD_REQUEST)
+            st = SousTheme.objects.create(nom=nom, theme=theme)
+            serializer = SousThemeSerializer(st)
+            return Response(serializer.data, status=status.HTTP_201_CREATED)
+        except Exception as e:
+            logger.exception('Erreur ajout sous-theme')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='toggle_visibility')
+    def toggle_visibility(self, request, pk=None):
+        """Bascule le statut de publication (is_visible) du thème."""
+        try:
+            theme = self.get_object()
+            # si l'appel fournit la valeur, l'utiliser, sinon inverser
+            val = request.data.get('is_visible')
+            if val is None:
+                theme.is_visible = not theme.is_visible
+            else:
+                theme.is_visible = bool(val)
+            theme.save()
+            return Response({'id': theme.id, 'is_visible': theme.is_visible}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception('Erreur toggle visibility')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)

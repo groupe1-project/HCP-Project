@@ -40,6 +40,7 @@ INSTALLED_APPS = [
     'corsheaders',
     'core',
     'rest_framework',
+    'rest_framework.authtoken',
 ]
 
 MIDDLEWARE = [
@@ -130,5 +131,15 @@ CORS_ALLOWED_ORIGINS = [
     "http://localhost:5173",
 ]
 AUTH_USER_MODEL = 'core.CustomUser'
+
+# Configuration REST Framework pour l'authentification
+REST_FRAMEWORK = {
+    'DEFAULT_AUTHENTICATION_CLASSES': [
+        'rest_framework.authentication.TokenAuthentication',
+    ],
+    'DEFAULT_PERMISSION_CLASSES': [
+        'rest_framework.permissions.IsAuthenticated',
+    ],
+}
 
 

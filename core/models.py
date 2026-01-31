@@ -18,6 +18,8 @@ class Theme(models.Model):
     titre = models.CharField(max_length=200)
     ordre = models.IntegerField(default=0)
     is_visible = models.BooleanField(default=True)
+    # Marque d'archivage (archive vs actif)
+    archived = models.BooleanField(default=False)
     statut = models.CharField(max_length=50, default='Public') # Pour correspondre au Front
 
     # --- AJOUT DES MÉTADONNÉES TEXTUELLES (Ce qui manquait pour le bouton Métadonnées) ---

@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter } from 'recharts';
+import LoginPage from './LoginPage';
 
 // --- COMPOSANTS DE STYLE ---
 const SidebarButton = ({ label, onClick, active }) => (
@@ -15,30 +16,244 @@ const SidebarButton = ({ label, onClick, active }) => (
 );
 
 function App() {
-  // --- ÉTATS ---
+  // --- AUTHENTIFICATION (toujours appelé en premier) ---
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [authLoading, setAuthLoading] = useState(true);
+
+  // --- ÉTATS (toujours déclarés, même s'ils ne sont pas utilisés si non authentifié) ---
   const [activeMenu, setActiveMenu] = useState('Themes');
   const [formStep, setFormStep] = useState(0); 
   const [themes, setThemes] = useState([]);
   const [selectedTheme, setSelectedTheme] = useState(null);
   const [selectedSubTheme, setSelectedSubTheme] = useState(null);
   const [themeData, setThemeData] = useState({ titre: '', nbSousThemes: 1, statut: 'Public' });
+  const [openThemeMenu, setOpenThemeMenu] = useState(null);
+  const [themeMenuPos, setThemeMenuPos] = useState({ left: 0, top: 0 });
+  const [openActionMenu, setOpenActionMenu] = useState(null);
+  const [actionMenuPos, setActionMenuPos] = useState({ left: 0, top: 0 });
+  const [openSubActionMenu, setOpenSubActionMenu] = useState(null);
+  const [subActionMenuPos, setSubActionMenuPos] = useState({ left: 0, top: 0 });
+  const [openSubThemeMenu, setOpenSubThemeMenu] = useState(null);
+  const [subThemeMenuPos, setSubThemeMenuPos] = useState({ left: 0, top: 0 });
+  const [confirmModal, setConfirmModal] = useState({ open: false, message: '', onConfirm: null });
+  const [toast, setToast] = useState(null);
+  const [showActionModal, setShowActionModal] = useState(false);
+  const [actionModalType, setActionModalType] = useState('rename');
+  const [actionModalValue, setActionModalValue] = useState('');
+  const [actionModalThemeId, setActionModalThemeId] = useState(null);
   const [rows, setRows] = useState([]);
-
-  // Métadonnées du Thème (UI)
   const [showThemeMeta, setShowThemeMeta] = useState(false);
   const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
-
-  // Métadonnées du Sous-thème (UI)
   const [showSubThemeMeta, setShowSubThemeMeta] = useState(false);
   const [subThemeMeta, setSubThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
-
-  // Edition / import du tableau du sous-thème
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
+  const [showAll, setShowAll] = useState(false);
+  const [columnFilters, setColumnFilters] = useState({});
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [savedCharts, setSavedCharts] = useState([]);
+  const [currentChartConfig, setCurrentChartConfig] = useState({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
+
+  // --- TOUS LES useEffect EN MÊME TEMPS ---
+  useEffect(() => {
+    const token = localStorage.getItem('auth_token');
+    if (token) {
+      axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+      setIsAuthenticated(true);
+    }
+    setAuthLoading(false);
+  }, []);
+
+  useEffect(() => { 
+    if (isAuthenticated) fetchThemes(); 
+  }, [isAuthenticated]);
+
+  useEffect(() => {
+    const handler = () => {
+      setOpenThemeMenu(null);
+      setOpenActionMenu(null);
+      setOpenSubActionMenu(null);
+    };
+    document.addEventListener('click', handler);
+    return () => document.removeEventListener('click', handler);
+  }, []);
+
+  useEffect(() => {
+    setSavedCharts(selectedSubTheme?.charts_config || []);
+  }, [selectedSubTheme]);
+
+  // --- HELPER FUNCTIONS ---
+  const handleLogin = () => {
+    setIsAuthenticated(true);
+  };
+
+  const handleLogout = () => {
+    localStorage.removeItem('auth_token');
+    localStorage.removeItem('user_id');
+    localStorage.removeItem('username');
+    localStorage.removeItem('user_email');
+    localStorage.removeItem('user_role');
+    delete axios.defaults.headers.common['Authorization'];
+    setIsAuthenticated(false);
+  };
+
+  const showConfirm = (message, onConfirm) => {
+    setOpenThemeMenu(null);
+    setOpenActionMenu(null);
+    setOpenSubActionMenu(null);
+    setOpenSubThemeMenu(null);
+    setConfirmModal({ open: true, message, onConfirm });
+  };
+  
+  const closeConfirm = () => setConfirmModal({ open: false, message: '', onConfirm: null });
+  const handleConfirmOk = async () => { if (confirmModal.onConfirm) await confirmModal.onConfirm(); closeConfirm(); };
+  const handleConfirmCancel = () => { closeConfirm(); };
+  const showToast = (message, type = 'info') => { setToast({ message, type }); setTimeout(() => setToast(null), 3800); };
 
   const openEditTable = () => {
     setEditTableRows(JSON.parse(JSON.stringify(selectedSubTheme?.data || [])));
     setShowEditTable(true);
+  };
+
+  const archiveTheme = async (id) => {
+    try {
+      await axios.post(`http://127.0.0.1:8000/api/themes/${id}/archive/`);
+      showToast('Thème archivé', 'success');
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
+    } catch (err) { console.error(err); showToast('Erreur lors de l\'archivage', 'error'); }
+  };
+
+  const unarchiveTheme = async (id) => {
+    try {
+      await axios.post(`http://127.0.0.1:8000/api/themes/${id}/unarchive/`);
+      showToast('Thème désarchivé', 'success');
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
+    } catch (err) { console.error(err); showToast('Erreur lors du désarchivage', 'error'); }
+  };
+
+  const deleteTheme = async (id) => {
+    // Optimistic UI: remove theme immediately
+    const prev = themes;
+    setThemes(prev.filter(t => t.id !== id));
+    setOpenThemeMenu(null);
+    if (selectedTheme && selectedTheme.id === id) { setSelectedTheme(null); setFormStep(0); }
+    try {
+      await axios.delete(`http://127.0.0.1:8000/api/themes/${id}/`);
+      showToast('Thème supprimé', 'success');
+      // refresh to ensure consistent state
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+    } catch (err) {
+      console.error(err);
+      showToast('Erreur lors de la suppression, restauration de la liste', 'error');
+      // rollback to previous state
+      setThemes(prev);
+      // try refetch as fallback
+      try { const res = await axios.get('http://127.0.0.1:8000/api/themes/'); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
+    }
+  };
+
+  const renameTheme = async (id, newName) => {
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: newName });
+      alert('Thème renommé');
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
+    } catch (err) { console.error(err); alert('Erreur lors du renommage'); }
+  };
+
+  const addSubTheme = async (themeId, name) => {
+    try {
+      const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/sous_themes/`, { nom: name });
+      alert('Sous-thème ajouté');
+      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(themesRes.data);
+      const fresh = themesRes.data.find(t => t.id === themeId);
+      if (fresh) setSelectedTheme(fresh);
+    } catch (err) { console.error(err); alert('Erreur lors de l\'ajout du sous-thème'); }
+  };
+
+  const renameSubTheme = async (id, newName) => {
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: newName });
+      alert('Sous-thème renommé');
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      // update selectedTheme/selectedSubTheme if needed
+      if (selectedTheme) {
+        const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+        if (freshTheme) setSelectedTheme(freshTheme);
+        const freshSub = freshTheme?.sous_themes?.find(st => st.id === id);
+        if (freshSub) setSelectedSubTheme(freshSub);
+      }
+    } catch (err) { console.error(err); alert('Erreur lors du renommage du sous-thème'); }
+  };
+
+  const archiveSubTheme = async (id) => {
+    try {
+      // No dedicated 'archived' flag on SousTheme for now — we set is_visible to false
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { is_visible: false });
+      showToast('Sous-thème archivé', 'success');
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedSubTheme && selectedSubTheme.id === id) setSelectedSubTheme(res.data.find(t => t.id === selectedTheme.id)?.sous_themes?.find(s => s.id === id));
+    } catch (err) { console.error(err); showToast('Erreur lors de l\'archivage du sous-thème', 'error'); }
+  };
+
+  const deleteSubTheme = async (id) => {
+    // Optimistic UI: remove subtheme immediately from local state
+    const prevThemes = themes;
+    const prevSelectedTheme = selectedTheme;
+    const sid = Number(id);
+
+    // Build the optimistic new themes list (ensure numeric compare)
+    const newThemes = prevThemes.map(t => ({ ...t, sous_themes: (t.sous_themes || []).filter(st => Number(st.id) !== sid) }));
+    setThemes(newThemes);
+
+    // If the currently selected theme is shown, update it too so the card disappears immediately
+    if (selectedTheme) {
+      setSelectedTheme(prev => prev ? { ...prev, sous_themes: (prev.sous_themes || []).filter(st => Number(st.id) !== sid) } : prev);
+    }
+
+    setOpenSubThemeMenu(null);
+    if (selectedSubTheme && selectedSubTheme.id === id) { setSelectedSubTheme(null); setFormStep(3); }
+    try {
+      await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${id}/`);
+      showToast('Sous-thème supprimé', 'success');
+      // refresh to ensure consistent state
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      // update selectedTheme to the fresh object if still present
+      if (prevSelectedTheme) {
+        const fresh = res.data.find(t => t.id === prevSelectedTheme.id);
+        if (fresh) setSelectedTheme(fresh);
+        else setSelectedTheme(null);
+      }
+    } catch (err) {
+      console.error(err.response?.data ?? err);
+      const msg = err.response?.data?.error || err.message || 'Erreur lors de la suppression';
+      showToast(`Erreur: ${msg}`, 'error');
+      // rollback both themes list and selected theme
+      setThemes(prevThemes);
+      setSelectedTheme(prevSelectedTheme);
+      try { const res = await axios.get('http://127.0.0.1:8000/api/themes/'); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
+    }
+  };  
+
+  const toggleThemePublication = async (themeId) => {
+    try {
+      const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/toggle_visibility/`);
+      const isVisible = res.data?.is_visible;
+      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(themesRes.data);
+      if (selectedTheme && selectedTheme.id === themeId) setSelectedTheme(themesRes.data.find(t => t.id === themeId));
+      alert(`Statut modifié : ${isVisible ? 'Public' : 'Privé'}`);
+    } catch (err) { console.error(err); alert('Erreur lors du changement de statut du thème'); }
   };
 
   const saveEditedTable = async () => {
@@ -97,22 +312,6 @@ function App() {
     a.remove();
     URL.revokeObjectURL(url);
   };
-
-  // États pour le Tableau & Filtres
-  const [showAll, setShowAll] = useState(false);
-  const [columnFilters, setColumnFilters] = useState({});
-
-  // États pour les Graphiques (Pop-up & Gestion)
-  const [isModalOpen, setIsModalOpen] = useState(false);
-  const [savedCharts, setSavedCharts] = useState([]); 
-  const [currentChartConfig, setCurrentChartConfig] = useState({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
-
-  useEffect(() => { fetchThemes(); }, []);
-
-  // Sync savedCharts when selectedSubTheme changes
-  useEffect(() => {
-    setSavedCharts(selectedSubTheme?.charts_config || []);
-  }, [selectedSubTheme]);
 
   const fetchThemes = async () => {
     try {
@@ -297,7 +496,19 @@ function App() {
   };
 
   const maxId = themes.length > 0 ? Math.max(...themes.map(t => t.id)) : 0;
+  const isAdminView = String(activeMenu || '').toLowerCase().includes('admin');
+  const visibleThemes = isAdminView ? themes : themes.filter(t => !t.archived);
 
+  // Affiche le loading ou la page de login/admin
+  if (authLoading) {
+    return <div className="flex min-h-screen bg-[#f4f1e1] justify-center items-center"><p className="text-xl font-bold">Chargement...</p></div>;
+  }
+
+  if (!isAuthenticated) {
+    return <LoginPage onLoginSuccess={handleLogin} />;
+  }
+
+  // --- RENDU PRINCIPAL (Admin) ---
   return (
     <div className="flex min-h-screen bg-[#f4f1e1] font-sans">
       
@@ -310,15 +521,22 @@ function App() {
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
         <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => setActiveMenu('Admin')} />
-        <div className="mt-auto p-4 border-t border-black bg-white flex items-center font-bold italic">⚙️ Paramètres</div>
+        <div className="mt-auto p-4 border-t-2 border-black bg-white">
+          <button onClick={handleLogout} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md">
+            Déconnexion
+          </button>
+        </div>
       </div>
 
       {/* 2. CONTENU PRINCIPAL */}
       <div className="flex-1 flex flex-col">
-        <div className="bg-[#a2e3f7] p-4 border-b-2 border-black flex justify-center shadow-md">
+        <div className="bg-[#a2e3f7] p-4 border-b-2 border-black flex justify-center shadow-md relative">
           <h1 className="text-[#1a5d85] text-xl font-bold italic text-center">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
+          {isAdminView && (
+            <div className="absolute right-6 top-3 bg-yellow-300 text-black px-3 py-1 rounded-full font-bold border-2 border-black">Espace administrateur</div>
+          )}
         </div>
 
         <div className="p-6 flex justify-center">
@@ -334,16 +552,29 @@ function App() {
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
               <div className="grid grid-cols-3 gap-6">
-                {themes.map((t, i) => (
+                {visibleThemes.map((t, i) => (
                   <div 
                     key={t.id} 
                     onClick={() => { setSelectedTheme(t); setFormStep(3); }}
-                    className={`cursor-pointer p-5 rounded-xl border-2 border-black shadow-lg relative text-white font-bold transition-transform hover:scale-105 ${t.id === maxId ? 'bg-[#ffb366]' : 'bg-[#41699d]'}`}
+                    className={`cursor-pointer p-5 rounded-xl border-2 border-black shadow-lg relative text-white font-bold transition-transform hover:scale-105 ${t.archived ? 'bg-gray-600 line-through opacity-80' : (t.id === maxId ? 'bg-[#ffb366]' : 'bg-[#41699d]')}`}
                   >
+                    {t.archived && (
+                      <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                    )}
                     Thème {i + 1} : {t.titre}
                     <div className="flex mt-4 gap-2">
-                      <button className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                      <button className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                      <button onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setActionMenuPos({ left: rect.left, top: rect.bottom + 8 }); setOpenActionMenu(openActionMenu === t.id ? null : t.id); setOpenThemeMenu(null); }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+
+                      <div>
+                        <button onClick={(e) => { 
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const left = rect.left;
+                            const top = rect.bottom + 8;
+                            setThemeMenuPos({ left, top });
+                            setOpenThemeMenu(openThemeMenu === t.id ? null : t.id);
+                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                      </div>
                     </div>
                     <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${t.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                   </div>
@@ -355,6 +586,56 @@ function App() {
               >
                 Ajouter un thème
               </button>
+
+              {/* Floating theme menu (renders at viewport level to avoid being clipped) */}
+              {openThemeMenu && (
+                <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: themeMenuPos.left, top: themeMenuPos.top, zIndex: 9999 }}>
+                  <div className="w-52 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+                    <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>
+                    {(() => {
+                      const ct = themes.find(x => x.id === openThemeMenu);
+                      if (ct && ct.archived) {
+                        return (
+                          <button onClick={(e) => { e.stopPropagation(); showConfirm('Désarchiver ce thème ?', async () => { await unarchiveTheme(openThemeMenu); setOpenThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-green-100 text-green-900 hover:bg-green-200 transition-colors flex items-center gap-2">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18" stroke="#166534" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7v10a1 1 0 001 1h6a1 1 0 001-1V7" stroke="#166534" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 3h4" stroke="#166534" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                            Désarchiver le thème
+                          </button>
+                        );
+                      }
+                      return (
+                        <button onClick={(e) => { e.stopPropagation(); showConfirm('Archiver ce thème ?', async () => { await archiveTheme(openThemeMenu); setOpenThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-yellow-100 text-yellow-900 hover:bg-yellow-200 transition-colors flex items-center gap-2">
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7v10a1 1 0 001 1h6a1 1 0 001-1V7" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 3h4" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                          Archiver le thème
+                        </button>
+                      );
+                    })()}
+                    <button onClick={(e) => { e.stopPropagation(); showConfirm('Supprimer ce thème ?', async () => { await deleteTheme(openThemeMenu); setOpenThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-white text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      Supprimer le thème
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {openActionMenu && (
+                <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: actionMenuPos.left, top: actionMenuPos.top, zIndex: 9999 }}>
+                  <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+                    <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
+                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('rename'); setActionModalValue(t?.titre || ''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      Renommer
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      Ajouter un sous-thème
+                    </button>
+                    <button onClick={(e) => { e.stopPropagation(); toggleThemePublication(openActionMenu); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                      Modifier le statut de publication
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           )}
 
@@ -448,9 +729,9 @@ function App() {
                   >
                     {st.nom}
                     <div className="flex justify-center gap-2 mt-4 text-black">
-                      <button className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                      <button className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
-                    </div>
+                      <button onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setSubActionMenuPos({ left: rect.left, top: rect.bottom + 8 }); setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); setOpenActionMenu(null); setOpenThemeMenu(null); }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                      <button onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setSubThemeMenuPos({ left: rect.left, top: rect.bottom + 8 }); setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); setOpenSubActionMenu(null); setOpenActionMenu(null); setOpenThemeMenu(null); }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                    </div> 
                     <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                   </div>
                 ))}
@@ -770,6 +1051,80 @@ function App() {
              </div>
            </div>
          </div>
+      )}
+
+      {/* Modal for renaming / adding sub-theme */}
+      {openSubActionMenu && (
+        <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subActionMenuPos.left, top: subActionMenuPos.top, zIndex: 9999 }}>
+          <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+            <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
+            <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); setActionModalType('rename_subtheme'); setActionModalValue(st?.nom || ''); setActionModalThemeId(openSubActionMenu); setShowActionModal(true); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Renommer
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); toggleSubThemePublication(openSubActionMenu, !st?.is_visible); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Modifier le statut de publication
+            </button>
+          </div>
+        </div>
+      )}
+
+      {openSubThemeMenu && (
+        <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subThemeMenuPos.left, top: subThemeMenuPos.top, zIndex: 9999 }}>
+          <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+            <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>
+            <button onClick={(e) => { e.stopPropagation(); const id = openSubThemeMenu; showConfirm('Archiver ce sous-thème ?', async () => { await archiveSubTheme(id); setOpenSubThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-yellow-100 text-yellow-900 hover:bg-yellow-200 transition-colors flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7v10a1 1 0 001 1h6a1 1 0 001-1V7" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 3h4" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Archiver le sous-thème
+            </button>
+            <button onClick={(e) => { e.stopPropagation(); const id = openSubThemeMenu; showConfirm('Supprimer ce sous-thème ?', async () => { await deleteSubTheme(id); setOpenSubThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-white text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+              Supprimer le sous-thème
+            </button>
+          </div>
+        </div>
+      )}
+      {showActionModal && (
+        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : 'Ajouter un sous-thème'}</h2>
+            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} />
+            <div className="flex gap-4">
+              <button onClick={() => setShowActionModal(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={async () => {
+                if (!actionModalValue) { alert('Le nom est requis'); return; }
+                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, actionModalValue); }
+                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, actionModalValue); }
+                else { await addSubTheme(actionModalThemeId, actionModalValue); }
+                setShowActionModal(false);
+              }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Valider</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Confirmation modal */}
+      {confirmModal.open && (
+        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 12000, backgroundColor: 'rgba(0,0,0,0.18)' }}>
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-sm shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h3 className="text-lg font-bold mb-2">Confirmer</h3>
+            <p className="mb-4">{confirmModal.message}</p>
+            <div className="flex gap-4">
+              <button onClick={handleConfirmCancel} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={handleConfirmOk} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Confirmer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Toast */}
+      {toast && (
+        <div className="fixed right-6 top-6 z-60">
+          <div className={`px-4 py-2 rounded shadow-lg text-white ${toast.type === 'success' ? 'bg-green-600' : toast.type === 'error' ? 'bg-red-600' : toast.type === 'warning' ? 'bg-yellow-500 text-black' : 'bg-gray-800'}`}>
+            {toast.message}
+          </div>
+        </div>
       )}
     </div>
   );
