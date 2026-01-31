@@ -5,12 +5,18 @@ class SousThemeSerializer(serializers.ModelSerializer):
     # Champs calculés dynamiquement pour le frontend
     data = serializers.SerializerMethodField()
     columns = serializers.SerializerMethodField()
+    # On expose également le champ data_json pour permettre les écritures depuis le front
+    data_json = serializers.JSONField(required=False, allow_null=True)
     # On utilise directement le champ du modèle s'il est déjà en JSON
     charts_config = serializers.JSONField()
 
     class Meta:
         model = SousTheme
-        fields = ['id', 'nom', 'ordre', 'is_visible', 'data', 'columns', 'charts_config']
+        fields = [
+            'id', 'nom', 'ordre', 'is_visible', 'data', 'data_json', 'columns', 'charts_config',
+            # Métadonnées éditables côté front
+            'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text'
+        ]
 
     def get_data(self, obj):
         # Retourne le contenu JSON des données Excel

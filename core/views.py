@@ -60,6 +60,23 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     return Response(ch, status=status.HTTP_200_OK)
         return Response({'error': 'Chart non trouvé'}, status=status.HTTP_404_NOT_FOUND)
 
+    @action(detail=True, methods=['post'], url_path='import')
+    def import_table(self, request, pk=None):
+        """Importe un fichier Excel et remplace les données du sous-thème."""
+        st = self.get_object()
+        excel_file = request.FILES.get('file')
+        if not excel_file:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            df = pd.read_excel(excel_file)
+            df = df.fillna("")
+            st.data_json = df.to_dict(orient='records')
+            st.save()
+            return Response({'message': 'Import réussi', 'data': st.data_json}, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception('Erreur import excel')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
 
 class ThemeViewSet(viewsets.ModelViewSet):
     queryset = Theme.objects.all().order_by('id')

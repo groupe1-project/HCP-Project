@@ -44,6 +44,14 @@ class SousTheme(models.Model):
     # Stockage des graphiques configurés (utilisé par le Front)
     charts_config = models.JSONField(default=list, blank=True)
 
+    # Métadonnées textuelles pour chaque sous-thème (édition via le Front)
+    definition_text = models.TextField(null=True, blank=True)
+    unite_text = models.TextField(null=True, blank=True)
+    indication_text = models.TextField(null=True, blank=True)
+    source_text = models.TextField(null=True, blank=True)
+    periodicite_text = models.TextField(null=True, blank=True)
+    couverture_text = models.TextField(null=True, blank=True)
+
     # Pour faciliter la lecture des colonnes dynamiques au Front
     @property
     def columns(self):

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter } from 'recharts';
 
 // --- COMPOSANTS DE STYLE ---
 const SidebarButton = ({ label, onClick, active }) => (
@@ -27,6 +27,76 @@ function App() {
   // Métadonnées du Thème (UI)
   const [showThemeMeta, setShowThemeMeta] = useState(false);
   const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
+
+  // Métadonnées du Sous-thème (UI)
+  const [showSubThemeMeta, setShowSubThemeMeta] = useState(false);
+  const [subThemeMeta, setSubThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
+
+  // Edition / import du tableau du sous-thème
+  const [showEditTable, setShowEditTable] = useState(false);
+  const [editTableRows, setEditTableRows] = useState([]);
+
+  const openEditTable = () => {
+    setEditTableRows(JSON.parse(JSON.stringify(selectedSubTheme?.data || [])));
+    setShowEditTable(true);
+  };
+
+  const saveEditedTable = async () => {
+    if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, { data_json: editTableRows });
+      alert('Tableau sauvegardé');
+      setShowEditTable(false);
+      // refresh
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
+      if (freshTheme) setSelectedTheme(freshTheme);
+      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
+      if (freshSub) setSelectedSubTheme(freshSub);
+    } catch (err) { console.error(err); alert('Erreur lors de la sauvegarde du tableau'); }
+  };
+
+  const handleImportFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!confirm('Remplacer le tableau existant par ce fichier ?')) { if (e.target) e.target.value = null; return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    try {
+      await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      alert('Import réussi');
+      // refresh
+      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(themesRes.data);
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
+      if (freshTheme) setSelectedTheme(freshTheme);
+      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
+      if (freshSub) {
+        setSelectedSubTheme(freshSub);
+        if (showEditTable) setEditTableRows(JSON.parse(JSON.stringify(freshSub.data || [])));
+      }
+    } catch (err) { console.error(err); alert('Erreur lors de l\'import'); }
+    if (e.target) e.target.value = null;
+  };
+
+  const exportTableCSV = () => {
+    if (!selectedSubTheme || !selectedSubTheme.data || selectedSubTheme.data.length === 0) return alert('Aucun tableau à exporter');
+    const cols = selectedSubTheme.columns || [];
+    const rows = selectedSubTheme.data || [];
+    const header = cols.join(',');
+    const lines = rows.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','));
+    const csv = [header, ...lines].join('\n');
+    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `${(selectedSubTheme.nom || 'soustheme').replace(/\s+/g, '_')}_tableau.csv`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+  };
 
   // États pour le Tableau & Filtres
   const [showAll, setShowAll] = useState(false);
@@ -63,7 +133,19 @@ function App() {
 
   // Gestion des graphiques
   const handleAddOrUpdateChart = async () => {
-    if (!currentChartConfig.x || !currentChartConfig.y) return alert("Veuillez choisir les axes X et Y");
+    // For Pie charts we still require X and Y (Y aggregated)
+    if (!currentChartConfig.x || (!currentChartConfig.y && currentChartConfig.type !== 'Secteur')) return alert("Veuillez choisir les axes X et Y");
+
+    // Type-specific validation (Y numeric for scatter/secteur when present)
+    if ((currentChartConfig.type === 'Nuage de points' || currentChartConfig.type === 'Secteur') && selectedSubTheme && currentChartConfig.y) {
+      const hasNumeric = (selectedSubTheme.data || []).some(r => {
+        const raw = r[currentChartConfig.y];
+        if (raw === null || raw === undefined || raw === '') return false;
+        const n = parseFloat(String(raw).replace(/,/g, '.'));
+        return !isNaN(n);
+      });
+      if (!hasNumeric) return alert('La colonne Y sélectionnée ne contient pas de valeurs numériques nécessaires pour ce type de graphique.');
+    }
 
     try {
       if (currentChartConfig.id) {
@@ -192,6 +274,25 @@ function App() {
     } catch (err) {
       console.error('Erreur sauvegarde métadonnées', err);
       alert('Erreur lors de la sauvegarde des métadonnées');
+    }
+  };
+
+  const saveSubThemeMeta = async () => {
+    if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, subThemeMeta);
+      alert('Métadonnées du sous-thème sauvegardées');
+      setShowSubThemeMeta(false);
+      // refresh themes and selectedTheme + selectedSubTheme
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
+      if (freshTheme) setSelectedTheme(freshTheme);
+      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
+      if (freshSub) setSelectedSubTheme(freshSub);
+    } catch (err) {
+      console.error('Erreur sauvegarde métadonnées sous-thème', err);
+      alert('Erreur lors de la sauvegarde des métadonnées du sous-thème');
     }
   };
 
@@ -380,6 +481,7 @@ function App() {
                     <option value="Public">Public 📢</option>
                     <option value="Privé">Privé 🔒</option>
                   </select>
+                  <button onClick={() => { setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
                   <button onClick={() => setFormStep(3)} className="bg-orange-400 text-white px-4 py-1 border-2 border-black rounded-lg font-bold shadow-md">Fermer</button>
                 </div>
               </div>
@@ -414,9 +516,15 @@ function App() {
                     </tbody>
                   </table>
                 </div>
-                <button onClick={() => setShowAll(!showAll)} className="bg-[#8ec278] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
-                  {showAll ? "Réduire le tableau" : "Afficher tout le tableau"}
-                </button>
+                <div className="flex gap-4 items-center">
+                  <button onClick={() => setShowAll(!showAll)} className="bg-[#8ec278] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
+                    {showAll ? "Réduire le tableau" : "Afficher tout le tableau"}
+                  </button>
+
+                  <button onClick={openEditTable} className="bg-[#ffd56b] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Modifier le tableau</button>
+
+                  <button onClick={exportTableCSV} className="bg-[#62a3ff] text-white px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Exporter le tableau</button>
+                </div>
               </div>
 
               {/* ZONE DES GRAPHIQUES GÉNÉRÉS */}
@@ -435,10 +543,36 @@ function App() {
                             <BarChart data={selectedSubTheme.data}>
                               <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis /><Tooltip /><Bar dataKey={chart.y} fill="#4a77b4" />
                             </BarChart>
-                          ) : (
+                          ) : chart.type === 'Courbes' ? (
                             <LineChart data={selectedSubTheme.data}>
                               <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis /><Tooltip /><Line type="monotone" dataKey={chart.y} stroke="#4a77b4" strokeWidth={3} />
                             </LineChart>
+                          ) : chart.type === 'Nuage de points' ? (
+                            <ScatterChart>
+                              <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis dataKey={chart.y} /><Tooltip />
+                              <Scatter data={selectedSubTheme.data} fill="#4a77b4" />
+                            </ScatterChart>
+                          ) : chart.type === 'Secteur' ? (
+                            (() => {
+                              const map = {};
+                              (selectedSubTheme.data || []).forEach(r => {
+                                const key = r[chart.x] ?? 'N/A';
+                                const val = parseFloat(r[chart.y]) || 0;
+                                map[key] = (map[key] || 0) + val;
+                              });
+                              const pieData = Object.keys(map).map(k => ({ name: k, value: map[k] }));
+                              const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
+                              return (
+                                <PieChart>
+                                  <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8">
+                                    {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
+                                  </Pie>
+                                  <Tooltip />
+                                </PieChart>
+                              );
+                            })()
+                          ) : (
+                            <div className="text-sm italic">Type de graphique non pris en charge.</div>
                           )}
                         </ResponsiveContainer>
                       </div>
@@ -484,6 +618,8 @@ function App() {
                 >
                   <option value="Histogramme">Barres (Histogramme)</option>
                   <option value="Courbes">Lignes (Courbes)</option>
+                  <option value="Nuage de points">Nuage de points (Scatter)</option>
+                  <option value="Secteur">Secteur (Pie)</option>
                 </select>
               </div>
 
@@ -493,10 +629,13 @@ function App() {
                   <select 
                     className="w-full p-2 border-2 border-black rounded-lg bg-white"
                     value={currentChartConfig.x}
-                    onChange={e => setCurrentChartConfig({...currentChartConfig, x: e.target.value})}
+                    onChange={e => {
+                      const newX = e.target.value;
+                      setCurrentChartConfig({...currentChartConfig, x: newX, y: (currentChartConfig.y === newX ? '' : currentChartConfig.y)});
+                    }}
                   >
                     <option value="">Sélectionner</option>
-                    {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
+                    {selectedSubTheme.columns?.map(c => <option key={c} value={c} disabled={c === currentChartConfig.y}>{c}</option>)}
                   </select>
                 </div>
                 <div className="flex-1">
@@ -504,10 +643,13 @@ function App() {
                   <select 
                     className="w-full p-2 border-2 border-black rounded-lg bg-white"
                     value={currentChartConfig.y}
-                    onChange={e => setCurrentChartConfig({...currentChartConfig, y: e.target.value})}
+                    onChange={e => {
+                      const newY = e.target.value;
+                      setCurrentChartConfig({...currentChartConfig, y: newY, x: (currentChartConfig.x === newY ? '' : currentChartConfig.x)});
+                    }}
                   >
                     <option value="">Sélectionner</option>
-                    {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
+                    {selectedSubTheme.columns?.map(c => c !== currentChartConfig.x ? <option key={c} value={c}>{c}</option> : null)}
                   </select>
                 </div>
               </div>
@@ -532,6 +674,80 @@ function App() {
           </div>
         </div>
       )}
+      {showEditTable && (
+        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[80vh] overflow-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-xl font-black mb-4 text-center">Édition du tableau</h2>
+
+            <div className="mb-4 flex gap-4 items-center">
+              <label className="bg-[#99c199] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer">
+                Remplacer par un fichier
+                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFileChange} />
+              </label>
+              <div className="text-sm italic text-gray-600">Choisir un fichier Excel pour remplacer le tableau actuel</div>
+            </div>
+
+            <div className="overflow-auto">
+              <table className="w-full border-collapse">
+                <thead>
+                  <tr>
+                    {(selectedSubTheme.columns || []).map(col => (
+                      <th key={col} className="p-2 border border-gray-300 text-xs">{col}</th>
+                    ))}
+                    <th className="p-2 border border-gray-300 text-xs">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {editTableRows.map((row, ri) => (
+                    <tr key={ri} className="hover:bg-gray-50">
+                      {(selectedSubTheme.columns || []).map(col => (
+                        <td key={col} className="p-1 border">
+                          <input className="w-full p-1 text-xs" value={row[col] ?? ''} onChange={e => { const r = [...editTableRows]; r[ri] = {...r[ri], [col]: e.target.value}; setEditTableRows(r); }} />
+                        </td>
+                      ))}
+                      <td className="p-1 border text-center">
+                        <button onClick={() => { const r = [...editTableRows]; r.splice(ri, 1); setEditTableRows(r); }} className="bg-red-400 text-white px-2 py-1 rounded">Suppr</button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="flex gap-4 mt-4">
+              <button onClick={() => setEditTableRows(prev => [...prev, Object.fromEntries((selectedSubTheme.columns || []).map(c => [c, '']))])} className="bg-green-400 text-white px-4 py-2 rounded">Ajouter ligne</button>
+              <div className="flex-1" />
+              <button onClick={() => setShowEditTable(false)} className="bg-gray-200 px-4 py-2 rounded">Annuler</button>
+              <button onClick={saveEditedTable} className="bg-[#ffb366] px-4 py-2 rounded">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showSubThemeMeta && (
+         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+             <h2 className="text-xl font-black mb-4 text-center">Métadonnées du sous-thème</h2>
+             <div className="grid grid-cols-1 gap-4">
+               <textarea placeholder="Définition" className="p-2 border-2 border-black rounded h-32" value={subThemeMeta.definition_text} onChange={e => setSubThemeMeta({...subThemeMeta, definition_text: e.target.value})} />
+               <div className="flex gap-4">
+                 <textarea placeholder="Unité" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.unite_text} onChange={e => setSubThemeMeta({...subThemeMeta, unite_text: e.target.value})} />
+                 <textarea placeholder="Périodicité" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.periodicite_text} onChange={e => setSubThemeMeta({...subThemeMeta, periodicite_text: e.target.value})} />
+               </div>
+               <textarea placeholder="Indication" className="p-2 border-2 border-black rounded h-20" value={subThemeMeta.indication_text} onChange={e => setSubThemeMeta({...subThemeMeta, indication_text: e.target.value})} />
+               <div className="flex gap-4">
+                 <textarea placeholder="Source" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.source_text} onChange={e => setSubThemeMeta({...subThemeMeta, source_text: e.target.value})} />
+                 <textarea placeholder="Couverture" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.couverture_text} onChange={e => setSubThemeMeta({...subThemeMeta, couverture_text: e.target.value})} />
+               </div>
+             </div>
+             <div className="flex gap-4 mt-6">
+               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+               <button onClick={saveSubThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">Enregistrer</button>
+             </div>
+           </div>
+         </div>
+      )}
+
       {showThemeMeta && (
          <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
            <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
