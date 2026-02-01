@@ -19,7 +19,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SousTheme
         fields = [
-            'id', 'nom', 'ordre', 'is_visible', 'data', 'data_json', 'columns', 'charts_config',
+            'id', 'nom', 'ordre', 'is_visible', 'archived', 'data', 'data_json', 'columns', 'charts_config',
             # Métadonnées éditables côté front
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text'
         ]

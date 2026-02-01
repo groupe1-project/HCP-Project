@@ -40,6 +40,9 @@ class SousTheme(models.Model):
     # Visibilité (Public / Privé) pour le sous-thème
     is_visible = models.BooleanField(default=True)
     
+    # Marque d'archivage (archive vs actif)
+    archived = models.BooleanField(default=False)
+    
     # Stockage des données Excel (votre logique actuelle)
     data_json = models.JSONField(null=True, blank=True) 
     

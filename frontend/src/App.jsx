@@ -55,6 +55,8 @@ function App() {
   const [currentChartConfig, setCurrentChartConfig] = useState({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
   const [showSettings, setShowSettings] = useState(false);
   const [settingsForm, setSettingsForm] = useState({ email: '', newPassword: '', confirmPassword: '' });
+  const [searchTheme, setSearchTheme] = useState('');
+  const [searchSubTheme, setSearchSubTheme] = useState('');
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   useEffect(() => {
@@ -219,13 +221,30 @@ function App() {
 
   const archiveSubTheme = async (id) => {
     try {
-      // No dedicated 'archived' flag on SousTheme for now — we set is_visible to false
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { is_visible: false });
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { archived: true });
       showToast('Sous-thème archivé', 'success');
       const res = await axios.get('http://127.0.0.1:8000/api/themes/');
       setThemes(res.data);
-      if (selectedSubTheme && selectedSubTheme.id === id) setSelectedSubTheme(res.data.find(t => t.id === selectedTheme.id)?.sous_themes?.find(s => s.id === id));
+      // Mets à jour selectedTheme avec les sous-thèmes frais
+      if (selectedTheme) {
+        const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+        if (freshTheme) setSelectedTheme(freshTheme);
+      }
     } catch (err) { console.error(err); showToast('Erreur lors de l\'archivage du sous-thème', 'error'); }
+  };
+
+  const unarchiveSubTheme = async (id) => {
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { archived: false });
+      showToast('Sous-thème désarchivé', 'success');
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      // Mets à jour selectedTheme avec les sous-thèmes frais
+      if (selectedTheme) {
+        const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+        if (freshTheme) setSelectedTheme(freshTheme);
+      }
+    } catch (err) { console.error(err); showToast('Erreur lors du désarchivage du sous-thème', 'error'); }
   };
 
   const deleteSubTheme = async (id) => {
@@ -520,7 +539,8 @@ function App() {
 
   const maxId = themes.length > 0 ? Math.max(...themes.map(t => t.id)) : 0;
   const isAdminView = String(activeMenu || '').toLowerCase().includes('admin');
-  const visibleThemes = isAdminView ? themes : themes.filter(t => !t.archived);
+  // Tant que l'interface visiteurs n'est pas développée, l'admin voit tout même dans l'onglet "Thèmes"
+  const visibleThemes = isAuthenticated ? themes : themes.filter(t => !t.archived);
 
   // Affiche le loading ou la page de login/admin
   if (authLoading) {
@@ -567,18 +587,62 @@ function App() {
 
         <div className="p-6 flex justify-center">
           <div className="relative w-1/2">
-            <input type="text" placeholder="Barre de recherche" className="w-full p-2 border-2 border-black rounded shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white italic outline-none" />
+            <input 
+              type="text" 
+              placeholder={activeMenu === 'Themes' && formStep === 0 ? 'Rechercher un thème...' : formStep === 3 ? 'Rechercher un sous-thème...' : 'Barre de recherche'} 
+              className="w-full p-2 border-2 border-black rounded shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white italic outline-none"
+              value={formStep === 0 ? searchTheme : formStep === 3 ? searchSubTheme : ''}
+              onChange={(e) => {
+                if (formStep === 0) setSearchTheme(e.target.value);
+                else if (formStep === 3) setSearchSubTheme(e.target.value);
+              }}
+            />
             <span className="absolute right-3 top-2">🔍</span>
           </div>
         </div>
 
         <div className="px-8 pb-10 flex-1">
           
+          {/* GRILLE DES INDICATEURS (TOUS LES SOUS-THÈMES) */}
+          {activeMenu === 'Indicateurs' && (
+            <div className="relative min-h-[400px]">
+              <div className="grid grid-cols-4 gap-6">
+                {themes.flatMap(theme => 
+                  (theme.sous_themes || []).map(st => ({...st, theme_titre: theme.titre, theme_id: theme.id}))
+                ).map((st, i) => (
+                  <div 
+                    key={st.id} 
+                    onClick={async () => {
+                      try {
+                        const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                        const freshTheme = res.data.find(t => t.id === st.theme_id);
+                        const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                        setSelectedTheme(freshTheme);
+                        setSelectedSubTheme(freshSubTheme);
+                        setSavedCharts(freshSubTheme.charts_config || []);
+                        setFormStep(4);
+                        setShowAll(false);
+                      } catch (err) { console.error(err); }
+                    }}
+                    className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                  >
+                    {st.archived && (
+                      <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                    )}
+                    <div className="text-sm opacity-75 mb-2">{st.theme_titre}</div>
+                    <div className="text-lg">{st.nom}</div>
+                    <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* ÉTAPE 0 : GRILLE DES THÈMES */}
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
               <div className="grid grid-cols-3 gap-6">
-                {visibleThemes.map((t, i) => (
+                {visibleThemes.filter(t => t.titre.toLowerCase().includes(searchTheme.toLowerCase())).map((t, i) => (
                   <div 
                     key={t.id} 
                     onClick={() => { setSelectedTheme(t); setFormStep(3); }}
@@ -589,15 +653,25 @@ function App() {
                     )}
                     Thème {i + 1} : {t.titre}
                     <div className="flex mt-4 gap-2">
-                      <button onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setActionMenuPos({ left: rect.left, top: rect.bottom + 8 }); setOpenActionMenu(openActionMenu === t.id ? null : t.id); setOpenThemeMenu(null); }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                      <button onClick={(e) => { 
+                        e.stopPropagation(); 
+                        const rect = e.currentTarget.getBoundingClientRect(); 
+                        const menuHeight = 200; // hauteur estimée du menu
+                        const spaceBelow = window.innerHeight - rect.bottom;
+                        const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                        setActionMenuPos({ left: rect.left, top }); 
+                        setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
+                        setOpenThemeMenu(null); 
+                      }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
 
                       <div>
                         <button onClick={(e) => { 
                             e.stopPropagation();
                             const rect = e.currentTarget.getBoundingClientRect();
-                            const left = rect.left;
-                            const top = rect.bottom + 8;
-                            setThemeMenuPos({ left, top });
+                            const menuHeight = 150;
+                            const spaceBelow = window.innerHeight - rect.bottom;
+                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                            setThemeMenuPos({ left: rect.left, top });
                             setOpenThemeMenu(openThemeMenu === t.id ? null : t.id);
                           }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                       </div>
@@ -739,7 +813,7 @@ function App() {
                 <button onClick={() => { setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
               </div>
               <div className="grid grid-cols-4 gap-6">
-                {selectedTheme.sous_themes && selectedTheme.sous_themes.map((st, i) => (
+                {selectedTheme.sous_themes && selectedTheme.sous_themes.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
                   <div 
                     key={st.id || i} 
                     onClick={async () => { 
@@ -751,12 +825,36 @@ function App() {
                         setShowAll(false);
                       } catch (err) { console.error(err); }
                     }}
-                    className="relative cursor-pointer bg-[#4a77b4] p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform"
+                    className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
                   >
+                    {st.archived && (
+                      <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                    )}
                     {st.nom}
                     <div className="flex justify-center gap-2 mt-4 text-black">
-                      <button onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setSubActionMenuPos({ left: rect.left, top: rect.bottom + 8 }); setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); setOpenActionMenu(null); setOpenThemeMenu(null); }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                      <button onClick={(e) => { e.stopPropagation(); const rect = e.currentTarget.getBoundingClientRect(); setSubThemeMenuPos({ left: rect.left, top: rect.bottom + 8 }); setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); setOpenSubActionMenu(null); setOpenActionMenu(null); setOpenThemeMenu(null); }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                      <button onClick={(e) => { 
+                        e.stopPropagation(); 
+                        const rect = e.currentTarget.getBoundingClientRect(); 
+                        const menuHeight = 200;
+                        const spaceBelow = window.innerHeight - rect.bottom;
+                        const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                        setSubActionMenuPos({ left: rect.left, top }); 
+                        setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                        setOpenActionMenu(null); 
+                        setOpenThemeMenu(null); 
+                      }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                      <button onClick={(e) => { 
+                        e.stopPropagation(); 
+                        const rect = e.currentTarget.getBoundingClientRect(); 
+                        const menuHeight = 150;
+                        const spaceBelow = window.innerHeight - rect.bottom;
+                        const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                        setSubThemeMenuPos({ left: rect.left, top }); 
+                        setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                        setOpenSubActionMenu(null); 
+                        setOpenActionMenu(null); 
+                        setOpenThemeMenu(null); 
+                      }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                     </div> 
                     <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                   </div>
@@ -1100,10 +1198,23 @@ function App() {
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subThemeMenuPos.left, top: subThemeMenuPos.top, zIndex: 9999 }}>
           <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>
-            <button onClick={(e) => { e.stopPropagation(); const id = openSubThemeMenu; showConfirm('Archiver ce sous-thème ?', async () => { await archiveSubTheme(id); setOpenSubThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-yellow-100 text-yellow-900 hover:bg-yellow-200 transition-colors flex items-center gap-2">
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7v10a1 1 0 001 1h6a1 1 0 001-1V7" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 3h4" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-              Archiver le sous-thème
-            </button>
+            {(() => {
+              const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubThemeMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubThemeMenu);
+              if (st && st.archived) {
+                return (
+                  <button onClick={(e) => { e.stopPropagation(); const id = openSubThemeMenu; showConfirm('Désarchiver ce sous-thème ?', async () => { await unarchiveSubTheme(id); setOpenSubThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-green-100 text-green-900 hover:bg-green-200 transition-colors flex items-center gap-2">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18" stroke="#166534" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7v10a1 1 0 001 1h6a1 1 0 001-1V7" stroke="#166534" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 3h4" stroke="#166534" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                    Désarchiver le sous-thème
+                  </button>
+                );
+              }
+              return (
+                <button onClick={(e) => { e.stopPropagation(); const id = openSubThemeMenu; showConfirm('Archiver ce sous-thème ?', async () => { await archiveSubTheme(id); setOpenSubThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-yellow-100 text-yellow-900 hover:bg-yellow-200 transition-colors flex items-center gap-2">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 7h18" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 7v10a1 1 0 001 1h6a1 1 0 001-1V7" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 3h4" stroke="#92400E" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                  Archiver le sous-thème
+                </button>
+              );
+            })()}
             <button onClick={(e) => { e.stopPropagation(); const id = openSubThemeMenu; showConfirm('Supprimer ce sous-thème ?', async () => { await deleteSubTheme(id); setOpenSubThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-white text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               Supprimer le sous-thème

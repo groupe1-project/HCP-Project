@@ -164,23 +164,27 @@ class ThemeViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='archive')
     def archive(self, request, pk=None):
-        """Marque un thème comme archivé."""
+        """Marque un thème comme archivé et archive tous ses sous-thèmes."""
         try:
             theme = self.get_object()
             theme.archived = True
             theme.save()
-            return Response({'message': 'Thème archivé'}, status=status.HTTP_200_OK)
+            # Archive tous les sous-thèmes de ce thème
+            theme.sous_themes.all().update(archived=True)
+            return Response({'message': 'Thème et ses sous-thèmes archivés'}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'], url_path='unarchive')
     def unarchive(self, request, pk=None):
-        """Retire la marque d'archivage d'un thème."""
+        """Retire la marque d'archivage d'un thème et désarchive tous ses sous-thèmes."""
         try:
             theme = self.get_object()
             theme.archived = False
             theme.save()
-            return Response({'message': 'Thème désarchivé'}, status=status.HTTP_200_OK)
+            # Désarchive tous les sous-thèmes de ce thème
+            theme.sous_themes.all().update(archived=False)
+            return Response({'message': 'Thème et ses sous-thèmes désarchivés'}, status=status.HTTP_200_OK)
         except Exception as e:
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
