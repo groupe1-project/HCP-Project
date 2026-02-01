@@ -57,6 +57,7 @@ function App() {
   const [settingsForm, setSettingsForm] = useState({ email: '', newPassword: '', confirmPassword: '' });
   const [searchTheme, setSearchTheme] = useState('');
   const [searchSubTheme, setSearchSubTheme] = useState('');
+  const [searchIndicateur, setSearchIndicateur] = useState('');
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   useEffect(() => {
@@ -388,6 +389,18 @@ function App() {
       if (!hasNumeric) return alert('La colonne Y sélectionnée ne contient pas de valeurs numériques nécessaires pour ce type de graphique.');
     }
 
+    // Vérifier si un graphique avec le même type, x et y existe déjà (sauf si on modifie le graphique actuel)
+    if (!currentChartConfig.id) {
+      const duplicate = savedCharts.find(chart => 
+        chart.type === currentChartConfig.type && 
+        chart.x === currentChartConfig.x && 
+        chart.y === currentChartConfig.y
+      );
+      if (duplicate) {
+        return alert(`Un graphique de type "${currentChartConfig.type}" avec X="${currentChartConfig.x}" et Y="${currentChartConfig.y}" existe déjà pour ce sous-thème.`);
+      }
+    }
+
     try {
       if (currentChartConfig.id) {
         // Update existing chart
@@ -589,11 +602,22 @@ function App() {
           <div className="relative w-1/2">
             <input 
               type="text" 
-              placeholder={activeMenu === 'Themes' && formStep === 0 ? 'Rechercher un thème...' : formStep === 3 ? 'Rechercher un sous-thème...' : 'Barre de recherche'} 
+              placeholder={
+                activeMenu === 'Themes' && formStep === 0 ? 'Rechercher un thème...' : 
+                activeMenu === 'Indicateurs' ? 'Rechercher un indicateur...' :
+                formStep === 3 ? 'Rechercher un sous-thème...' : 
+                'Barre de recherche'
+              } 
               className="w-full p-2 border-2 border-black rounded shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white italic outline-none"
-              value={formStep === 0 ? searchTheme : formStep === 3 ? searchSubTheme : ''}
+              value={
+                activeMenu === 'Indicateurs' ? searchIndicateur :
+                formStep === 0 ? searchTheme : 
+                formStep === 3 ? searchSubTheme : 
+                ''
+              }
               onChange={(e) => {
-                if (formStep === 0) setSearchTheme(e.target.value);
+                if (activeMenu === 'Indicateurs') setSearchIndicateur(e.target.value);
+                else if (formStep === 0) setSearchTheme(e.target.value);
                 else if (formStep === 3) setSearchSubTheme(e.target.value);
               }}
             />
@@ -609,6 +633,9 @@ function App() {
               <div className="grid grid-cols-4 gap-6">
                 {themes.flatMap(theme => 
                   (theme.sous_themes || []).map(st => ({...st, theme_titre: theme.titre, theme_id: theme.id}))
+                ).filter(st => 
+                  st.nom.toLowerCase().includes(searchIndicateur.toLowerCase()) ||
+                  st.theme_titre.toLowerCase().includes(searchIndicateur.toLowerCase())
                 ).map((st, i) => (
                   <div 
                     key={st.id} 
