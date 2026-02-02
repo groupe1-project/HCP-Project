@@ -139,6 +139,9 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 nom_st = request.data.get(f'lignes[{index}][sousTheme]')
                 libelle_ind = request.data.get(f'lignes[{index}][indicateur]')
                 unite = request.data.get(f'lignes[{index}][unite]')
+                definition = request.data.get(f'lignes[{index}][definition]', '')
+                source = request.data.get(f'lignes[{index}][source]', '')
+                periodicite = request.data.get(f'lignes[{index}][periodicite]', '')
                 
                 # Déterminer la catégorie si elle est spécifiée
                 categorie_obj = None
@@ -147,11 +150,16 @@ class ThemeViewSet(viewsets.ModelViewSet):
                     if cat_idx < len(categories_created):
                         categorie_obj = categories_created[cat_idx]
                 
-                # Création du Sous-Thème
+                # Création du Sous-Thème avec les métadonnées pré-remplies
                 st_obj = SousTheme.objects.create(
                     nom=nom_st, 
                     theme=nouveau_theme,
-                    categorie=categorie_obj
+                    categorie=categorie_obj,
+                    indication_text=libelle_ind or '',
+                    unite_text=unite or '',
+                    definition_text=definition or '',
+                    source_text=source or '',
+                    periodicite_text=periodicite or ''
                 )
 
                 # Gestion du fichier Excel spécifique à ce sous-thème
