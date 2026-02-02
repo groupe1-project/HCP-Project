@@ -204,9 +204,18 @@ function App() {
 
   const addSubTheme = async (themeId, name, categorieId = null) => {
     try {
+      const theme = themes.find(t => t.id === themeId);
       const payload = { nom: name };
       if (categorieId) {
         payload.categorie = categorieId;
+        // Si on ajoute à une catégorie, hériter la visibilité de la catégorie
+        const categorie = theme?.categories?.find(c => c.id === categorieId);
+        if (categorie) {
+          payload.is_visible = categorie.is_visible;
+        }
+      } else {
+        // Si pas de catégorie, hériter la visibilité du thème
+        payload.is_visible = theme?.is_visible ?? true;
       }
       const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/sous_themes/`, payload);
       alert('Sous-thème ajouté');

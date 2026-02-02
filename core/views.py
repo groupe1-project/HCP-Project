@@ -255,7 +255,16 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 except Categorie.DoesNotExist:
                     return Response({'error': 'Catégorie non trouvée'}, status=status.HTTP_400_BAD_REQUEST)
             
-            st = SousTheme.objects.create(nom=nom, theme=theme, categorie=categorie_obj)
+            # Récupérer is_visible depuis la requête, ou hériter du parent
+            is_visible = request.data.get('is_visible')
+            if is_visible is None:
+                # Hériter de la catégorie si elle existe, sinon du thème
+                if categorie_obj:
+                    is_visible = categorie_obj.is_visible
+                else:
+                    is_visible = theme.is_visible
+            
+            st = SousTheme.objects.create(nom=nom, theme=theme, categorie=categorie_obj, is_visible=is_visible)
             serializer = SousThemeSerializer(st)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
