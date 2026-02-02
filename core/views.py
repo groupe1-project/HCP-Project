@@ -5,10 +5,15 @@ from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
-from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser
-from .serializers import ThemeSerializer, SousThemeSerializer
+from .models import Theme, Categorie, SousTheme, Indicateur, Donnee, CustomUser
+from .serializers import ThemeSerializer, CategorieSerializer, SousThemeSerializer
 
 logger = logging.getLogger(__name__)
+
+class CategorieViewSet(viewsets.ModelViewSet):
+    queryset = Categorie.objects.all().order_by('id')
+    serializer_class = CategorieSerializer
+    permission_classes = [IsAuthenticated]
 
 class SousThemeViewSet(viewsets.ModelViewSet):
     queryset = SousTheme.objects.all().order_by('id')
@@ -100,6 +105,23 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 is_visible=is_visible
             )
 
+            # 1.5. Si des catégories sont spécifiées, les créer
+            use_categories = request.data.get('use_categories') == 'true'
+            categories_created = []
+            if use_categories:
+                cat_index = 0
+                while f'categories[{cat_index}][nom]' in request.data:
+                    cat_nom = request.data.get(f'categories[{cat_index}][nom]')
+                    cat_ordre = request.data.get(f'categories[{cat_index}][ordre]', cat_index)
+                    if cat_nom and cat_nom.strip():
+                        cat_obj = Categorie.objects.create(
+                            nom=cat_nom,
+                            theme=nouveau_theme,
+                            ordre=int(cat_ordre)
+                        )
+                        categories_created.append(cat_obj)
+                    cat_index += 1
+
             # 2. Boucle pour traiter chaque ligne de sous-thème envoyée par le formulaire
             index = 0
             while f'lignes[{index}][sousTheme]' in request.data:
@@ -107,10 +129,18 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 libelle_ind = request.data.get(f'lignes[{index}][indicateur]')
                 unite = request.data.get(f'lignes[{index}][unite]')
                 
+                # Déterminer la catégorie si elle est spécifiée
+                categorie_obj = None
+                if use_categories and f'lignes[{index}][categorieIndex]' in request.data:
+                    cat_idx = int(request.data.get(f'lignes[{index}][categorieIndex]'))
+                    if cat_idx < len(categories_created):
+                        categorie_obj = categories_created[cat_idx]
+                
                 # Création du Sous-Thème
                 st_obj = SousTheme.objects.create(
                     nom=nom_st, 
-                    theme=nouveau_theme
+                    theme=nouveau_theme,
+                    categorie=categorie_obj
                 )
 
                 # Gestion du fichier Excel spécifique à ce sous-thème
@@ -196,7 +226,17 @@ class ThemeViewSet(viewsets.ModelViewSet):
             nom = request.data.get('nom') or request.data.get('name')
             if not nom:
                 return Response({'error': 'Le nom du sous-thème est requis'}, status=status.HTTP_400_BAD_REQUEST)
-            st = SousTheme.objects.create(nom=nom, theme=theme)
+            
+            # Récupérer l'ID de la catégorie si fourni
+            categorie_id = request.data.get('categorie')
+            categorie_obj = None
+            if categorie_id:
+                try:
+                    categorie_obj = Categorie.objects.get(id=categorie_id, theme=theme)
+                except Categorie.DoesNotExist:
+                    return Response({'error': 'Catégorie non trouvée'}, status=status.HTTP_400_BAD_REQUEST)
+            
+            st = SousTheme.objects.create(nom=nom, theme=theme, categorie=categorie_obj)
             serializer = SousThemeSerializer(st)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:

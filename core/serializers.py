@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser
+from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -19,7 +19,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SousTheme
         fields = [
-            'id', 'nom', 'ordre', 'is_visible', 'archived', 'data', 'data_json', 'columns', 'charts_config',
+            'id', 'nom', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns', 'charts_config',
             # Métadonnées éditables côté front
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text'
         ]
@@ -34,9 +34,18 @@ class SousThemeSerializer(serializers.ModelSerializer):
             return list(obj.data_json[0].keys())
         return []
 
+class CategorieSerializer(serializers.ModelSerializer):
+    sous_themes = SousThemeSerializer(many=True, read_only=True)
+    
+    class Meta:
+        model = Categorie
+        fields = ['id', 'nom', 'ordre', 'sous_themes']
+
 class ThemeSerializer(serializers.ModelSerializer):
     # Relation vers les sous-thèmes
     sous_themes = SousThemeSerializer(many=True, read_only=True)
+    # Relation vers les catégories
+    categories = CategorieSerializer(many=True, read_only=True)
 
     class Meta:
         model = Theme
@@ -48,6 +57,7 @@ class ThemeSerializer(serializers.ModelSerializer):
             'archived',
             'statut', 
             'sous_themes',
+            'categories',
             # Ajout des nouveaux champs de métadonnées pour le Front-end
             'definition_text',
             'unite_text',

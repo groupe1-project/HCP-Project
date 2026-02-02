@@ -41,6 +41,7 @@ function App() {
   const [actionModalType, setActionModalType] = useState('rename');
   const [actionModalValue, setActionModalValue] = useState('');
   const [actionModalThemeId, setActionModalThemeId] = useState(null);
+  const [actionModalCategorieId, setActionModalCategorieId] = useState(null);
   const [rows, setRows] = useState([]);
   const [showThemeMeta, setShowThemeMeta] = useState(false);
   const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
@@ -58,6 +59,12 @@ function App() {
   const [searchTheme, setSearchTheme] = useState('');
   const [searchSubTheme, setSearchSubTheme] = useState('');
   const [searchIndicateur, setSearchIndicateur] = useState('');
+  const [useCategories, setUseCategories] = useState(false);
+  const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
+  const [expandedCategories, setExpandedCategories] = useState({});
+  const [selectedCategorie, setSelectedCategorie] = useState(null);
+  const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
+  const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   useEffect(() => {
@@ -78,6 +85,8 @@ function App() {
       setOpenThemeMenu(null);
       setOpenActionMenu(null);
       setOpenSubActionMenu(null);
+      setOpenSubThemeMenu(null);
+      setOpenCategorieMenu(null);
     };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
@@ -193,9 +202,13 @@ function App() {
     } catch (err) { console.error(err); alert('Erreur lors du renommage'); }
   };
 
-  const addSubTheme = async (themeId, name) => {
+  const addSubTheme = async (themeId, name, categorieId = null) => {
     try {
-      const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/sous_themes/`, { nom: name });
+      const payload = { nom: name };
+      if (categorieId) {
+        payload.categorie = categorieId;
+      }
+      const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/sous_themes/`, payload);
       alert('Sous-thème ajouté');
       const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
       setThemes(themesRes.data);
@@ -288,15 +301,31 @@ function App() {
     }
   };  
 
-  const toggleThemePublication = async (themeId) => {
+  const toggleThemePublication = async (themeId, newVisibility) => {
     try {
-      const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/toggle_visibility/`);
-      const isVisible = res.data?.is_visible;
+      // Change theme visibility
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { is_visible: newVisibility });
+      
+      // Cascade: update all sous-themes of this theme
+      const theme = themes.find(t => t.id === themeId);
+      if (theme && theme.sous_themes) {
+        for (const subTheme of theme.sous_themes) {
+          await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subTheme.id}/`, { is_visible: newVisibility });
+        }
+      }
+      
+      // Refresh themes and update selectedTheme
       const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
       setThemes(themesRes.data);
-      if (selectedTheme && selectedTheme.id === themeId) setSelectedTheme(themesRes.data.find(t => t.id === themeId));
-      alert(`Statut modifié : ${isVisible ? 'Public' : 'Privé'}`);
-    } catch (err) { console.error(err); alert('Erreur lors du changement de statut du thème'); }
+      if (selectedTheme && selectedTheme.id === themeId) {
+        const freshTheme = themesRes.data.find(t => t.id === themeId);
+        if (freshTheme) setSelectedTheme(freshTheme);
+      }
+      showToast(`Visibilité du thème mise à jour: ${newVisibility ? 'Public' : 'Privé'}`, 'success');
+    } catch (err) { 
+      console.error(err); 
+      showToast('Erreur lors du changement de statut du thème', 'error');
+    }
   };
 
   const saveEditedTable = async () => {
@@ -480,9 +509,40 @@ function App() {
   };
 
   const goToTable = () => {
-    const initialRows = Array.from({ length: themeData.nbSousThemes }, () => ({
-      sousTheme: '', unite: '', definition: '', indicateur: '', source: '', periodicite: '', file: null
-    }));
+    let initialRows = [];
+    
+    if (useCategories) {
+      // Générer les lignes pour chaque catégorie
+      categoryNames.forEach((cat, catIndex) => {
+        if (cat.nom.trim()) {
+          for (let i = 0; i < cat.nbSousThemes; i++) {
+            initialRows.push({
+              sousTheme: '', 
+              unite: '', 
+              definition: '', 
+              indicateur: '', 
+              source: '', 
+              periodicite: '', 
+              file: null,
+              categorieIndex: catIndex
+            });
+          }
+        }
+      });
+    } else {
+      // Mode sans catégories (ancien comportement)
+      initialRows = Array.from({ length: themeData.nbSousThemes }, () => ({
+        sousTheme: '', 
+        unite: '', 
+        definition: '', 
+        indicateur: '', 
+        source: '', 
+        periodicite: '', 
+        file: null,
+        categorieIndex: 0
+      }));
+    }
+    
     setRows(initialRows);
     setFormStep(2);
   };
@@ -491,6 +551,16 @@ function App() {
     const formData = new FormData();
     formData.append('titre', themeData.titre);
     formData.append('statut', themeData.statut);
+    
+    // Si on utilise des catégories, envoyer leur configuration
+    if (useCategories) {
+      formData.append('use_categories', 'true');
+      categoryNames.filter(c => c.nom.trim()).forEach((cat, idx) => {
+        formData.append(`categories[${idx}][nom]`, cat.nom);
+        formData.append(`categories[${idx}][ordre]`, idx);
+      });
+    }
+    
     rows.forEach((row, i) => {
       formData.append(`lignes[${i}][sousTheme]`, row.sousTheme);
       formData.append(`lignes[${i}][unite]`, row.unite);
@@ -498,6 +568,10 @@ function App() {
       formData.append(`lignes[${i}][definition]`, row.definition);
       formData.append(`lignes[${i}][source]`, row.source);
       formData.append(`lignes[${i}][periodicite]`, row.periodicite);
+      // Si on utilise des catégories, ajouter l'index de catégorie
+      if (useCategories && row.categorieIndex !== undefined) {
+        formData.append(`lignes[${i}][categorieIndex]`, row.categorieIndex);
+      }
       if (row.file) formData.append(`lignes[${i}][file]`, row.file);
     });
 
@@ -511,6 +585,8 @@ function App() {
       }
       alert("Enregistré !");
       setFormStep(0);
+      setUseCategories(false);
+      setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
     } catch (err) { alert("Erreur : " + err.message); }
   };
 
@@ -672,13 +748,37 @@ function App() {
                 {visibleThemes.filter(t => t.titre.toLowerCase().includes(searchTheme.toLowerCase())).map((t, i) => (
                   <div 
                     key={t.id} 
-                    onClick={() => { setSelectedTheme(t); setFormStep(3); }}
+                    onClick={() => { 
+                      if (!t.categories || t.categories.length === 0) {
+                        setSelectedTheme(t);
+                        setSelectedCategorie(null);
+                        setFormStep(3);
+                      }
+                    }}
                     className={`cursor-pointer p-5 rounded-xl border-2 border-black shadow-lg relative text-white font-bold transition-transform hover:scale-105 ${t.archived ? 'bg-gray-600 line-through opacity-80' : (t.id === maxId ? 'bg-[#ffb366]' : 'bg-[#41699d]')}`}
                   >
                     {t.archived && (
                       <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                     )}
-                    Thème {i + 1} : {t.titre}
+                    <div className="flex items-center justify-between">
+                      <span>Thème {i + 1} : {t.titre}</span>
+                      {t.categories && t.categories.length > 0 && (
+                        <button 
+                          onClick={(e) => { 
+                            e.stopPropagation();
+                            const rect = e.currentTarget.getBoundingClientRect();
+                            const menuHeight = 200;
+                            const spaceBelow = window.innerHeight - rect.bottom;
+                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                            setCategorieMenuPos({ left: rect.left, top });
+                            setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
+                          }}
+                          className="bg-white text-black px-3 py-1 rounded-lg border-2 border-black hover:bg-gray-100 text-xl font-bold"
+                        >
+                          ▼
+                        </button>
+                      )}
+                    </div>
                     <div className="flex mt-4 gap-2">
                       <button onClick={(e) => { 
                         e.stopPropagation(); 
@@ -744,6 +844,40 @@ function App() {
                 </div>
               )}
 
+              {openCategorieMenu && (
+                <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: categorieMenuPos.left, top: categorieMenuPos.top, zIndex: 9999 }}>
+                  <div className="w-64 bg-white rounded-lg shadow-2xl border-2 border-black overflow-hidden">
+                    <div className="px-4 py-3 border-b-2 border-black text-sm font-bold text-gray-800 bg-gray-100">Choisir une catégorie</div>
+                    {(() => {
+                      const currentTheme = themes.find(x => x.id === openCategorieMenu);
+                      if (!currentTheme || !currentTheme.categories) return null;
+                      return currentTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => (
+                        <button 
+                          key={cat.id}
+                          onClick={(e) => { 
+                            e.stopPropagation();
+                            setSelectedTheme(currentTheme);
+                            setSelectedCategorie(cat);
+                            setOpenCategorieMenu(null);
+                            setFormStep(3);
+                          }}
+                          className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors border-b border-gray-200 flex items-center gap-2"
+                        >
+                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                          </svg>
+                          <span className="font-semibold">{cat.nom}</span>
+                          <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
+                        </button>
+                      ));
+                    })()}
+                  </div>
+                </div>
+              )}
+
               {openActionMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: actionMenuPos.left, top: actionMenuPos.top, zIndex: 9999 }}>
                   <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
@@ -752,11 +886,20 @@ function App() {
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Renommer
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Ajouter un sous-thème
                     </button>
-                    <button onClick={(e) => { e.stopPropagation(); toggleThemePublication(openActionMenu); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { 
+                      e.stopPropagation(); 
+                      const t = themes.find(x => x.id === openActionMenu);
+                      if (!t) return;
+                      const newVis = !t.is_visible;
+                      if (confirm(`Rendre ce thème ${newVis ? 'Public' : 'Privé'} ainsi que tous ses sous-thèmes ?`)) {
+                        toggleThemePublication(openActionMenu, newVis);
+                      }
+                      setOpenActionMenu(null);
+                    }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Modifier le statut de publication
                     </button>
@@ -774,11 +917,84 @@ function App() {
                  <input type="text" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none" 
                    onChange={e => setThemeData({...themeData, titre: e.target.value})} />
                </div>
+               
                <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Nombre des Sous-thèmes*</label>
-                 <input type="number" min="1" className="w-32 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
-                   value={themeData.nbSousThemes} onChange={e => setThemeData({...themeData, nbSousThemes: parseInt(e.target.value)})} />
+                 <label className="text-xl w-64 font-bold">Utiliser des catégories ?</label>
+                 <input 
+                   type="checkbox" 
+                   checked={useCategories}
+                   onChange={e => {
+                     setUseCategories(e.target.checked);
+                     if (!e.target.checked) setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
+                   }}
+                   className="w-6 h-6 cursor-pointer"
+                 />
                </div>
+               
+               {useCategories && (
+                 <div className="border-2 border-blue-300 rounded-lg p-4 space-y-3 bg-blue-50">
+                   <div className="flex justify-between items-center">
+                     <label className="text-lg font-bold">Configuration des catégories</label>
+                     <button 
+                       onClick={() => setCategoryNames([...categoryNames, { nom: '', nbSousThemes: 1 }])}
+                       className="bg-green-500 text-white px-3 py-1 rounded-md font-bold hover:bg-green-600"
+                     >
+                       + Ajouter une catégorie
+                     </button>
+                   </div>
+                   {categoryNames.map((cat, idx) => (
+                     <div key={idx} className="border-2 border-gray-300 rounded-lg p-3 space-y-2 bg-white">
+                       <div className="flex gap-2 items-center">
+                         <span className="font-bold text-lg w-8">{idx + 1}.</span>
+                         <div className="flex-1 flex gap-3">
+                           <input 
+                             type="text" 
+                             value={cat.nom}
+                             onChange={e => {
+                               const newCats = [...categoryNames];
+                               newCats[idx].nom = e.target.value;
+                               setCategoryNames(newCats);
+                             }}
+                             className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
+                             placeholder={`Nom de la catégorie ${idx + 1}`}
+                           />
+                           <div className="flex items-center gap-2">
+                             <label className="font-semibold whitespace-nowrap">Sous-thèmes:</label>
+                             <input 
+                               type="number" 
+                               min="1"
+                               value={cat.nbSousThemes}
+                               onChange={e => {
+                                 const newCats = [...categoryNames];
+                                 newCats[idx].nbSousThemes = parseInt(e.target.value) || 1;
+                                 setCategoryNames(newCats);
+                               }}
+                               className="w-20 border-2 border-blue-300 rounded-md p-2 outline-none text-center"
+                             />
+                           </div>
+                         </div>
+                         {categoryNames.length > 1 && (
+                           <button 
+                             onClick={() => setCategoryNames(categoryNames.filter((_, i) => i !== idx))}
+                             className="bg-red-500 text-white px-3 py-2 rounded-md font-bold hover:bg-red-600"
+                           >
+                             ✕
+                           </button>
+                         )}
+                       </div>
+                     </div>
+                   ))}
+                 </div>
+               )}
+               
+               {!useCategories && (
+                 <div className="flex items-center gap-6">
+                   <label className="text-xl w-64 font-bold">Nombre des Sous-thèmes*</label>
+                   <input type="number" min="1" className="w-32 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
+                     value={themeData.nbSousThemes} onChange={e => setThemeData({...themeData, nbSousThemes: parseInt(e.target.value)})} />
+                 </div>
+               )}
+               
                <div className="flex items-center gap-6">
                  <label className="text-xl w-64 font-bold">Statut de publication</label>
                  <select className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none" 
@@ -795,36 +1011,86 @@ function App() {
           )}
 
           {formStep === 2 && (
-             <div className="bg-white border-2 border-black rounded-lg shadow-xl overflow-hidden max-w-6xl mx-auto">
-               <table className="w-full border-collapse">
-                 <thead className="bg-gray-50">
-                   <tr className="border-b border-black">
-                     {['Sous - thème*', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
-                       <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
-                     ))}
-                   </tr>
-                 </thead>
-                 <tbody>
-                   {rows.map((row, i) => (
-                     <tr key={i} className="border-b border-black">
-                       <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" onChange={e => {const r = [...rows]; r[i].sousTheme = e.target.value; setRows(r);}} /></td>
-                       <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" onChange={e => {const r = [...rows]; r[i].unite = e.target.value; setRows(r);}} /></td>
-                       <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" onChange={e => {const r = [...rows]; r[i].definition = e.target.value; setRows(r);}} /></td>
-                       <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" onChange={e => {const r = [...rows]; r[i].indicateur = e.target.value; setRows(r);}} /></td>
-                       <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" onChange={e => {const r = [...rows]; r[i].source = e.target.value; setRows(r);}} /></td>
-                       <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" onChange={e => {const r = [...rows]; r[i].periodicite = e.target.value; setRows(r);}} /></td>
-                       <td className="p-1 text-center bg-gray-50">
-                         <label className="cursor-pointer">
-                           <span className="text-2xl">📤</span>
-                           <input type="file" className="hidden" onChange={e => {const r = [...rows]; r[i].file = e.target.files[0]; setRows(r);}} />
-                           {row.file && <div className="text-[10px] text-green-600 font-bold">OK</div>}
-                         </label>
-                       </td>
-                     </tr>
-                   ))}
-                 </tbody>
-               </table>
-               <div className="p-4 flex justify-between bg-gray-50">
+             <div className="space-y-6 max-w-6xl mx-auto">
+               {useCategories ? (
+                 // Afficher un tableau par catégorie
+                 categoryNames.filter(cat => cat.nom.trim()).map((cat, catIndex) => {
+                   const catRows = rows.filter(r => r.categorieIndex === catIndex);
+                   const startIdx = rows.findIndex(r => r.categorieIndex === catIndex);
+                   
+                   return (
+                     <div key={catIndex} className="bg-white border-2 border-black rounded-lg shadow-xl overflow-hidden">
+                       <div className="bg-[#6d92c7] px-4 py-3 border-b-2 border-black">
+                         <h3 className="text-white font-bold text-lg">Catégorie {catIndex + 1}: {cat.nom}</h3>
+                       </div>
+                       <table className="w-full border-collapse">
+                         <thead className="bg-gray-50">
+                           <tr className="border-b border-black">
+                             {['Sous - thème*', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
+                               <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
+                             ))}
+                           </tr>
+                         </thead>
+                         <tbody>
+                           {catRows.map((row, localIdx) => {
+                             const globalIdx = startIdx + localIdx;
+                             return (
+                               <tr key={globalIdx} className="border-b border-black">
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme} onChange={e => {const r = [...rows]; r[globalIdx].sousTheme = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.unite} onChange={e => {const r = [...rows]; r[globalIdx].unite = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.definition} onChange={e => {const r = [...rows]; r[globalIdx].definition = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.indicateur} onChange={e => {const r = [...rows]; r[globalIdx].indicateur = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.source} onChange={e => {const r = [...rows]; r[globalIdx].source = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.periodicite} onChange={e => {const r = [...rows]; r[globalIdx].periodicite = e.target.value; setRows(r);}} /></td>
+                                 <td className="p-1 text-center bg-gray-50">
+                                   <label className="cursor-pointer">
+                                     <span className="text-2xl">📤</span>
+                                     <input type="file" className="hidden" onChange={e => {const r = [...rows]; r[globalIdx].file = e.target.files[0]; setRows(r);}} />
+                                     {row.file && <div className="text-[10px] text-green-600 font-bold">OK</div>}
+                                   </label>
+                                 </td>
+                               </tr>
+                             );
+                           })}
+                         </tbody>
+                       </table>
+                     </div>
+                   );
+                 })
+               ) : (
+                 // Mode sans catégories (tableau unique)
+                 <div className="bg-white border-2 border-black rounded-lg shadow-xl overflow-hidden">
+                   <table className="w-full border-collapse">
+                     <thead className="bg-gray-50">
+                       <tr className="border-b border-black">
+                         {['Sous - thème*', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
+                           <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
+                         ))}
+                       </tr>
+                     </thead>
+                     <tbody>
+                       {rows.map((row, i) => (
+                         <tr key={i} className="border-b border-black">
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme} onChange={e => {const r = [...rows]; r[i].sousTheme = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.unite} onChange={e => {const r = [...rows]; r[i].unite = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.definition} onChange={e => {const r = [...rows]; r[i].definition = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.indicateur} onChange={e => {const r = [...rows]; r[i].indicateur = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.source} onChange={e => {const r = [...rows]; r[i].source = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.periodicite} onChange={e => {const r = [...rows]; r[i].periodicite = e.target.value; setRows(r);}} /></td>
+                           <td className="p-1 text-center bg-gray-50">
+                             <label className="cursor-pointer">
+                               <span className="text-2xl">📤</span>
+                               <input type="file" className="hidden" onChange={e => {const r = [...rows]; r[i].file = e.target.files[0]; setRows(r);}} />
+                               {row.file && <div className="text-[10px] text-green-600 font-bold">OK</div>}
+                             </label>
+                           </td>
+                         </tr>
+                       ))}
+                     </tbody>
+                   </table>
+                 </div>
+               )}
+               <div className="p-4 flex justify-between bg-gray-50 rounded-lg border-2 border-black">
                  <button onClick={() => setFormStep(1)} className="bg-[#ffb366] text-white px-8 py-2 rounded-lg border-2 border-black font-bold shadow-md">⬅ Précédent</button>
                  <button onClick={handleFinalSubmit} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Enregistrer ➡</button>
                </div>
@@ -834,59 +1100,216 @@ function App() {
           {/* ÉTAPE 3 : LISTE DES SOUS-THÈMES */}
           {formStep === 3 && selectedTheme && (
             <div className="space-y-8">
-              <div className="flex justify-between items-center">
-                <button onClick={() => setFormStep(0)} className="bg-white px-4 py-2 border-2 border-black rounded-xl font-bold hover:bg-gray-100 shadow-md">⬅ Retour</button>
-                <h2 className="bg-[#c2d9ff] px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md text-center">Titre du thème : {selectedTheme.titre}</h2>
+              <div className="flex justify-between items-center gap-4">
+                <button onClick={() => { setFormStep(0); setSelectedCategorie(null); }} className="bg-white px-4 py-2 border-2 border-black rounded-xl font-bold hover:bg-gray-100 shadow-md">⬅ Retour</button>
+                <div className="flex items-center gap-3 flex-1 justify-center">
+                  <h2 className="bg-[#c2d9ff] px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md">
+                    {selectedCategorie ? `${selectedTheme.titre} - ${selectedCategorie.nom}` : `Titre du thème : ${selectedTheme.titre}`}
+                  </h2>
+                  <div className="flex items-center gap-2">
+                    <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    <select
+                      value={selectedTheme.is_visible ? 'Public' : 'Privé'}
+                      onChange={async (e) => {
+                        const val = e.target.value;
+                        const newVis = val === 'Public';
+                        if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
+                        await toggleThemePublication(selectedTheme.id, newVis);
+                      }}
+                      className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                    >
+                      <option value="Public">Public 📢</option>
+                      <option value="Privé">Privé 🔒</option>
+                    </select>
+                  </div>
+                </div>
                 <button onClick={() => { setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
               </div>
-              <div className="grid grid-cols-4 gap-6">
-                {selectedTheme.sous_themes && selectedTheme.sous_themes.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
-                  <div 
-                    key={st.id || i} 
-                    onClick={async () => { 
-                      try {
-                        const res = await axios.get('http://127.0.0.1:8000/api/themes/');
-                        const freshTheme = res.data.find(t => t.id === selectedTheme.id);
-                        const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
-                        setSelectedSubTheme(freshSubTheme);                         setSavedCharts(freshSubTheme.charts_config || []);                        setFormStep(4); 
-                        setShowAll(false);
-                      } catch (err) { console.error(err); }
-                    }}
-                    className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
-                  >
-                    {st.archived && (
-                      <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
-                    )}
-                    {st.nom}
-                    <div className="flex justify-center gap-2 mt-4 text-black">
-                      <button onClick={(e) => { 
-                        e.stopPropagation(); 
-                        const rect = e.currentTarget.getBoundingClientRect(); 
-                        const menuHeight = 200;
-                        const spaceBelow = window.innerHeight - rect.bottom;
-                        const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                        setSubActionMenuPos({ left: rect.left, top }); 
-                        setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
-                        setOpenActionMenu(null); 
-                        setOpenThemeMenu(null); 
-                      }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                      <button onClick={(e) => { 
-                        e.stopPropagation(); 
-                        const rect = e.currentTarget.getBoundingClientRect(); 
-                        const menuHeight = 150;
-                        const spaceBelow = window.innerHeight - rect.bottom;
-                        const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                        setSubThemeMenuPos({ left: rect.left, top }); 
-                        setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
-                        setOpenSubActionMenu(null); 
-                        setOpenActionMenu(null); 
-                        setOpenThemeMenu(null); 
-                      }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
-                    </div> 
-                    <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                  </div>
-                ))}
-              </div>
+              
+              {/* Affichage avec catégories ou sans */}
+              {selectedCategorie ? (
+                // Affichage d'une seule catégorie
+                <div className="grid grid-cols-4 gap-6">
+                  {selectedCategorie.sous_themes?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
+                    <div 
+                      key={st.id || i} 
+                      onClick={async () => { 
+                        try {
+                          const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                          const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+                          const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                          setSelectedSubTheme(freshSubTheme);
+                          setSavedCharts(freshSubTheme.charts_config || []);
+                          setFormStep(4); 
+                          setShowAll(false);
+                        } catch (err) { console.error(err); }
+                      }}
+                      className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                    >
+                      {st.archived && (
+                        <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                      )}
+                      {st.nom}
+                      <div className="flex justify-center gap-2 mt-4 text-black">
+                        <button onClick={(e) => { 
+                          e.stopPropagation(); 
+                          const rect = e.currentTarget.getBoundingClientRect(); 
+                          const menuHeight = 200;
+                          const spaceBelow = window.innerHeight - rect.bottom;
+                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                          setSubActionMenuPos({ left: rect.left, top }); 
+                          setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                          setOpenActionMenu(null); 
+                          setOpenThemeMenu(null);
+                          setOpenSubThemeMenu(null);
+                          setOpenCategorieMenu(null); 
+                        }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                        <button onClick={(e) => { 
+                          e.stopPropagation(); 
+                          const rect = e.currentTarget.getBoundingClientRect(); 
+                          const menuHeight = 150;
+                          const spaceBelow = window.innerHeight - rect.bottom;
+                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                          setSubThemeMenuPos({ left: rect.left, top }); 
+                          setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                          setOpenSubActionMenu(null); 
+                          setOpenActionMenu(null); 
+                          setOpenThemeMenu(null);
+                          setOpenCategorieMenu(null); 
+                        }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                      </div> 
+                      <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    </div>
+                  ))}
+                </div>
+              ) : selectedTheme.categories && selectedTheme.categories.length > 0 ? (
+                // Affichage de toutes les catégories (mode dropdown)
+                <div className="space-y-4">
+                  {selectedTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => {
+                    const filteredSousThemes = cat.sous_themes?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())) || [];
+                    if (filteredSousThemes.length === 0 && searchSubTheme) return null;
+                    
+                    return (
+                      <div key={cat.id} className="bg-gray-50 border-2 border-black rounded-xl overflow-hidden">
+                        <div 
+                          className="bg-[#6d92c7] px-6 py-3 cursor-pointer hover:bg-[#5a81b5] transition-colors flex justify-between items-center"
+                          onClick={() => setExpandedCategories(prev => ({...prev, [cat.id]: !prev[cat.id]}))}
+                        >
+                          <h3 className="font-bold text-white text-lg">{cat.nom}</h3>
+                          <span className="text-white font-bold text-xl">
+                            {expandedCategories[cat.id] ? '▼' : '▶'}
+                          </span>
+                        </div>
+                        
+                        {expandedCategories[cat.id] && (
+                          <div className="p-4 grid grid-cols-4 gap-6">
+                            {filteredSousThemes.map((st, i) => (
+                              <div 
+                                key={st.id || i} 
+                                onClick={async () => { 
+                                  try {
+                                    const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                                    const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+                                    const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                                    setSelectedSubTheme(freshSubTheme);
+                                    setSavedCharts(freshSubTheme.charts_config || []);
+                                    setFormStep(4); 
+                                    setShowAll(false);
+                                  } catch (err) { console.error(err); }
+                                }}
+                                className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                              >
+                                {st.archived && (
+                                  <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                                )}
+                                {st.nom}
+                                <div className="flex justify-center gap-2 mt-4 text-black">
+                                  <button onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    const rect = e.currentTarget.getBoundingClientRect(); 
+                                    const menuHeight = 200;
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                                    setSubActionMenuPos({ left: rect.left, top }); 
+                                    setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                                    setOpenActionMenu(null); 
+                                    setOpenThemeMenu(null); 
+                                  }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                                  <button onClick={(e) => { 
+                                    e.stopPropagation(); 
+                                    const rect = e.currentTarget.getBoundingClientRect(); 
+                                    const menuHeight = 150;
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                                    setSubThemeMenuPos({ left: rect.left, top }); 
+                                    setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                                    setOpenSubActionMenu(null); 
+                                    setOpenActionMenu(null); 
+                                    setOpenThemeMenu(null); 
+                                  }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                                </div> 
+                                <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                // Affichage sans catégories (thèmes classiques)
+                <div className="grid grid-cols-4 gap-6">
+                  {selectedTheme.sous_themes && selectedTheme.sous_themes.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
+                    <div 
+                      key={st.id || i} 
+                      onClick={async () => { 
+                        try {
+                          const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                          const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+                          const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                          setSelectedSubTheme(freshSubTheme);
+                          setSavedCharts(freshSubTheme.charts_config || []);
+                          setFormStep(4); 
+                          setShowAll(false);
+                        } catch (err) { console.error(err); }
+                      }}
+                      className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                    >
+                      {st.archived && (
+                        <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                      )}
+                      {st.nom}
+                      <div className="flex justify-center gap-2 mt-4 text-black">
+                        <button onClick={(e) => { 
+                          e.stopPropagation(); 
+                          const rect = e.currentTarget.getBoundingClientRect(); 
+                          const menuHeight = 200;
+                          const spaceBelow = window.innerHeight - rect.bottom;
+                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                          setSubActionMenuPos({ left: rect.left, top }); 
+                          setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                          setOpenActionMenu(null); 
+                          setOpenThemeMenu(null); 
+                        }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                        <button onClick={(e) => { 
+                          e.stopPropagation(); 
+                          const rect = e.currentTarget.getBoundingClientRect(); 
+                          const menuHeight = 150;
+                          const spaceBelow = window.innerHeight - rect.bottom;
+                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                          setSubThemeMenuPos({ left: rect.left, top }); 
+                          setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                          setOpenSubActionMenu(null); 
+                          setOpenActionMenu(null); 
+                          setOpenThemeMenu(null); 
+                        }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                      </div> 
+                      <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
@@ -1253,15 +1676,45 @@ function App() {
         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
             <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : 'Ajouter un sous-thème'}</h2>
-            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} />
+            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} placeholder={actionModalType === 'rename' ? 'Nouveau nom du thème' : actionModalType === 'rename_subtheme' ? 'Nouveau nom du sous-thème' : 'Nom du sous-thème'} />
+            
+            {actionModalType === 'add_subtheme' && (() => {
+              const currentTheme = themes.find(t => t.id === actionModalThemeId);
+              if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0) {
+                return (
+                  <div className="mb-4">
+                    <label className="block text-sm font-bold mb-2">Catégorie *</label>
+                    <select 
+                      value={actionModalCategorieId || ''}
+                      onChange={e => setActionModalCategorieId(e.target.value ? parseInt(e.target.value) : null)}
+                      className="w-full border-2 border-black rounded p-2 outline-none bg-white"
+                    >
+                      <option value="">Choisir une catégorie</option>
+                      {currentTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => (
+                        <option key={cat.id} value={cat.id}>{cat.nom}</option>
+                      ))}
+                    </select>
+                  </div>
+                );
+              }
+              return null;
+            })()}
+            
             <div className="flex gap-4">
-              <button onClick={() => setShowActionModal(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={() => { setShowActionModal(false); setActionModalCategorieId(null); }} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
               <button onClick={async () => {
                 if (!actionModalValue) { alert('Le nom est requis'); return; }
                 if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, actionModalValue); }
                 else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, actionModalValue); }
-                else { await addSubTheme(actionModalThemeId, actionModalValue); }
+                else { 
+                  const currentTheme = themes.find(t => t.id === actionModalThemeId);
+                  if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0 && !actionModalCategorieId) {
+                    return alert('Veuillez sélectionner une catégorie');
+                  }
+                  await addSubTheme(actionModalThemeId, actionModalValue, actionModalCategorieId); 
+                }
                 setShowActionModal(false);
+                setActionModalCategorieId(null);
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Valider</button>
             </div>
           </div>

@@ -32,9 +32,19 @@ class Theme(models.Model):
     def __str__(self):
         return self.titre
 
+class Categorie(models.Model):
+    nom = models.CharField(max_length=200)
+    theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='categories')
+    ordre = models.IntegerField(default=0)
+    
+    def __str__(self):
+        return f"{self.theme.titre} - {self.nom}"
+
 class SousTheme(models.Model):
     nom = models.CharField(max_length=200)
     theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='sous_themes')
+    # Catégorie optionnelle : si null, le sous-thème est directement sous le thème
+    categorie = models.ForeignKey(Categorie, on_delete=models.CASCADE, related_name='sous_themes', null=True, blank=True)
     ordre = models.IntegerField(default=0)
 
     # Visibilité (Public / Privé) pour le sous-thème
