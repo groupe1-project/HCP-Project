@@ -15,6 +15,17 @@ class CategorieViewSet(viewsets.ModelViewSet):
     serializer_class = CategorieSerializer
     permission_classes = [IsAuthenticated]
 
+    @action(detail=True, methods=['post'], url_path='toggle-visibility')
+    def toggle_visibility(self, request, pk=None):
+        """Toggle la visibilité d'une catégorie et cascade aux sous-thèmes."""
+        categorie = self.get_object()
+        new_visibility = request.data.get('is_visible', not categorie.is_visible)
+        categorie.is_visible = new_visibility
+        categorie.save()
+        # Cascade to all sous-thèmes in this category
+        categorie.sous_themes.all().update(is_visible=new_visibility)
+        return Response({'id': categorie.id, 'is_visible': categorie.is_visible}, status=status.HTTP_200_OK)
+
 class SousThemeViewSet(viewsets.ModelViewSet):
     queryset = SousTheme.objects.all().order_by('id')
     serializer_class = SousThemeSerializer

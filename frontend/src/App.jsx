@@ -340,11 +340,22 @@ function App() {
       // Change theme visibility
       await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { is_visible: newVisibility });
       
-      // Cascade: update all sous-themes of this theme
+      // Cascade: update all categories and their sous-themes
       const theme = themes.find(t => t.id === themeId);
-      if (theme && theme.sous_themes) {
-        for (const subTheme of theme.sous_themes) {
-          await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subTheme.id}/`, { is_visible: newVisibility });
+      if (theme) {
+        // If theme has categories, cascade to them and their sous-thèmes
+        if (theme.categories && theme.categories.length > 0) {
+          for (const category of theme.categories) {
+            // Use toggle-visibility action to cascade to sous-thèmes
+            await axios.post(`http://127.0.0.1:8000/api/categories/${category.id}/toggle-visibility/`, { is_visible: newVisibility });
+          }
+        } else {
+          // If no categories, update sous-themes directly
+          if (theme.sous_themes) {
+            for (const subTheme of theme.sous_themes) {
+              await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subTheme.id}/`, { is_visible: newVisibility });
+            }
+          }
         }
       }
       
@@ -524,6 +535,29 @@ function App() {
   };
 
   // Toggle publication status for a sous-thème
+  const toggleCategoriePublication = async (categorieId, newVisibility) => {
+    try {
+      // Call toggle-visibility action to cascade to sous-thèmes
+      await axios.post(`http://127.0.0.1:8000/api/categories/${categorieId}/toggle-visibility/`, { is_visible: newVisibility });
+      // Refresh themes and update selectedCategorie
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedTheme) {
+        const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+        if (freshTheme) setSelectedTheme(freshTheme);
+        // Update selectedCategorie if present
+        if (selectedCategorie && freshTheme) {
+          const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+        }
+      }
+      showToast(`Visibilité de la catégorie mise à jour: ${newVisibility ? 'Public' : 'Privé'}`, 'success');
+    } catch (err) {
+      console.error('Erreur changement statut categorie', err);
+      showToast('Erreur lors du changement de statut de la catégorie', 'error');
+    }
+  };
+
   const toggleSubThemePublication = async (subThemeId, newVisibility) => {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subThemeId}/`, { is_visible: newVisibility });
@@ -1168,22 +1202,41 @@ function App() {
                   <h2 className="bg-[#c2d9ff] px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md">
                     {selectedCategorie ? `${selectedTheme.titre} - ${selectedCategorie.nom}` : `Titre du thème : ${selectedTheme.titre}`}
                   </h2>
-                  <div className="flex items-center gap-2">
-                    <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                    <select
-                      value={selectedTheme.is_visible ? 'Public' : 'Privé'}
-                      onChange={async (e) => {
-                        const val = e.target.value;
-                        const newVis = val === 'Public';
-                        if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
-                        await toggleThemePublication(selectedTheme.id, newVis);
-                      }}
-                      className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
-                    >
-                      <option value="Public">Public 📢</option>
-                      <option value="Privé">Privé 🔒</option>
-                    </select>
-                  </div>
+                  {selectedCategorie ? (
+                    <div className="flex items-center gap-2">
+                      <div className={`w-5 h-5 rounded-full border border-black ${selectedCategorie.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      <select
+                        value={selectedCategorie.is_visible ? 'Public' : 'Privé'}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          const newVis = val === 'Public';
+                          if (!confirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`)) return;
+                          await toggleCategoriePublication(selectedCategorie.id, newVis);
+                        }}
+                        className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                      >
+                        <option value="Public">Public 📢</option>
+                        <option value="Privé">Privé 🔒</option>
+                      </select>
+                    </div>
+                  ) : (
+                    <div className="flex items-center gap-2">
+                      <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      <select
+                        value={selectedTheme.is_visible ? 'Public' : 'Privé'}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          const newVis = val === 'Public';
+                          if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
+                          await toggleThemePublication(selectedTheme.id, newVis);
+                        }}
+                        className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                      >
+                        <option value="Public">Public 📢</option>
+                        <option value="Privé">Privé 🔒</option>
+                      </select>
+                    </div>
+                  )}
                 </div>
                 <button onClick={() => { setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
               </div>
@@ -1254,13 +1307,30 @@ function App() {
                     return (
                       <div key={cat.id} className="bg-gray-50 border-2 border-black rounded-xl overflow-hidden">
                         <div 
-                          className="bg-[#6d92c7] px-6 py-3 cursor-pointer hover:bg-[#5a81b5] transition-colors flex justify-between items-center"
-                          onClick={() => setExpandedCategories(prev => ({...prev, [cat.id]: !prev[cat.id]}))}
+                          className="bg-[#6d92c7] px-6 py-3 hover:bg-[#5a81b5] transition-colors flex justify-between items-center"
                         >
-                          <h3 className="font-bold text-white text-lg">{cat.nom}</h3>
-                          <span className="text-white font-bold text-xl">
-                            {expandedCategories[cat.id] ? '▼' : '▶'}
-                          </span>
+                          <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => setExpandedCategories(prev => ({...prev, [cat.id]: !prev[cat.id]}))}>
+                            <h3 className="font-bold text-white text-lg">{cat.nom}</h3>
+                            <span className="text-white font-bold text-xl">
+                              {expandedCategories[cat.id] ? '▼' : '▶'}
+                            </span>
+                          </div>
+                          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
+                            <div className={`w-5 h-5 rounded-full border border-black ${cat.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                            <select
+                              value={cat.is_visible ? 'Public' : 'Privé'}
+                              onChange={async (e) => {
+                                const val = e.target.value;
+                                const newVis = val === 'Public';
+                                if (!confirm(`Changer la visibilité de la catégorie "${cat.nom}" et de tous ses sous-thèmes ?`)) return;
+                                await toggleCategoriePublication(cat.id, newVis);
+                              }}
+                              className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                            >
+                              <option value="Public">Public 📢</option>
+                              <option value="Privé">Privé 🔒</option>
+                            </select>
+                          </div>
                         </div>
                         
                         {expandedCategories[cat.id] && (
