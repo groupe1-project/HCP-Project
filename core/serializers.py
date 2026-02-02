@@ -39,7 +39,7 @@ class CategorieSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Categorie
-        fields = ['id', 'nom', 'ordre', 'sous_themes']
+        fields = ['id', 'nom', 'ordre', 'theme', 'sous_themes']
 
 class ThemeSerializer(serializers.ModelSerializer):
     # Relation vers les sous-thèmes

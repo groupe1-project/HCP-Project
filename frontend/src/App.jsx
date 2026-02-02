@@ -217,6 +217,19 @@ function App() {
     } catch (err) { console.error(err); alert('Erreur lors de l\'ajout du sous-thème'); }
   };
 
+  const addCategorie = async (themeId, name) => {
+    try {
+      const theme = themes.find(t => t.id === themeId);
+      const ordre = theme?.categories?.length || 0;
+      await axios.post('http://127.0.0.1:8000/api/categories/', { nom: name, theme: themeId, ordre });
+      alert('Catégorie ajoutée');
+      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(themesRes.data);
+      const fresh = themesRes.data.find(t => t.id === themeId);
+      if (fresh) setSelectedTheme(fresh);
+    } catch (err) { console.error(err); alert('Erreur lors de l\'ajout de la catégorie'); }
+  };
+
   const renameSubTheme = async (id, newName) => {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: newName });
@@ -229,6 +242,11 @@ function App() {
         if (freshTheme) setSelectedTheme(freshTheme);
         const freshSub = freshTheme?.sous_themes?.find(st => st.id === id);
         if (freshSub) setSelectedSubTheme(freshSub);
+        // Update selectedCategorie if present
+        if (selectedCategorie && freshTheme) {
+          const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+        }
       }
     } catch (err) { console.error(err); alert('Erreur lors du renommage du sous-thème'); }
   };
@@ -243,6 +261,11 @@ function App() {
       if (selectedTheme) {
         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
         if (freshTheme) setSelectedTheme(freshTheme);
+        // Update selectedCategorie if present
+        if (selectedCategorie && freshTheme) {
+          const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+        }
       }
     } catch (err) { console.error(err); showToast('Erreur lors de l\'archivage du sous-thème', 'error'); }
   };
@@ -257,6 +280,11 @@ function App() {
       if (selectedTheme) {
         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
         if (freshTheme) setSelectedTheme(freshTheme);
+        // Update selectedCategorie if present
+        if (selectedCategorie && freshTheme) {
+          const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+        }
       }
     } catch (err) { console.error(err); showToast('Erreur lors du désarchivage du sous-thème', 'error'); }
   };
@@ -289,6 +317,12 @@ function App() {
         const fresh = res.data.find(t => t.id === prevSelectedTheme.id);
         if (fresh) setSelectedTheme(fresh);
         else setSelectedTheme(null);
+        // Update selectedCategorie if present
+        if (selectedCategorie && fresh) {
+          const freshCat = fresh.categories?.find(c => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+          else setSelectedCategorie(null);
+        }
       }
     } catch (err) {
       console.error(err.response?.data ?? err);
@@ -501,6 +535,11 @@ function App() {
         if (freshTheme) setSelectedTheme(freshTheme);
         const freshSubTheme = freshTheme && freshTheme.sous_themes ? freshTheme.sous_themes.find(sub => sub.id === subThemeId) : null;
         if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
+        // Update selectedCategorie if present
+        if (selectedCategorie && freshTheme) {
+          const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+        }
       }
     } catch (err) {
       console.error('Erreur changement statut sous-theme', err);
@@ -845,7 +884,7 @@ function App() {
               )}
 
               {openCategorieMenu && (
-                <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: categorieMenuPos.left, top: categorieMenuPos.top, zIndex: 9999 }}>
+                <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: categorieMenuPos.left, top: categorieMenuPos.top, zIndex: 9999 }} key={`cat-menu-${openCategorieMenu}-${themes.find(x => x.id === openCategorieMenu)?.categories?.length || 0}`}>
                   <div className="w-64 bg-white rounded-lg shadow-2xl border-2 border-black overflow-hidden">
                     <div className="px-4 py-3 border-b-2 border-black text-sm font-bold text-gray-800 bg-gray-100">Choisir une catégorie</div>
                     {(() => {
@@ -890,6 +929,29 @@ function App() {
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Ajouter un sous-thème
                     </button>
+                    {(() => {
+                      const currentTheme = themes.find(t => t.id === openActionMenu);
+                      if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0) {
+                        return (
+                          <button onClick={(e) => { 
+                            e.stopPropagation(); 
+                            setActionModalType('add_categorie'); 
+                            setActionModalValue(''); 
+                            setActionModalThemeId(openActionMenu); 
+                            setShowActionModal(true); 
+                            setOpenActionMenu(null); 
+                          }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#0891b2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#0891b2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M12 12v8M8 16h8" stroke="#0891b2" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                            Ajouter une catégorie
+                          </button>
+                        );
+                      }
+                      return null;
+                    })()}
                     <button onClick={(e) => { 
                       e.stopPropagation(); 
                       const t = themes.find(x => x.id === openActionMenu);
@@ -1675,8 +1737,8 @@ function App() {
       {showActionModal && (
         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : 'Ajouter un sous-thème'}</h2>
-            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} placeholder={actionModalType === 'rename' ? 'Nouveau nom du thème' : actionModalType === 'rename_subtheme' ? 'Nouveau nom du sous-thème' : 'Nom du sous-thème'} />
+            <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : actionModalType === 'add_categorie' ? 'Ajouter une catégorie' : 'Ajouter un sous-thème'}</h2>
+            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} placeholder={actionModalType === 'rename' ? 'Nouveau nom du thème' : actionModalType === 'rename_subtheme' ? 'Nouveau nom du sous-thème' : actionModalType === 'add_categorie' ? 'Nom de la catégorie' : 'Nom du sous-thème'} />
             
             {actionModalType === 'add_subtheme' && (() => {
               const currentTheme = themes.find(t => t.id === actionModalThemeId);
@@ -1706,6 +1768,7 @@ function App() {
                 if (!actionModalValue) { alert('Le nom est requis'); return; }
                 if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, actionModalValue); }
                 else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, actionModalValue); }
+                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, actionModalValue); }
                 else { 
                   const currentTheme = themes.find(t => t.id === actionModalThemeId);
                   if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0 && !actionModalCategorieId) {
