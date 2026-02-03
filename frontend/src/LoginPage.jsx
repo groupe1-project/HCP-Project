@@ -108,7 +108,7 @@ function LoginPage({ onLoginSuccess }) {
       <div className="flex min-h-screen bg-gradient-to-br from-[#1a5d85] to-[#4a77b4] justify-center items-center p-4">
         <div className="bg-white border-4 border-black p-8 rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] w-full max-w-md">
           <div className="flex justify-center mb-6">
-            <img src="src/photos.png" alt="Logo HCP" className="w-20" />
+            <img src="src/Image2.png" alt="Logo HCP" className="w-20" />
           </div>
           
           <h1 className="text-2xl font-bold text-center text-[#1a5d85] mb-2">
@@ -247,7 +247,7 @@ function LoginPage({ onLoginSuccess }) {
     <div className="flex min-h-screen bg-gradient-to-br from-[#1a5d85] to-[#4a77b4] justify-center items-center p-4">
       <div className="bg-white border-4 border-black p-8 rounded-2xl shadow-[8px_8px_0px_0px_rgba(0,0,0,1)] w-full max-w-md">
         <div className="flex justify-center mb-6">
-          <img src="src/photos.png" alt="Logo HCP" className="w-20" />
+          <img src="src/Image3.png" alt="Logo HCP" className="w-32" />
         </div>
         
         <h1 className="text-2xl font-bold text-center text-[#1a5d85] mb-2">

@@ -729,7 +729,7 @@ function App() {
       {/* 1. MENU LATÉRAL */}
       <div className="w-64 bg-white border-r-2 border-black flex flex-col">
         <div className="p-4 border-b-2 border-black flex flex-col items-center">
-          <img src="src/photos.png" alt="Logo HCP" className="w-24 mb-2" />
+          <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
         <div className="bg-[#1a5d85] text-white py-2 px-4 font-bold text-center border-b border-black">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
