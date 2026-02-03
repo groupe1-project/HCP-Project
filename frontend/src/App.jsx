@@ -342,7 +342,32 @@ function App() {
       setSelectedTheme(prevSelectedTheme);
       try { const res = await axios.get('http://127.0.0.1:8000/api/themes/'); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
     }
-  };  
+  };
+
+  const deleteCategorie = async (categorieId) => {
+    try {
+      if (!confirm('Êtes-vous sûr de vouloir supprimer cette catégorie ? Tous les sous-thèmes seront supprimés.')) return;
+      
+      await axios.delete(`http://127.0.0.1:8000/api/categories/${categorieId}/`);
+      showToast('Catégorie supprimée', 'success');
+      
+      // Refresh to ensure consistent state
+      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      setThemes(res.data);
+      if (selectedTheme) {
+        const fresh = res.data.find(t => t.id === selectedTheme.id);
+        if (fresh) setSelectedTheme(fresh);
+      }
+      if (selectedCategorie && selectedCategorie.id === categorieId) {
+        setSelectedCategorie(null);
+        setFormStep(3);
+      }
+      setOpenCategorieMenu(null);
+    } catch (err) {
+      console.error(err);
+      showToast('Erreur lors de la suppression de la catégorie', 'error');
+    }
+  };
 
   const toggleThemePublication = async (themeId, newVisibility) => {
     try {
@@ -729,7 +754,7 @@ function App() {
       {/* 1. MENU LATÉRAL */}
       <div className="w-64 bg-white border-r-2 border-black flex flex-col">
         <div className="p-4 border-b-2 border-black flex flex-col items-center">
-          <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
+          <img src="src/photos.png" alt="Logo HCP" className="w-24 mb-2" />
         </div>
         <div className="bg-[#1a5d85] text-white py-2 px-4 font-bold text-center border-b border-black">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
@@ -934,26 +959,39 @@ function App() {
                       const currentTheme = themes.find(x => x.id === openCategorieMenu);
                       if (!currentTheme || !currentTheme.categories) return null;
                       return currentTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => (
-                        <button 
-                          key={cat.id}
-                          onClick={(e) => { 
-                            e.stopPropagation();
-                            setSelectedTheme(currentTheme);
-                            setSelectedCategorie(cat);
-                            setOpenCategorieMenu(null);
-                            setFormStep(3);
-                          }}
-                          className="w-full text-left px-4 py-3 hover:bg-blue-50 transition-colors border-b border-gray-200 flex items-center gap-2"
-                        >
-                          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                            <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                          </svg>
-                          <span className="font-semibold">{cat.nom}</span>
-                          <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
-                        </button>
+                        <div key={cat.id} className="px-4 py-3 border-b border-gray-200 hover:bg-blue-50 transition-colors flex items-center gap-2 justify-between">
+                          <button 
+                            onClick={(e) => { 
+                              e.stopPropagation();
+                              setSelectedTheme(currentTheme);
+                              setSelectedCategorie(cat);
+                              setOpenCategorieMenu(null);
+                              setFormStep(3);
+                            }}
+                            className="flex-1 text-left flex items-center gap-2"
+                          >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                            <span className="font-semibold">{cat.nom}</span>
+                            <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
+                          </button>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              deleteCategorie(cat.id);
+                            }}
+                            className="p-1 hover:bg-red-200 rounded transition-colors text-red-600"
+                            title="Supprimer cette catégorie"
+                          >
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                              <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M10 7V4a1 1 0 011-1h2a1 1 0 011 1v3m-6 0h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                            </svg>
+                          </button>
+                        </div>
                       ));
                     })()}
                   </div>
