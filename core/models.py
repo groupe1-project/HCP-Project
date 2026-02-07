@@ -42,6 +42,12 @@ class Categorie(models.Model):
         return f"{self.theme.titre} - {self.nom}"
 
 class SousTheme(models.Model):
+    NIVEAU_GEO_CHOICES = (
+        ('Régionale', 'Régionale'),
+        ('Provinciale', 'Provinciale'),
+        ('Communale', 'Communale'),
+    )
+    
     nom = models.CharField(max_length=200)
     theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='sous_themes')
     # Catégorie optionnelle : si null, le sous-thème est directement sous le thème
@@ -67,6 +73,18 @@ class SousTheme(models.Model):
     source_text = models.TextField(null=True, blank=True)
     periodicite_text = models.TextField(null=True, blank=True)
     couverture_text = models.TextField(null=True, blank=True)
+    
+    # Nouveaux champs pour analyse dynamique et graphiques intelligents
+    # 1. Granularité géographique
+    niveau_geo = models.CharField(max_length=20, choices=NIVEAU_GEO_CHOICES, null=True, blank=True)
+    
+    # 2. Nature de l'indicateur
+    type_unite = models.CharField(max_length=100, null=True, blank=True, help_text="Ex: '%', 'Effectif', 'DH', 'Km'")
+    est_sommable = models.BooleanField(default=True, help_text="Si Vrai, on peut additionner les données. Si Faux, on calcule des moyennes.")
+    
+    # 3. Dictionnaire de variables pour les filtres disponibles
+    filtres_disponibles = models.JSONField(default=list, blank=True, help_text="Liste des colonnes sur lesquelles on peut filtrer")
+
 
     # Pour faciliter la lecture des colonnes dynamiques au Front
     @property
@@ -79,6 +97,55 @@ class SousTheme(models.Model):
         return f"{self.theme.titre} > {self.nom}"
 
 # 3. LES INDICATEURS (Inchangé)
+class UserThemeAssignment(models.Model):
+    """Assignation de thèmes/sous-thèmes aux saisisseurs"""
+    user = models.ForeignKey(CustomUser, on_delete=models.CASCADE, related_name='theme_assignments')
+    theme = models.ForeignKey(Theme, on_delete=models.CASCADE, null=True, blank=True)
+    sous_theme = models.ForeignKey(SousTheme, on_delete=models.CASCADE, null=True, blank=True)
+    indicateur = models.ForeignKey('Indicateur', on_delete=models.CASCADE, null=True, blank=True)
+    statut = models.CharField(max_length=50, default='En cours', choices=[
+        ('En cours', 'En cours'),
+        ('Complété', 'Complété'),
+        ('En attente', 'En attente'),
+    ])
+    date_assignation = models.DateTimeField(auto_now_add=True)
+    date_modification = models.DateTimeField(auto_now=True)
+    date_completion = models.DateTimeField(null=True, blank=True, help_text="Date de complétion de la tâche")
+    notes = models.TextField(null=True, blank=True, help_text="Notes ou commentaires sur la tâche")
+    progression = models.IntegerField(default=0, help_text="Pourcentage de progression (0-100)")
+    priorite = models.CharField(max_length=20, default='Normale', choices=[
+        ('Basse', 'Basse'),
+        ('Normale', 'Normale'),
+        ('Haute', 'Haute'),
+    ])
+    
+    class Meta:
+        unique_together = [['user', 'theme', 'sous_theme', 'indicateur']]
+    
+    def __str__(self):
+        return f"{self.user.username} - {self.theme or self.sous_theme or self.indicateur}"
+
+class UserRequest(models.Model):
+    """Demandes de création d'utilisateur"""
+    STATUS_CHOICES = (
+        ('Nouveau', 'Nouveau'),
+        ('En attente', 'En attente'),
+        ('Approuvé', 'Approuvé'),
+        ('Rejeté', 'Rejeté'),
+    )
+    
+    requester_email = models.EmailField()
+    requester_name = models.CharField(max_length=255)
+    requested_role = models.CharField(max_length=20, choices=CustomUser.ROLE_CHOICES)
+    statut = models.CharField(max_length=20, choices=STATUS_CHOICES, default='Nouveau')
+    demande_texte = models.TextField(null=True, blank=True)
+    date_creation = models.DateTimeField(auto_now_add=True)
+    date_modification = models.DateTimeField(auto_now=True)
+    created_by = models.ForeignKey(CustomUser, on_delete=models.SET_NULL, null=True, blank=True, related_name='user_requests_created')
+    
+    def __str__(self):
+        return f"Demande de {self.requester_email} ({self.requested_role})"
+
 class Indicateur(models.Model):
     libelle = models.CharField(max_length=300)
     unite = models.CharField(max_length=50)

@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter } from 'recharts';
 import LoginPage from './LoginPage';
+import AdministratorsPage from './AdministratorsPage';
 
 // --- COMPOSANTS DE STYLE ---
 const SidebarButton = ({ label, onClick, active }) => (
@@ -47,13 +48,28 @@ function App() {
   const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
   const [showSubThemeMeta, setShowSubThemeMeta] = useState(false);
   const [subThemeMeta, setSubThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
+  const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
+  const [advancedConfig, setAdvancedConfig] = useState({ niveau_geo: null, type_unite: '', est_sommable: true, filtres_disponibles: [] });
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
   const [showAll, setShowAll] = useState(false);
   const [columnFilters, setColumnFilters] = useState({});
+  const [dynamicFilters, setDynamicFilters] = useState({});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [savedCharts, setSavedCharts] = useState([]);
-  const [currentChartConfig, setCurrentChartConfig] = useState({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
+  const [currentChartConfig, setCurrentChartConfig] = useState({ 
+    id: null, 
+    type: 'Histogramme', 
+    x: '', 
+    y: '', 
+    mesure: '', 
+    filter_column: '', 
+    filter_value: '', 
+    filter_mode: 'include',
+    filters: []  // Nouveaux filtres multiples
+  });
+  const [excludedRowIndices, setExcludedRowIndices] = useState({});
+  const [manageRowsModalChartId, setManageRowsModalChartId] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
   const [settingsForm, setSettingsForm] = useState({ email: '', newPassword: '', confirmPassword: '' });
   const [searchTheme, setSearchTheme] = useState('');
@@ -94,6 +110,16 @@ function App() {
 
   useEffect(() => {
     setSavedCharts(selectedSubTheme?.charts_config || []);
+    // Initialiser les lignes exclues à partir de la config des graphes
+    if (selectedSubTheme?.charts_config) {
+      const exclusions = {};
+      selectedSubTheme.charts_config.forEach(chart => {
+        exclusions[chart.id] = chart.excluded_rows || [];
+      });
+      setExcludedRowIndices(exclusions);
+    } else {
+      setExcludedRowIndices({});
+    }
   }, [selectedSubTheme]);
 
   // --- HELPER FUNCTIONS ---
@@ -144,6 +170,61 @@ function App() {
   const handleConfirmOk = async () => { if (confirmModal.onConfirm) await confirmModal.onConfirm(); closeConfirm(); };
   const handleConfirmCancel = () => { closeConfirm(); };
   const showToast = (message, type = 'info') => { setToast({ message, type }); setTimeout(() => setToast(null), 3800); };
+
+  const handleDeleteRowFromChart = (chartId, chart, rowIndex) => {
+    // Créer une clé unique basée sur X et Y
+    const row = selectedSubTheme?.data?.[rowIndex];
+    if (!row) return;
+    const rowKey = `${chart.x}:${row[chart.x]}|${chart.y}:${row[chart.y]}`;
+    const newExcluded = [...(excludedRowIndices[chartId] || []), rowKey];
+    setExcludedRowIndices(prev => ({
+      ...prev,
+      [chartId]: newExcluded
+    }));
+    // Sauvegarder immédiatement dans la base de données
+    saveChartExclusions(chartId, newExcluded);
+  };
+
+  const handleRestoreRowToChart = (chartId, chart, rowIndex) => {
+    const row = selectedSubTheme?.data?.[rowIndex];
+    if (!row) return;
+    const rowKey = `${chart.x}:${row[chart.x]}|${chart.y}:${row[chart.y]}`;
+    const newExcluded = (excludedRowIndices[chartId] || []).filter(key => key !== rowKey);
+    setExcludedRowIndices(prev => ({
+      ...prev,
+      [chartId]: newExcluded
+    }));
+    // Sauvegarder immédiatement dans la base de données
+    saveChartExclusions(chartId, newExcluded);
+  };
+
+  const isRowExcluded = (chartId, chart, row) => {
+    const rowKey = `${chart.x}:${row[chart.x]}|${chart.y}:${row[chart.y]}`;
+    return excludedRowIndices[chartId]?.includes(rowKey);
+  };
+
+  const saveChartExclusions = async (chartId, excludedRowsList) => {
+    try {
+      await axios.put(
+        `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${chartId}/`,
+        {
+          excluded_rows: excludedRowsList
+        },
+        {
+          headers: { 'X-HTTP-Method-Override': 'PATCH' }
+        }
+      );
+    } catch (err) {
+      console.error('Erreur lors de la sauvegarde des exclusions', err);
+    }
+  };
+
+  const handleResetChartExclusions = (chartId) => {
+    setExcludedRowIndices(prev => ({
+      ...prev,
+      [chartId]: []
+    }));
+  };
 
   const openEditTable = () => {
     setEditTableRows(JSON.parse(JSON.stringify(selectedSubTheme?.data || [])));
@@ -474,17 +555,77 @@ function App() {
     }
   };
 
-  // Logique de filtrage du tableau
+  // Fonction pour obtenir les valeurs uniques d'une colonne
+  const getUniqueValuesForColumn = (columnName) => {
+    const data = selectedSubTheme?.data || [];
+    const values = new Set();
+    data.forEach(row => {
+      const val = row[columnName];
+      if (val !== null && val !== undefined && val !== '') {
+        values.add(String(val));
+      }
+    });
+    return Array.from(values).sort();
+  };
+
+  const getFilteredChartData = (chart) => {
+    const data = selectedSubTheme?.data || [];
+    
+    // Appliquer le filtre de colonne primaire
+    let filtered = data;
+    if (chart?.filter_column && chart?.filter_value) {
+      const mode = chart?.filter_mode || 'include';
+      if (mode === 'include') {
+        filtered = data.filter(row => String(row[chart.filter_column] ?? '') === String(chart.filter_value));
+      } else {
+        filtered = data.filter(row => String(row[chart.filter_column] ?? '') !== String(chart.filter_value));
+      }
+    }
+    
+    // Appliquer les filtres supplémentaires
+    if (chart?.filters && Array.isArray(chart.filters)) {
+      chart.filters.forEach(filter => {
+        if (filter.column && filter.value) {
+          const mode = filter.mode || 'include';
+          if (mode === 'include') {
+            filtered = filtered.filter(row => String(row[filter.column] ?? '') === String(filter.value));
+          } else {
+            filtered = filtered.filter(row => String(row[filter.column] ?? '') !== String(filter.value));
+          }
+        }
+      });
+    }
+    
+    // Appliquer l'exclusion manuelle (clic pour supprimer)
+    return filtered.filter(row => !isRowExcluded(chart.id, chart, row));
+  };
+
+  // Logique de filtrage du tableau avec les deux types de filtres
+
   const filteredData = selectedSubTheme?.data?.filter(row => {
-    return Object.keys(columnFilters).every(key => 
+    // Filtre par recherche texte (columnFilters)
+    const passesTextFilter = Object.keys(columnFilters).every(key => 
       String(row[key] || '').toLowerCase().includes(columnFilters[key].toLowerCase())
     );
+    
+    // Filtre par valeurs sélectionnées (dynamicFilters basé sur filtres_disponibles)
+    const passesDynamicFilters = Object.keys(dynamicFilters).every(key => {
+      const selectedValue = dynamicFilters[key];
+      if (!selectedValue) return true; // Pas de filtre sélectionné
+      return String(row[key] || '') === selectedValue;
+    });
+    
+    return passesTextFilter && passesDynamicFilters;
   }) || [];
 
   // Gestion des graphiques
   const handleAddOrUpdateChart = async () => {
     // For Pie charts we still require X and Y (Y aggregated)
     if (!currentChartConfig.x || (!currentChartConfig.y && currentChartConfig.type !== 'Secteur')) return alert("Veuillez choisir les axes X et Y");
+
+    if (currentChartConfig.filter_column && !currentChartConfig.filter_value) {
+      return alert("Veuillez choisir une valeur pour le filtre");
+    }
 
     // Type-specific validation (Y numeric for scatter/secteur when present)
     if ((currentChartConfig.type === 'Nuage de points' || currentChartConfig.type === 'Secteur') && selectedSubTheme && currentChartConfig.y) {
@@ -502,7 +643,9 @@ function App() {
       const duplicate = savedCharts.find(chart => 
         chart.type === currentChartConfig.type && 
         chart.x === currentChartConfig.x && 
-        chart.y === currentChartConfig.y
+        chart.y === currentChartConfig.y &&
+        (chart.filter_column || '') === (currentChartConfig.filter_column || '') &&
+        (chart.filter_value || '') === (currentChartConfig.filter_value || '')
       );
       if (duplicate) {
         return alert(`Un graphique de type "${currentChartConfig.type}" avec X="${currentChartConfig.x}" et Y="${currentChartConfig.y}" existe déjà pour ce sous-thème.`);
@@ -517,6 +660,10 @@ function App() {
           x: currentChartConfig.x,
           y: currentChartConfig.y,
           mesure: currentChartConfig.mesure,
+          filter_column: currentChartConfig.filter_column,
+          filter_value: currentChartConfig.filter_value,
+          filter_mode: currentChartConfig.filter_mode,
+          filters: currentChartConfig.filters || [],
         });
         const updated = res.data;
         setSavedCharts(prev => prev.map(c => c.id === updated.id ? updated : c));
@@ -527,6 +674,10 @@ function App() {
           x: currentChartConfig.x,
           y: currentChartConfig.y,
           mesure: currentChartConfig.mesure,
+          filter_column: currentChartConfig.filter_column,
+          filter_value: currentChartConfig.filter_value,
+          filter_mode: currentChartConfig.filter_mode,
+          filters: currentChartConfig.filters || [],
         });
         const created = res.data;
         setSavedCharts(prev => [...prev, created]);
@@ -540,7 +691,7 @@ function App() {
       setSavedCharts(freshSubTheme.charts_config || []);
 
       setIsModalOpen(false);
-      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
+      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include' });
     } catch (err) {
       console.error('Erreur en sauvegarde du graphique', err);
       alert('Erreur lors de la sauvegarde du graphique');
@@ -548,7 +699,7 @@ function App() {
   };
 
   const openEditModal = (chart) => {
-    setCurrentChartConfig(chart);
+    setCurrentChartConfig({ filter_column: '', filter_value: '', filter_mode: 'include', filters: [], ...chart });
     setIsModalOpen(true);
   };
 
@@ -846,6 +997,11 @@ function App() {
                 ))}
               </div>
             </div>
+          )}
+
+          {/* PAGE ADMINISTRATEURS */}
+          {activeMenu === 'Admin' && (
+            <AdministratorsPage />
           )}
 
           {/* ÉTAPE 0 : GRILLE DES THÈMES */}
@@ -1520,6 +1676,33 @@ function App() {
                 </div>
               </div>
 
+              {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
+              {selectedSubTheme.filtres_disponibles && selectedSubTheme.filtres_disponibles.length > 0 && (
+                <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3">
+                  <h3 className="font-bold text-blue-900">🔍 Filtres Disponibles</h3>
+                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                    {selectedSubTheme.filtres_disponibles.map(filterCol => (
+                      <div key={filterCol}>
+                        <label className="text-sm font-bold text-gray-700 block mb-1">{filterCol}</label>
+                        <select
+                          value={dynamicFilters[filterCol] || ''}
+                          onChange={(e) => setDynamicFilters({...dynamicFilters, [filterCol]: e.target.value})}
+                          className="w-full p-2 border-2 border-blue-300 rounded bg-white outline-none text-sm"
+                        >
+                          <option value="">-- Tous --</option>
+                          {getUniqueValuesForColumn(filterCol).map(val => (
+                            <option key={val} value={val}>{val}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* BOUTON CONFIGURATION AVANCÉE */}
+              <button onClick={() => { setAdvancedConfig({ niveau_geo: selectedSubTheme?.niveau_geo || null, type_unite: selectedSubTheme?.type_unite || '', est_sommable: selectedSubTheme?.est_sommable ?? true, filtres_disponibles: selectedSubTheme?.filtres_disponibles || [] }); setShowAdvancedConfig(true); }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
+
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
               <div className="space-y-4">
                 <div className="border-2 border-black rounded-lg overflow-auto max-h-80 bg-white shadow-inner">
@@ -1564,65 +1747,69 @@ function App() {
               {/* ZONE DES GRAPHIQUES GÉNÉRÉS */}
               <div className="space-y-6">
                 <div className="grid grid-cols-1 gap-6">
-                  {savedCharts.map((chart) => (
-                    <div key={chart.id} className="border-4 border-orange-400 p-6 rounded-2xl bg-white shadow-lg relative">
-                      <div className="absolute top-4 right-4 flex gap-2">
-                        <button onClick={() => openEditModal(chart)} className="bg-blue-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Modifier</button>
-                        <button onClick={() => deleteChart(chart.id)} className="bg-red-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Supprimer</button>
-                      </div>
-                      
-                      <div className="h-64 w-full mt-4">
-                        <ResponsiveContainer width="100%" height="100%">
-                          {chart.type === 'Histogramme' ? (
-                            <BarChart data={selectedSubTheme.data}>
-                              <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis /><Tooltip /><Bar dataKey={chart.y} fill="#4a77b4" />
-                            </BarChart>
-                          ) : chart.type === 'Courbes' ? (
-                            <LineChart data={selectedSubTheme.data}>
-                              <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis /><Tooltip /><Line type="monotone" dataKey={chart.y} stroke="#4a77b4" strokeWidth={3} />
-                            </LineChart>
-                          ) : chart.type === 'Nuage de points' ? (
-                            <ScatterChart>
-                              <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis dataKey={chart.y} /><Tooltip />
-                              <Scatter data={selectedSubTheme.data} fill="#4a77b4" />
-                            </ScatterChart>
-                          ) : chart.type === 'Secteur' ? (
-                            (() => {
-                              const map = {};
-                              (selectedSubTheme.data || []).forEach(r => {
-                                const key = r[chart.x] ?? 'N/A';
-                                const val = parseFloat(r[chart.y]) || 0;
-                                map[key] = (map[key] || 0) + val;
-                              });
-                              const pieData = Object.keys(map).map(k => ({ name: k, value: map[k] }));
-                              const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
-                              return (
-                                <PieChart>
-                                  <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8">
-                                    {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
-                                  </Pie>
-                                  <Tooltip />
-                                </PieChart>
-                              );
-                            })()
-                          ) : (
-                            <div className="text-sm italic">Type de graphique non pris en charge.</div>
-                          )}
-                        </ResponsiveContainer>
-                      </div>
-                      {chart.mesure && (
-                        <div className="mt-4 p-3 bg-blue-50 border-l-4 border-blue-500 italic text-sm text-gray-700">
-                          <strong>Note :</strong> {chart.mesure}
+                  {savedCharts.map((chart) => {
+                    const chartData = getFilteredChartData(chart);
+
+                    return (
+                      <div key={chart.id} className="border-4 border-orange-400 p-6 rounded-2xl bg-white shadow-lg relative">
+                        <div className="absolute top-4 right-4 flex gap-2">
+                          <button onClick={() => openEditModal(chart)} className="bg-blue-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Modifier</button>
+                          <button onClick={() => deleteChart(chart.id)} className="bg-red-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Supprimer</button>
                         </div>
-                      )}
-                    </div>
-                  ))}
+                        
+                        <div className="h-64 w-full mt-4">
+                          <ResponsiveContainer width="100%" height="100%">
+                            {chart.type === 'Histogramme' ? (
+                              <BarChart data={chartData}>
+                                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis label={{ value: selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} /><Tooltip /><Bar dataKey={chart.y} fill="#4a77b4" />
+                              </BarChart>
+                            ) : chart.type === 'Courbes' ? (
+                              <LineChart data={chartData}>
+                                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis label={{ value: selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} /><Tooltip /><Line type="monotone" dataKey={chart.y} stroke="#4a77b4" strokeWidth={3} />
+                              </LineChart>
+                            ) : chart.type === 'Nuage de points' ? (
+                              <ScatterChart>
+                                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis dataKey={chart.y} label={{ value: selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} /><Tooltip />
+                                <Scatter data={chartData} fill="#4a77b4" />
+                              </ScatterChart>
+                            ) : chart.type === 'Secteur' ? (
+                              (() => {
+                                const map = {};
+                                chartData.forEach(r => {
+                                  const key = r[chart.x] ?? 'N/A';
+                                  const val = parseFloat(r[chart.y]) || 0;
+                                  map[key] = (map[key] || 0) + val;
+                                });
+                                const pieData = Object.keys(map).map(k => ({ name: k, value: map[k] }));
+                                const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
+                                return (
+                                  <PieChart>
+                                    <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8">
+                                      {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
+                                    </Pie>
+                                    <Tooltip />
+                                  </PieChart>
+                                );
+                              })()
+                            ) : (
+                              <div className="text-sm italic">Type de graphique non pris en charge.</div>
+                            )}
+                          </ResponsiveContainer>
+                        </div>
+                        {chart.mesure && (
+                          <div className="mt-4 p-3 bg-blue-50 border-l-4 border-blue-500 italic text-sm text-gray-700">
+                            <strong>Note :</strong> {chart.mesure}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
                 </div>
 
                 {/* BOUTON DÉCLENCHEUR POP-UP */}
                 <button 
                   onClick={() => {
-                    setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '' });
+                    setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [] });
                     setIsModalOpen(true);
                   }}
                   className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
@@ -1637,10 +1824,9 @@ function App() {
 
       {/* POP-UP MODALE : CONFIGURATION GRAPHIQUE */}
       {isModalOpen && (
-        
-     <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-          <div className="bg-[#fef9f2] border-4 border-black p-8 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black mb-6 text-center uppercase">Paramètres du Graphique</h2>
+        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+          <div className="bg-[#fef9f2] border-4 border-black p-8 rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-xl font-black mb-6 text-center uppercase sticky top-0 bg-[#fef9f2]">Paramètres du Graphique</h2>
             
             <div className="space-y-4">
               <div>
@@ -1689,6 +1875,173 @@ function App() {
               </div>
 
               <div>
+                <label className="block font-bold mb-1">Filtre par colonne (optionnel) :</label>
+                <select
+                  className="w-full p-2 border-2 border-black rounded-lg bg-white"
+                  value={currentChartConfig.filter_column || ''}
+                  onChange={e => setCurrentChartConfig({
+                    ...currentChartConfig,
+                    filter_column: e.target.value,
+                    filter_value: ''
+                  })}
+                >
+                  <option value="">-- Aucun filtre --</option>
+                  {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+
+              {currentChartConfig.filter_column && (
+                <div className="p-4 bg-blue-50 border-2 border-blue-300 rounded-lg space-y-3">
+                  <label className="block font-bold mb-2 text-blue-900">Sélectionner la valeur '{currentChartConfig.filter_column}' :</label>
+                  <select
+                    className="w-full p-2 border-2 border-blue-400 rounded-lg bg-white font-bold"
+                    value={currentChartConfig.filter_value || ''}
+                    onChange={e => setCurrentChartConfig({
+                      ...currentChartConfig,
+                      filter_value: e.target.value
+                    })}
+                  >
+                    <option value="">-- Choisir une année --</option>
+                    {getUniqueValuesForColumn(currentChartConfig.filter_column).map(v => (
+                      <option key={v} value={v}>{v}</option>
+                    ))}
+                  </select>
+                  
+                  <div className="flex gap-3 pt-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="filter_mode"
+                        value="include"
+                        checked={currentChartConfig.filter_mode === 'include'}
+                        onChange={e => setCurrentChartConfig({...currentChartConfig, filter_mode: e.target.value})}
+                        className="w-4 h-4"
+                      />
+                      <span className="font-bold text-green-700">✓ Inclure</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="filter_mode"
+                        value="exclude"
+                        checked={currentChartConfig.filter_mode === 'exclude'}
+                        onChange={e => setCurrentChartConfig({...currentChartConfig, filter_mode: e.target.value})}
+                        className="w-4 h-4"
+                      />
+                      <span className="font-bold text-red-700">✕ Exclure</span>
+                    </label>
+                  </div>
+                </div>
+              )}
+
+              {/* FILTRES SUPPLÉMENTAIRES (MULTIPLES) */}
+              {currentChartConfig.filters && currentChartConfig.filters.length > 0 && (
+                <div className="p-4 bg-purple-50 border-2 border-purple-300 rounded-lg space-y-3">
+                  <h3 className="font-bold text-purple-900">Filtres supplémentaires :</h3>
+                  {currentChartConfig.filters.map((filter, idx) => (
+                    <div key={idx} className="p-3 bg-white border border-purple-300 rounded space-y-2">
+                      <div className="flex gap-2">
+                        <select
+                          className="flex-1 p-2 border-2 border-purple-300 rounded bg-white font-bold text-sm"
+                          value={filter.column || ''}
+                          onChange={e => {
+                            const newFilters = [...currentChartConfig.filters];
+                            newFilters[idx].column = e.target.value;
+                            newFilters[idx].value = '';
+                            setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                          }}
+                        >
+                          <option value="">-- Colonne --</option>
+                          {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
+                        </select>
+                        
+                        {filter.column && (
+                          <select
+                            className="flex-1 p-2 border-2 border-purple-300 rounded bg-white font-bold text-sm"
+                            value={filter.value || ''}
+                            onChange={e => {
+                              const newFilters = [...currentChartConfig.filters];
+                              newFilters[idx].value = e.target.value;
+                              setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                            }}
+                          >
+                            <option value="">-- Valeur --</option>
+                            {getUniqueValuesForColumn(filter.column).map(v => (
+                              <option key={v} value={v}>{v}</option>
+                            ))}
+                          </select>
+                        )}
+
+                        <button
+                          onClick={() => {
+                            const newFilters = currentChartConfig.filters.filter((_, i) => i !== idx);
+                            setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                          }}
+                          className="px-3 py-2 bg-red-300 border-2 border-black rounded font-bold text-sm hover:bg-red-400"
+                        >
+                          ✕
+                        </button>
+                      </div>
+                      
+                      {filter.value && (
+                        <div className="flex gap-2 pt-1">
+                          <label className="flex items-center gap-2 cursor-pointer text-sm">
+                            <input
+                              type="radio"
+                              checked={(filter.mode || 'include') === 'include'}
+                              onChange={() => {
+                                const newFilters = [...currentChartConfig.filters];
+                                newFilters[idx].mode = 'include';
+                                setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                              }}
+                              className="w-4 h-4"
+                            />
+                            <span className="font-bold text-green-700">✓ Inclure</span>
+                          </label>
+                          <label className="flex items-center gap-2 cursor-pointer text-sm">
+                            <input
+                              type="radio"
+                              checked={(filter.mode || 'include') === 'exclude'}
+                              onChange={() => {
+                                const newFilters = [...currentChartConfig.filters];
+                                newFilters[idx].mode = 'exclude';
+                                setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                              }}
+                              className="w-4 h-4"
+                            />
+                            <span className="font-bold text-red-700">✕ Exclure</span>
+                          </label>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                  
+                  <button
+                    onClick={() => {
+                      const newFilters = [...currentChartConfig.filters, { column: '', value: '', mode: 'include' }];
+                      setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                    }}
+                    className="w-full py-2 bg-purple-300 border-2 border-purple-700 rounded font-bold hover:bg-purple-400 text-sm"
+                  >
+                    + Ajouter un filtre
+                  </button>
+                </div>
+              )}
+
+              {/* BOUTON POUR AJOUTER LE PREMIER FILTRE SUPPLÉMENTAIRE */}
+              {(!currentChartConfig.filters || currentChartConfig.filters.length === 0) && currentChartConfig.filter_column && (
+                <button
+                  onClick={() => {
+                    const newFilters = [{ column: '', value: '', mode: 'include' }];
+                    setCurrentChartConfig({...currentChartConfig, filters: newFilters});
+                  }}
+                  className="w-full py-2 bg-purple-200 border-2 border-purple-500 rounded font-bold hover:bg-purple-300 text-sm text-purple-900"
+                >
+                  + Ajouter un filtre supplémentaire
+                </button>
+              )}
+
+              <div>
                 <label className="block font-bold mb-1">Ajouter une mesure / note :</label>
                 <textarea 
                   className="w-full p-2 border-2 border-black rounded-lg h-20 outline-none"
@@ -1699,7 +2052,7 @@ function App() {
               </div>
             </div>
 
-            <div className="flex gap-4 mt-8">
+            <div className="flex gap-4 mt-8 sticky bottom-0 pt-4 bg-[#fef9f2]">
               <button onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
               <button onClick={handleAddOrUpdateChart} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">
                 {currentChartConfig.id ? "Modifier" : "Générer"}
@@ -1782,6 +2135,93 @@ function App() {
          </div>
       )}
 
+      {/* Popup Configuration Avancée */}
+      {showAdvancedConfig && (
+        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <h2 className="text-xl font-black mb-4 text-center">⚙️ Configuration Avancée</h2>
+            <div className="grid grid-cols-1 gap-4">
+              <div>
+                <label className="block font-bold mb-2">Granularité Géographique</label>
+                <select 
+                  value={advancedConfig.niveau_geo || ''} 
+                  onChange={e => setAdvancedConfig({...advancedConfig, niveau_geo: e.target.value || null})}
+                  className="w-full p-2 border-2 border-black rounded bg-white outline-none"
+                >
+                  <option value="">-- Non défini --</option>
+                  <option value="Régionale">Régionale</option>
+                  <option value="Provinciale">Provinciale</option>
+                  <option value="Communale">Communale</option>
+                </select>
+              </div>
+              
+              <div>
+                <label className="block font-bold mb-2">Type d'Unité</label>
+                <input 
+                  type="text" 
+                  placeholder="Ex: %, Effectif, DH, Km" 
+                  value={advancedConfig.type_unite || ''} 
+                  onChange={e => setAdvancedConfig({...advancedConfig, type_unite: e.target.value})}
+                  className="w-full p-2 border-2 border-black rounded outline-none"
+                />
+              </div>
+              
+              <div>
+                <label className="flex items-center gap-3 cursor-pointer">
+                  <input 
+                    type="checkbox" 
+                    checked={advancedConfig.est_sommable ?? true}
+                    onChange={e => setAdvancedConfig({...advancedConfig, est_sommable: e.target.checked})}
+                    className="w-5 h-5 border-2 border-black rounded"
+                  />
+                  <span className="font-bold">Les données sont sommables (effectifs)<br/>Sinon: moyennes (taux/ratios)</span>
+                </label>
+              </div>
+              
+              <div>
+                <label className="block font-bold mb-2">Colonnes disponibles pour filtrer</label>
+                <p className="text-sm text-gray-600 mb-2">(Séparées par des virgules)</p>
+                <input 
+                  type="text" 
+                  placeholder="Ex: Année, Sexe, Milieu, Région" 
+                  value={Array.isArray(advancedConfig.filtres_disponibles) ? advancedConfig.filtres_disponibles.join(', ') : ''}
+                  onChange={e => setAdvancedConfig({...advancedConfig, filtres_disponibles: e.target.value ? e.target.value.split(',').map(s => s.trim()) : []})}
+                  className="w-full p-2 border-2 border-black rounded outline-none"
+                />
+              </div>
+            </div>
+            <div className="flex gap-4 mt-6">
+              <button onClick={() => setShowAdvancedConfig(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={() => { 
+                // Mettre à jour le sous-thème avec les configurations avancées
+                setSubThemeMeta({...subThemeMeta, niveau_geo: advancedConfig.niveau_geo, type_unite: advancedConfig.type_unite, est_sommable: advancedConfig.est_sommable, filtres_disponibles: advancedConfig.filtres_disponibles});
+                axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
+                  niveau_geo: advancedConfig.niveau_geo,
+                  type_unite: advancedConfig.type_unite,
+                  est_sommable: advancedConfig.est_sommable,
+                  filtres_disponibles: advancedConfig.filtres_disponibles
+                }).then(() => {
+                  showToast('Configuration avancée enregistrée', 'success');
+                  setShowAdvancedConfig(false);
+                  // Rafraîchir le sous-thème
+                  const res = axios.get('http://127.0.0.1:8000/api/themes/');
+                  res.then(r => {
+                    setThemes(r.data);
+                    const freshTheme = r.data.find(t => t.id === selectedTheme?.id);
+                    if (freshTheme) setSelectedTheme(freshTheme);
+                    const freshSubTheme = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
+                    if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
+                  });
+                }).catch(err => {
+                  console.error(err);
+                  showToast('Erreur lors de l\'enregistrement', 'error');
+                });
+              }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {showThemeMeta && (
          <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
            <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
@@ -1804,6 +2244,109 @@ function App() {
              </div>
            </div>
          </div>
+      )}
+
+      {/* Modal for Managing Chart Rows */}
+      {manageRowsModalChartId !== null && (
+        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-3xl max-h-[80vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            {(() => {
+              const managedChart = savedCharts.find(c => String(c.id) === String(manageRowsModalChartId));
+              
+              if (!managedChart) {
+                return (
+                  <div className="text-center">
+                    <p className="text-red-600 font-bold">⚠️ Graphique non trouvé</p>
+                    <p className="text-gray-700 mb-2">ID: {manageRowsModalChartId}</p>
+                    <p className="text-gray-600 text-sm mb-4">Graphiques: {savedCharts.length}</p>
+                    <button onClick={() => setManageRowsModalChartId(null)} className="bg-gray-200 px-4 py-2 border-2 border-black rounded font-bold">Fermer</button>
+                  </div>
+                );
+              }
+
+              const filteredData = getFilteredChartData(managedChart);
+              const chartData = selectedSubTheme?.data || [];
+              const totalRows = chartData.length;
+              const excludedCount = (excludedRowIndices[manageRowsModalChartId] || []).length;
+              const visibleCount = filteredData.length;
+
+              return (
+                <>
+                  <h2 className="text-2xl font-black mb-2 text-center">📋 Gestion des lignes du graphe</h2>
+                  <p className="text-center text-gray-600 mb-4">
+                    <strong>{managedChart.type}</strong> • X: <strong>{managedChart.x}</strong> • Y: <strong>{managedChart.y}</strong>
+                  </p>
+                  
+                  <div className="mb-4 bg-blue-100 p-3 rounded border-2 border-blue-400 text-sm">
+                    <p>Total: <strong>{totalRows}</strong> lignes | Supprimées: <strong className="text-red-600">{excludedCount}</strong> | Affichées: <strong className="text-green-600">{visibleCount}</strong></p>
+                  </div>
+
+                  <div className="mb-4 max-h-[50vh] overflow-y-auto border-2 border-gray-300 rounded p-3 bg-gray-50">
+                    <div className="space-y-2">
+                      {chartData.map((row, idx) => {
+                        const isExcluded = isRowExcluded(manageRowsModalChartId, managedChart, row);
+                        const rowKey = `${managedChart.x}:${row[managedChart.x]}|${managedChart.y}:${row[managedChart.y]}`;
+                        const rowDisplay = `${managedChart.x}: ${row[managedChart.x]} | ${managedChart.y}: ${row[managedChart.y]}`;
+
+                        return (
+                          <div 
+                            key={rowKey} 
+                            className={`p-2 border rounded flex justify-between items-center text-sm ${
+                              isExcluded 
+                                ? 'bg-red-100 border-red-400 line-through text-gray-500' 
+                                : 'bg-white border-gray-300'
+                            }`}
+                          >
+                            <span>{rowDisplay}</span>
+                            <button
+                              onClick={() => {
+                                if (isExcluded) {
+                                  handleRestoreRowToChart(manageRowsModalChartId, managedChart, idx);
+                                } else {
+                                  handleDeleteRowFromChart(manageRowsModalChartId, managedChart, idx);
+                                }
+                              }}
+                              className={`px-2 py-1 border-2 border-black rounded font-bold text-xs ${
+                                isExcluded 
+                                  ? 'bg-green-300 hover:bg-green-400' 
+                                  : 'bg-red-300 hover:bg-red-400'
+                              }`}
+                            >
+                              {isExcluded ? '↩ Restaurer' : '✕ Supprimer'}
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+
+                  <div className="flex gap-4 mt-6">
+                    {excludedCount > 0 && (
+                      <button
+                        onClick={() => {
+                          setExcludedRowIndices({
+                            ...excludedRowIndices,
+                            [manageRowsModalChartId]: []
+                          });
+                          saveChartExclusions(manageRowsModalChartId, []);
+                        }}
+                        className="flex-1 bg-yellow-300 py-2 border-2 border-black rounded-xl font-bold hover:bg-yellow-400 shadow-md"
+                      >
+                        ↻ Réinitialiser ({excludedCount})
+                      </button>
+                    )}
+                    <button
+                      onClick={() => setManageRowsModalChartId(null)}
+                      className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold hover:bg-gray-300"
+                    >
+                      Fermer
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
       )}
 
       {/* Modal for renaming / adding sub-theme */}

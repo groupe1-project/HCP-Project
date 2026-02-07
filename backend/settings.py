@@ -142,4 +142,14 @@ REST_FRAMEWORK = {
     ],
 }
 
+# Configuration Email
+EMAIL_BACKEND = 'django.core.mail.backends.console.EmailBackend'  # Pour développement
+# EMAIL_BACKEND = 'django.core.mail.backends.smtp.EmailBackend'  # Pour production
+EMAIL_HOST = 'smtp.gmail.com'
+EMAIL_PORT = 587
+EMAIL_USE_TLS = True
+EMAIL_HOST_USER = 'votre-email@gmail.com'  # À configurer
+EMAIL_HOST_PASSWORD = 'votre-app-password'  # À configurer
+DEFAULT_FROM_EMAIL = 'noreply@hcp.ma'
+
 
