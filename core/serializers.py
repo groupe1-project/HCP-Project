@@ -13,6 +13,8 @@ class SousThemeSerializer(serializers.ModelSerializer):
     columns = serializers.SerializerMethodField()
     # On expose également le champ data_json pour permettre les écritures depuis le front
     data_json = serializers.JSONField(required=False, allow_null=True)
+    # Ordre des colonnes préservé de l'Excel original
+    columns_order = serializers.JSONField(required=False, allow_null=True)
     # On utilise directement le champ du modèle s'il est déjà en JSON
     charts_config = serializers.JSONField()
     # Nouveaux champs pour analyse dynamique
@@ -21,7 +23,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SousTheme
         fields = [
-            'id', 'nom', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns', 'charts_config',
+            'id', 'nom', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns_order', 'columns', 'charts_config',
             # Métadonnées éditables côté front
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
             # Nouveaux champs
@@ -33,7 +35,10 @@ class SousThemeSerializer(serializers.ModelSerializer):
         return obj.data_json or []
 
     def get_columns(self, obj):
-        # Extrait les noms des colonnes à partir du premier dictionnaire de data_json
+        # Utiliser columns_order si disponible (ordre préservé de l'Excel original)
+        if obj.columns_order and len(obj.columns_order) > 0:
+            return obj.columns_order
+        # Sinon extraire du first record (fallback)
         if obj.data_json and isinstance(obj.data_json, list) and len(obj.data_json) > 0:
             return list(obj.data_json[0].keys())
         return []

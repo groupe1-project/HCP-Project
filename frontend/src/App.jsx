@@ -917,7 +917,7 @@ function App() {
         <div className="bg-[#1a5d85] text-white py-2 px-4 font-bold text-center border-b border-black">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
-        <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => setActiveMenu('Admin')} />
+        <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => {setActiveMenu('Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null);}} />
         <div className="mt-auto p-4 border-t-2 border-black bg-white space-y-2">
           <button onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }} className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md flex items-center justify-center gap-2">
             ⚙️ Paramètres
@@ -934,9 +934,7 @@ function App() {
           <h1 className="text-[#1a5d85] text-xl font-bold italic text-center">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
-          {isAdminView && (
-            <div className="absolute right-6 top-3 bg-yellow-300 text-black px-3 py-1 rounded-full font-bold border-2 border-black">Espace administrateur</div>
-          )}
+          isAdminView 
         </div>
 
         <div className="p-6 flex justify-center">
@@ -1225,7 +1223,7 @@ function App() {
           )}
 
           {/* ÉTAPES 1 & 2 (Identiques à votre code initial) */}
-          {formStep === 1 && (
+          {activeMenu === 'Themes' && formStep === 1 && (
              <div className="bg-white border-2 border-black p-12 rounded-lg shadow-xl max-w-4xl mx-auto space-y-8">
                <div className="flex items-center gap-6">
                  <label className="text-xl w-64 font-bold">Titre du thème*</label>
@@ -1325,7 +1323,7 @@ function App() {
              </div>
           )}
 
-          {formStep === 2 && (
+          {activeMenu === 'Themes' && formStep === 2 && (
              <div className="space-y-6 max-w-6xl mx-auto">
                {useCategories ? (
                  // Afficher un tableau par catégorie
@@ -1413,7 +1411,7 @@ function App() {
           )}
 
           {/* ÉTAPE 3 : LISTE DES SOUS-THÈMES */}
-          {formStep === 3 && selectedTheme && (
+          {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
             <div className="space-y-8">
               <div className="flex justify-between items-center gap-4">
                 <button onClick={() => { setFormStep(0); setSelectedCategorie(null); }} className="bg-white px-4 py-2 border-2 border-black rounded-xl font-bold hover:bg-gray-100 shadow-md">⬅ Retour</button>
@@ -1683,7 +1681,7 @@ function App() {
           )}
 
           {/* ÉTAPE 4 : DÉTAILS SOUS-THÈME DÉVELOPPÉ */}
-          {formStep === 4 && selectedSubTheme && (
+          {activeMenu === 'Themes' && formStep === 4 && selectedSubTheme && (
             <div className="bg-white border-2 border-black p-6 rounded-xl shadow-2xl space-y-6">
               
               <div className="flex justify-between items-start">

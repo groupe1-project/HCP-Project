@@ -112,8 +112,11 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             df = pd.read_excel(excel_file)
+            # Préserver l'ordre des colonnes du fichier original
+            columns_order = list(df.columns)
             df = df.fillna("")
             st.data_json = df.to_dict(orient='records')
+            st.columns_order = columns_order
             st.save()
             return Response({'message': 'Import réussi', 'data': st.data_json}, status=status.HTTP_200_OK)
         except Exception as e:
@@ -196,6 +199,9 @@ class ThemeViewSet(viewsets.ModelViewSet):
                     # Lecture de l'Excel avec Pandas
                     df = pd.read_excel(excel_file)
                     
+                    # Préserver l'ordre des colonnes du fichier original
+                    columns_order = list(df.columns)
+                    
                     # Nettoyage des données (remplace les NaN/vides par du texte vide pour le JSON)
                     df = df.fillna("")
                     
@@ -203,6 +209,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                     # On transforme tout le tableau Excel en liste de dictionnaires
                     # Cela permet de garder TOUTES les colonnes du fichier original
                     st_obj.data_json = df.to_dict(orient='records')
+                    st_obj.columns_order = columns_order
                     st_obj.save()
 
                     # On crée aussi l'indicateur lié pour garder votre structure initiale

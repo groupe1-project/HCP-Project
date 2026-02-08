@@ -34,6 +34,7 @@ const AdministratorsPage = () => {
   const [themes, setThemes] = useState([]);
   const [subThemes, setSubThemes] = useState([]);
   const [openMenuId, setOpenMenuId] = useState(null);
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   
   // États pour les assignations multiples
   const [pendingAssignments, setPendingAssignments] = useState([]);
@@ -731,14 +732,47 @@ const AdministratorsPage = () => {
                         </td>
                         <td className="px-6 py-3 relative">
                           <button
-                            onClick={() => setOpenMenuId(openMenuId === `user-${saisisseur.id}` ? null : `user-${saisisseur.id}`)}
+                            onClick={(e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuHeight = 200;
+                              const menuWidth = 224;
+                              const margin = 10;
+                              
+                              let top, left;
+                              
+                              // Déterminer la position verticale
+                              const spaceBelow = window.innerHeight - rect.bottom - margin;
+                              const spaceAbove = rect.top - margin;
+                              
+                              if (spaceBelow >= menuHeight) {
+                                // Afficher sous le bouton
+                                top = rect.bottom + 4;
+                              } else if (spaceAbove >= menuHeight) {
+                                // Afficher au-dessus du bouton
+                                top = rect.top - menuHeight - 4;
+                              } else {
+                                // Forcer une position qui garantit la visibilité complète
+                                top = window.innerHeight - menuHeight - margin;
+                                if (top < margin) top = margin;
+                              }
+                              
+                              // Déterminer la position horizontale
+                              left = rect.left;
+                              if (left + menuWidth > window.innerWidth - margin) {
+                                left = window.innerWidth - menuWidth - margin;
+                              }
+                              if (left < margin) left = margin;
+                              
+                              setMenuPosition({ top, left });
+                              setOpenMenuId(openMenuId === `user-${saisisseur.id}` ? null : `user-${saisisseur.id}`);
+                            }}
                             className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded text-sm transition font-bold"
                             title="Actions"
                           >
                             ⋮
                           </button>
                           {openMenuId === `user-${saisisseur.id}` && (
-                            <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '200px' }} className="w-56 bg-white rounded-lg shadow-xl border border-gray-200 overflow-y-auto">
                               <button
                                 onClick={() => {
                                   handleResetPasswordUser(saisisseur.id);
@@ -889,14 +923,47 @@ const AdministratorsPage = () => {
                         </td>
                         <td className="px-6 py-3 relative">
                           <button
-                            onClick={() => setOpenMenuId(openMenuId === `assign-${assignment.id}` ? null : `assign-${assignment.id}`)}
+                            onClick={(e) => {
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuHeight = 320;
+                              const menuWidth = 224;
+                              const margin = 10;
+                              
+                              let top, left;
+                              
+                              // Déterminer la position verticale
+                              const spaceBelow = window.innerHeight - rect.bottom - margin;
+                              const spaceAbove = rect.top - margin;
+                              
+                              if (spaceBelow >= menuHeight) {
+                                // Afficher sous le bouton
+                                top = rect.bottom + 4;
+                              } else if (spaceAbove >= menuHeight) {
+                                // Afficher au-dessus du bouton
+                                top = rect.top - menuHeight - 4;
+                              } else {
+                                // Forcer une position qui garantit la visibilité complète
+                                top = window.innerHeight - menuHeight - margin;
+                                if (top < margin) top = margin;
+                              }
+                              
+                              // Déterminer la position horizontale
+                              left = rect.left;
+                              if (left + menuWidth > window.innerWidth - margin) {
+                                left = window.innerWidth - menuWidth - margin;
+                              }
+                              if (left < margin) left = margin;
+                              
+                              setMenuPosition({ top, left });
+                              setOpenMenuId(openMenuId === `assign-${assignment.id}` ? null : `assign-${assignment.id}`);
+                            }}
                             className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded text-sm transition font-bold"
                             title="Actions"
                           >
                             ⋮
                           </button>
                           {openMenuId === `assign-${assignment.id}` && (
-                            <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '320px' }} className="w-56 bg-white rounded-lg shadow-xl border border-gray-200 overflow-y-auto">
                               <div className="px-4 py-2 text-xs font-bold text-gray-500 border-b">Changer la priorité</div>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Haute')}

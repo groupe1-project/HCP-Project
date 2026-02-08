@@ -63,6 +63,9 @@ class SousTheme(models.Model):
     # Stockage des données Excel (votre logique actuelle)
     data_json = models.JSONField(null=True, blank=True) 
     
+    # Ordre des colonnes pour préserver l'ordre du fichier Excel original
+    columns_order = models.JSONField(default=list, blank=True, help_text="Liste ordonnée des noms de colonnes du fichier Excel")
+    
     # Stockage des graphiques configurés (utilisé par le Front)
     charts_config = models.JSONField(default=list, blank=True)
 
@@ -89,6 +92,10 @@ class SousTheme(models.Model):
     # Pour faciliter la lecture des colonnes dynamiques au Front
     @property
     def columns(self):
+        # Utiliser columns_order si disponible (ordre préservé de l'Excel original)
+        if self.columns_order and len(self.columns_order) > 0:
+            return self.columns_order
+        # Sinon extraire du first record (fallback)
         if self.data_json and len(self.data_json) > 0:
             return list(self.data_json[0].keys())
         return []
