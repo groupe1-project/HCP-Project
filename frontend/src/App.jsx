@@ -1038,9 +1038,12 @@ function App() {
                             e.stopPropagation();
                             const rect = e.currentTarget.getBoundingClientRect();
                             const menuHeight = 200;
+                            const menuWidth = 256; // w-64
                             const spaceBelow = window.innerHeight - rect.bottom;
+                            const spaceRight = window.innerWidth - rect.left;
                             const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                            setCategorieMenuPos({ left: rect.left, top });
+                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            setCategorieMenuPos({ left, top });
                             setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
                           }}
                           className="bg-white text-black px-3 py-1 rounded-lg border-2 border-black hover:bg-gray-100 text-xl font-bold"
@@ -1054,9 +1057,12 @@ function App() {
                         e.stopPropagation(); 
                         const rect = e.currentTarget.getBoundingClientRect(); 
                         const menuHeight = 200; // hauteur estimée du menu
+                        const menuWidth = 224; // w-56
                         const spaceBelow = window.innerHeight - rect.bottom;
+                        const spaceRight = window.innerWidth - rect.left;
                         const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                        setActionMenuPos({ left: rect.left, top }); 
+                        const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                        setActionMenuPos({ left, top }); 
                         setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
                         setOpenThemeMenu(null); 
                       }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
@@ -1066,9 +1072,12 @@ function App() {
                             e.stopPropagation();
                             const rect = e.currentTarget.getBoundingClientRect();
                             const menuHeight = 150;
+                            const menuWidth = 208; // w-52
                             const spaceBelow = window.innerHeight - rect.bottom;
+                            const spaceRight = window.innerWidth - rect.left;
                             const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                            setThemeMenuPos({ left: rect.left, top });
+                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            setThemeMenuPos({ left, top });
                             setOpenThemeMenu(openThemeMenu === t.id ? null : t.id);
                           }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                       </div>
@@ -1087,7 +1096,7 @@ function App() {
               {/* Floating theme menu (renders at viewport level to avoid being clipped) */}
               {openThemeMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: themeMenuPos.left, top: themeMenuPos.top, zIndex: 9999 }}>
-                  <div className="w-52 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+                  <div className="w-52 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
                     <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>
                     {(() => {
                       const ct = themes.find(x => x.id === openThemeMenu);
@@ -1116,7 +1125,7 @@ function App() {
 
               {openCategorieMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: categorieMenuPos.left, top: categorieMenuPos.top, zIndex: 9999 }} key={`cat-menu-${openCategorieMenu}-${themes.find(x => x.id === openCategorieMenu)?.categories?.length || 0}`}>
-                  <div className="w-64 bg-white rounded-lg shadow-2xl border-2 border-black overflow-hidden">
+                  <div className="w-64 bg-white rounded-lg shadow-2xl border-2 border-black max-h-96 overflow-y-auto">
                     <div className="px-4 py-3 border-b-2 border-black text-sm font-bold text-gray-800 bg-gray-100">Choisir une catégorie</div>
                     {(() => {
                       const currentTheme = themes.find(x => x.id === openCategorieMenu);
@@ -1163,7 +1172,7 @@ function App() {
 
               {openActionMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: actionMenuPos.left, top: actionMenuPos.top, zIndex: 9999 }}>
-                  <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+                  <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
                     <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
                     <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('rename'); setActionModalValue(t?.titre || ''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -1480,9 +1489,12 @@ function App() {
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
                           const menuHeight = 200;
+                          const menuWidth = 192; // w-48
                           const spaceBelow = window.innerHeight - rect.bottom;
+                          const spaceRight = window.innerWidth - rect.left;
                           const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          setSubActionMenuPos({ left: rect.left, top }); 
+                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          setSubActionMenuPos({ left, top }); 
                           setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
                           setOpenActionMenu(null); 
                           setOpenThemeMenu(null);
@@ -1493,14 +1505,17 @@ function App() {
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
                           const menuHeight = 150;
+                          const menuWidth = 192; // w-48
                           const spaceBelow = window.innerHeight - rect.bottom;
+                          const spaceRight = window.innerWidth - rect.left;
                           const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          setSubThemeMenuPos({ left: rect.left, top }); 
+                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          setSubThemeMenuPos({ left, top }); 
                           setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
                           setOpenSubActionMenu(null); 
                           setOpenActionMenu(null); 
                           setOpenThemeMenu(null);
-                          setOpenCategorieMenu(null); 
+                          setOpenCategorieMenu(null);
                         }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                       </div> 
                       <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
@@ -1570,9 +1585,12 @@ function App() {
                                     e.stopPropagation(); 
                                     const rect = e.currentTarget.getBoundingClientRect(); 
                                     const menuHeight = 200;
+                                    const menuWidth = 192; // w-48
                                     const spaceBelow = window.innerHeight - rect.bottom;
+                                    const spaceRight = window.innerWidth - rect.left;
                                     const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                                    setSubActionMenuPos({ left: rect.left, top }); 
+                                    const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                                    setSubActionMenuPos({ left, top }); 
                                     setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
                                     setOpenActionMenu(null); 
                                     setOpenThemeMenu(null); 
@@ -1581,9 +1599,12 @@ function App() {
                                     e.stopPropagation(); 
                                     const rect = e.currentTarget.getBoundingClientRect(); 
                                     const menuHeight = 150;
+                                    const menuWidth = 192; // w-48
                                     const spaceBelow = window.innerHeight - rect.bottom;
+                                    const spaceRight = window.innerWidth - rect.left;
                                     const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                                    setSubThemeMenuPos({ left: rect.left, top }); 
+                                    const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                                    setSubThemeMenuPos({ left, top }); 
                                     setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
                                     setOpenSubActionMenu(null); 
                                     setOpenActionMenu(null); 
@@ -1627,9 +1648,12 @@ function App() {
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
                           const menuHeight = 200;
+                          const menuWidth = 192; // w-48
                           const spaceBelow = window.innerHeight - rect.bottom;
+                          const spaceRight = window.innerWidth - rect.left;
                           const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          setSubActionMenuPos({ left: rect.left, top }); 
+                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          setSubActionMenuPos({ left, top }); 
                           setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
                           setOpenActionMenu(null); 
                           setOpenThemeMenu(null); 
@@ -1638,9 +1662,12 @@ function App() {
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
                           const menuHeight = 150;
+                          const menuWidth = 192; // w-48
                           const spaceBelow = window.innerHeight - rect.bottom;
+                          const spaceRight = window.innerWidth - rect.left;
                           const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          setSubThemeMenuPos({ left: rect.left, top }); 
+                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          setSubThemeMenuPos({ left, top }); 
                           setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
                           setOpenSubActionMenu(null); 
                           setOpenActionMenu(null); 
@@ -2359,7 +2386,7 @@ function App() {
       {/* Modal for renaming / adding sub-theme */}
       {openSubActionMenu && (
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subActionMenuPos.left, top: subActionMenuPos.top, zIndex: 9999 }}>
-          <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+          <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
             <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); setActionModalType('rename_subtheme'); setActionModalValue(st?.nom || ''); setActionModalThemeId(openSubActionMenu); setShowActionModal(true); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -2375,7 +2402,7 @@ function App() {
 
       {openSubThemeMenu && (
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subThemeMenuPos.left, top: subThemeMenuPos.top, zIndex: 9999 }}>
-          <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 overflow-hidden">
+          <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>
             {(() => {
               const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubThemeMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubThemeMenu);
