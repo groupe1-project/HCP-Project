@@ -118,50 +118,111 @@ const AdministratorsPage = () => {
 
   // Fonctions pour la gestion des thèmes
   const toggleThemeVisibility = async (themeId, currentVisibility) => {
+    const newVisibility = !currentVisibility;
+    
+    // Mise à jour optimiste du state local
+    const updateThemes = (prevThemes) => prevThemes.map(theme => {
+      if (theme.id === themeId) {
+        return {
+          ...theme,
+          is_visible: newVisibility,
+          categories: theme.categories?.map(cat => ({ ...cat, is_visible: newVisibility })),
+          sous_themes: theme.sous_themes?.map(st => ({ ...st, is_visible: newVisibility }))
+        };
+      }
+      return theme;
+    });
+    
+    setThemes(updateThemes);
+    setAllThemes(updateThemes);
+    
     try {
       await axios.patch(`${API_BASE}/themes/${themeId}/`, {
-        is_visible: !currentVisibility
+        is_visible: newVisibility
       });
-      fetchThemes(); // Recharger les thèmes
     } catch (error) {
       console.error('Erreur lors du changement de visibilité du thème:', error);
       alert('Erreur lors de la mise à jour du statut');
+      await fetchThemes(); // Recharger en cas d'erreur
     }
   };
 
   const toggleThemeArchive = async (themeId, currentArchived) => {
+    const newArchived = !currentArchived;
+    
+    // Mise à jour optimiste du state local
+    const updateThemes = (prevThemes) => prevThemes.map(theme => {
+      if (theme.id === themeId) {
+        return {
+          ...theme,
+          archived: newArchived,
+          sous_themes: theme.sous_themes?.map(st => ({ ...st, archived: newArchived }))
+        };
+      }
+      return theme;
+    });
+    
+    setThemes(updateThemes);
+    setAllThemes(updateThemes);
+    
     try {
       await axios.patch(`${API_BASE}/themes/${themeId}/`, {
-        archived: !currentArchived
+        archived: newArchived
       });
-      fetchThemes();
     } catch (error) {
       console.error('Erreur lors de l\'archivage du thème:', error);
       alert('Erreur lors de l\'archivage');
+      await fetchThemes(); // Recharger en cas d'erreur
     }
   };
 
   const toggleSubThemeVisibility = async (subThemeId, currentVisibility) => {
+    const newVisibility = !currentVisibility;
+    
+    // Mise à jour optimiste du state local
+    const updateThemes = (prevThemes) => prevThemes.map(theme => ({
+      ...theme,
+      sous_themes: theme.sous_themes?.map(st => 
+        st.id === subThemeId ? { ...st, is_visible: newVisibility } : st
+      )
+    }));
+    
+    setThemes(updateThemes);
+    setAllThemes(updateThemes);
+    
     try {
       await axios.patch(`${API_BASE}/sousthemes/${subThemeId}/`, {
-        is_visible: !currentVisibility
+        is_visible: newVisibility
       });
-      fetchThemes();
     } catch (error) {
       console.error('Erreur lors du changement de visibilité du sous-thème:', error);
       alert('Erreur lors de la mise à jour du statut');
+      await fetchThemes(); // Recharger en cas d'erreur
     }
   };
 
   const toggleSubThemeArchive = async (subThemeId, currentArchived) => {
+    const newArchived = !currentArchived;
+    
+    // Mise à jour optimiste du state local
+    const updateThemes = (prevThemes) => prevThemes.map(theme => ({
+      ...theme,
+      sous_themes: theme.sous_themes?.map(st => 
+        st.id === subThemeId ? { ...st, archived: newArchived } : st
+      )
+    }));
+    
+    setThemes(updateThemes);
+    setAllThemes(updateThemes);
+    
     try {
       await axios.patch(`${API_BASE}/sousthemes/${subThemeId}/`, {
-        archived: !currentArchived
+        archived: newArchived
       });
-      fetchThemes();
     } catch (error) {
       console.error('Erreur lors de l\'archivage du sous-thème:', error);
       alert('Erreur lors de l\'archivage');
+      await fetchThemes(); // Recharger en cas d'erreur
     }
   };
 

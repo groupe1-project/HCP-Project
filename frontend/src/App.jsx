@@ -96,6 +96,13 @@ function App() {
     if (isAuthenticated) fetchThemes(); 
   }, [isAuthenticated]);
 
+  // Recharger les thèmes quand on revient sur l'onglet Themes
+  useEffect(() => {
+    if (isAuthenticated && activeMenu === 'Themes') {
+      fetchThemes();
+    }
+  }, [activeMenu, isAuthenticated]);
+
   useEffect(() => {
     const handler = () => {
       setOpenThemeMenu(null);

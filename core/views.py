@@ -300,7 +300,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
 
     @action(detail=True, methods=['post'], url_path='toggle_visibility')
     def toggle_visibility(self, request, pk=None):
-        """Bascule le statut de publication (is_visible) du thème."""
+        """Bascule le statut de publication (is_visible) du thème et propage aux catégories/sous-thèmes."""
         try:
             theme = self.get_object()
             # si l'appel fournit la valeur, l'utiliser, sinon inverser
@@ -310,10 +310,28 @@ class ThemeViewSet(viewsets.ModelViewSet):
             else:
                 theme.is_visible = bool(val)
             theme.save()
+            
+            # Propager aux catégories et sous-thèmes
+            theme.categories.all().update(is_visible=theme.is_visible)
+            theme.sous_themes.all().update(is_visible=theme.is_visible)
+            
             return Response({'id': theme.id, 'is_visible': theme.is_visible}, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception('Erreur toggle visibility')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+    
+    def perform_update(self, serializer):
+        """Override pour propager les changements de is_visible et archived aux catégories/sous-thèmes."""
+        instance = serializer.save()
+        
+        # Si is_visible a changé, propager aux catégories et sous-thèmes
+        if 'is_visible' in serializer.validated_data:
+            instance.categories.all().update(is_visible=instance.is_visible)
+            instance.sous_themes.all().update(is_visible=instance.is_visible)
+        
+        # Si archived a changé, propager aux sous-thèmes (catégories n'ont pas archived)
+        if 'archived' in serializer.validated_data:
+            instance.sous_themes.all().update(archived=instance.archived)
 
 
 def generate_password(length=8):
