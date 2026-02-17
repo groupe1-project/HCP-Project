@@ -69,6 +69,8 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             'filter_mode': data.get('filter_mode', 'include'),
             'excluded_rows': data.get('excluded_rows', []),
             'filters': data.get('filters', []),
+            # chart-level visitor-visible filters (array of {column, default} or simple column names)
+            'visible_filters': data.get('visible_filters', []),
         }
         config = st.charts_config or []
         config.append(new_chart)
@@ -98,6 +100,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     ch['filter_mode'] = data.get('filter_mode', ch.get('filter_mode', 'include'))
                     ch['excluded_rows'] = data.get('excluded_rows', ch.get('excluded_rows', []))
                     ch['filters'] = data.get('filters', ch.get('filters', []))
+                    ch['visible_filters'] = data.get('visible_filters', ch.get('visible_filters', []))
                     config[i] = ch
                     st.charts_config = config
                     st.save()

@@ -93,14 +93,49 @@ export default function DataVisualizer({
   }, [isVisitor, columns, filtres_disponibles, appliedFilters, labelColumn, valueColumn, visitorVisibleColumns]);
 
   const renderRows = () => {
-    const prev = {};
+    if (isVisitor) {
+      // visitor: show blanks for repeated values (existing behavior)
+      const prev = {};
+      return (filteredRows || []).map((row, idx) => (
+        <tr key={idx} className="border-b border-gray-200">
+          {visibleColumns.map(col => {
+            const cell = row[col];
+            const display = (prev[col] !== undefined && String(prev[col]) === String(cell)) ? '' : cell;
+            prev[col] = cell;
+            return <td key={col} className="p-2 text-sm border-r">{display}</td>;
+          })}
+        </tr>
+      ));
+    }
+
+    // Admin view: compute rowSpan for consecutive identical cells so we can merge cells vertically
+    const rowCount = (filteredRows || []).length;
+    const spans = {}; // spans[col] = Array(rowCount) with rowspan or 0
+    visibleColumns.forEach(col => {
+      spans[col] = new Array(rowCount).fill(0);
+      let i = 0;
+      while (i < rowCount) {
+        const val = String((filteredRows[i] && filteredRows[i][col]) ?? '');
+        let j = i + 1;
+        while (j < rowCount && String((filteredRows[j] && filteredRows[j][col]) ?? '') === val) j++;
+        const span = j - i;
+        spans[col][i] = span; // only first row gets the span (>0)
+        // others remain 0 meaning they should not render the td
+        i = j;
+      }
+    });
+
     return (filteredRows || []).map((row, idx) => (
       <tr key={idx} className="border-b border-gray-200">
         {visibleColumns.map(col => {
+          const span = spans[col][idx] || 0;
+          if (span === 0) return null; // merged into previous cell
           const cell = row[col];
-          const display = (prev[col] !== undefined && String(prev[col]) === String(cell)) ? '' : cell;
-          prev[col] = cell;
-          return <td key={col} className="p-2 text-sm border-r">{display}</td>;
+          return (
+            <td key={col} rowSpan={span} className="p-2 text-sm border-r align-top">
+              {cell}
+            </td>
+          );
         })}
       </tr>
     ));

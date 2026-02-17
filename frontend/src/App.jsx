@@ -73,8 +73,10 @@ function App({ forceVisitor = false }) {
     filter_column: '', 
     filter_value: '', 
     filter_mode: 'include',
-    filters: []  // Nouveaux filtres multiples
+    filters: [],  // Nouveaux filtres multiples
+    visible_filters: [] // chart-level visitor-visible filters
   });
+  const [chartVisitorFilters, setChartVisitorFilters] = useState({});
   const [excludedRowIndices, setExcludedRowIndices] = useState({});
   const [manageRowsModalChartId, setManageRowsModalChartId] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -199,6 +201,26 @@ function App({ forceVisitor = false }) {
       setExcludedRowIndices({});
     }
   }, [selectedSubTheme]);
+
+  // Initialize per-chart visitor filters state from savedCharts (defaults)
+  useEffect(() => {
+    const map = {};
+    (savedCharts || []).forEach(chart => {
+      const vf = chart.visible_filters || [];
+      if (!vf || vf.length === 0) return;
+      const obj = {};
+      vf.forEach(item => {
+        if (!item) return;
+        if (typeof item === 'string') {
+          obj[item] = '';
+        } else if (typeof item === 'object' && item.column) {
+          obj[item.column] = item.default || '';
+        }
+      });
+      map[chart.id] = obj;
+    });
+    setChartVisitorFilters(map);
+  }, [savedCharts]);
 
   // When sub-theme changes, apply visitor-specific filters/defaults if in visitor mode
   useEffect(() => {
@@ -812,6 +834,7 @@ function App({ forceVisitor = false }) {
           filter_value: currentChartConfig.filter_value,
           filter_mode: currentChartConfig.filter_mode,
           filters: currentChartConfig.filters || [],
+          visible_filters: currentChartConfig.visible_filters || [],
         });
         const updated = res.data;
         setSavedCharts(prev => prev.map(c => c.id === updated.id ? updated : c));
@@ -826,6 +849,7 @@ function App({ forceVisitor = false }) {
           filter_value: currentChartConfig.filter_value,
           filter_mode: currentChartConfig.filter_mode,
           filters: currentChartConfig.filters || [],
+          visible_filters: currentChartConfig.visible_filters || [],
         });
         const created = res.data;
         setSavedCharts(prev => [...prev, created]);
@@ -839,7 +863,7 @@ function App({ forceVisitor = false }) {
       setSavedCharts(freshSubTheme.charts_config || []);
 
       setIsModalOpen(false);
-      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include' });
+      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [] });
     } catch (err) {
       console.error('Erreur en sauvegarde du graphique', err);
       alert('Erreur lors de la sauvegarde du graphique');
@@ -1924,16 +1948,16 @@ function App({ forceVisitor = false }) {
 
               {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
               {filtersForRender && filtersForRender.length > 0 && (
-                <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3">
+                <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3 w-fit">
                   <h3 className="font-bold text-blue-900">🔍 Filtres Disponibles</h3>
-                  <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+                  <div className="flex gap-3">
                     {filtersForRender.map(filterCol => (
                       <div key={filterCol}>
                         <label className="text-sm font-bold text-gray-700 block mb-1">{filterCol}</label>
                         <select
                           value={dynamicFilters[filterCol] || ''}
                           onChange={(e) => setDynamicFilters({...dynamicFilters, [filterCol]: e.target.value})}
-                          className="w-full p-2 border-2 border-blue-300 rounded bg-white outline-none text-sm"
+                          className="w-40 p-2 border-2 border-blue-300 rounded bg-white outline-none text-sm"
                         >
                           <option value="">-- Tous --</option>
                           {getUniqueValuesForColumn(filterCol).map(val => (
@@ -1973,28 +1997,56 @@ function App({ forceVisitor = false }) {
                     <tbody>
                       {(() => {
                         const displayedRows = showAll ? filteredData : filteredData.slice(0, 3);
-                        return displayedRows.map((row, i) => {
-                          const prev = i > 0 ? displayedRows[i - 1] : null;
-                          return (
-                            <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
-                              {visibleColumnsForRender.map((col, idx) => {
-                                // hide the cell only if:
-                                // - there is a previous row
-                                // - the value in this column is identical to previous
-                                // - AND all columns to the left are identical between rows
-                                let hide = false;
-                                if (prev && prev[col] === row[col]) {
-                                  const leftCols = visibleColumnsForRender.slice(0, idx);
-                                  const allLeftEqual = leftCols.every(lc => prev[lc] === row[lc]);
-                                  hide = allLeftEqual;
-                                }
-                                return (
-                                  <td key={col} className="border-r border-gray-300 p-2 text-xs">{hide ? '' : row[col]}</td>
-                                );
-                              })}
-                            </tr>
-                          );
+
+                        // If visitor, keep original behavior (blank repeated cells)
+                        if (isVisitor) {
+                          return displayedRows.map((row, i) => {
+                            const prev = i > 0 ? displayedRows[i - 1] : null;
+                            return (
+                              <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
+                                {visibleColumnsForRender.map((col, idx) => {
+                                  let hide = false;
+                                  if (prev && prev[col] === row[col]) {
+                                    const leftCols = visibleColumnsForRender.slice(0, idx);
+                                    const allLeftEqual = leftCols.every(lc => prev[lc] === row[lc]);
+                                    hide = allLeftEqual;
+                                  }
+                                  return (
+                                    <td key={col} className="border-r border-gray-300 p-2 text-xs">{hide ? '' : row[col]}</td>
+                                  );
+                                })}
+                              </tr>
+                            );
+                          });
+                        }
+
+                        // Admin view: compute rowSpans for consecutive identical cells in displayedRows
+                        const rowCount = displayedRows.length;
+                        const spans = {};
+                        visibleColumnsForRender.forEach(col => {
+                          spans[col] = new Array(rowCount).fill(0);
+                          let i = 0;
+                          while (i < rowCount) {
+                            const val = String((displayedRows[i] && displayedRows[i][col]) ?? '');
+                            let j = i + 1;
+                            while (j < rowCount && String((displayedRows[j] && displayedRows[j][col]) ?? '') === val) j++;
+                            const span = j - i;
+                            spans[col][i] = span; // first occurance gets span
+                            i = j;
+                          }
                         });
+
+                        return displayedRows.map((row, i) => (
+                          <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
+                            {visibleColumnsForRender.map((col) => {
+                              const span = spans[col][i] || 0;
+                              if (span === 0) return null;
+                              return (
+                                <td key={col} rowSpan={span} className="border-r border-gray-300 p-2 text-xs align-top">{row[col]}</td>
+                              );
+                            })}
+                          </tr>
+                        ));
                       })()}
                     </tbody>
                   </table>
@@ -2016,7 +2068,22 @@ function App({ forceVisitor = false }) {
               <div className="space-y-6">
                 <div className="grid grid-cols-1 gap-6">
                   {savedCharts.map((chart) => {
-                    const chartData = getFilteredChartData(chart);
+                    const baseChartData = getFilteredChartData(chart);
+                    // Apply per-chart visitor-only filters (do not affect table)
+                    const visitorFiltersList = chart.visible_filters || [];
+                    const visitorValues = chartVisitorFilters[chart.id] || {};
+                    let chartData = baseChartData;
+                    if (visitorFiltersList && visitorFiltersList.length > 0) {
+                      // normalize list to objects with column/default
+                      const norm = visitorFiltersList.map(item => (typeof item === 'string' ? { column: item, default: '' } : item || {}));
+                      norm.forEach(vf => {
+                        const col = vf.column;
+                        const val = visitorValues[col] !== undefined ? visitorValues[col] : (vf.default || '');
+                        if (col && val) {
+                          chartData = chartData.filter(row => String(row[col] ?? '') === String(val));
+                        }
+                      });
+                    }
 
                     return (
                       <div key={chart.id} className="border-4 border-orange-400 p-6 rounded-2xl bg-white shadow-lg relative">
@@ -2027,6 +2094,34 @@ function App({ forceVisitor = false }) {
                           </div>
                         )}
                         
+                        {/* Visitor-visible filters controls (only shown when configured) */}
+                        {visitorFiltersList && visitorFiltersList.length > 0 && (
+                          <div className="mb-4 p-3 bg-gray-50 border-2 border-dashed rounded inline-grid gap-3">
+                            {(visitorFiltersList || []).map((vf, idx) => {
+                              const col = (typeof vf === 'string') ? vf : (vf && vf.column) || '';
+                              const currentVal = (chartVisitorFilters[chart.id] || {})[col] || (vf && vf.default) || '';
+                              return (
+                                <div key={`${chart.id}-vf-${idx}`} className="flex items-center gap-2">
+                                  <label className="font-bold text-sm">{col || 'Colonne'}</label>
+                                  <select
+                                    className="p-2 border-2 border-gray-300 rounded bg-white"
+                                    value={currentVal}
+                                    onChange={e => {
+                                      const newMap = { ...(chartVisitorFilters || {}) };
+                                      newMap[chart.id] = { ...(newMap[chart.id] || {}) };
+                                      newMap[chart.id][col] = e.target.value;
+                                      setChartVisitorFilters(newMap);
+                                    }}
+                                  >
+                                    <option value="">-- Tous --</option>
+                                    {col && getUniqueValuesForColumn(col).map(v => <option key={v} value={v}>{v}</option>)}
+                                  </select>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        )}
+
                         <div className="h-64 w-full mt-4">
                           <ResponsiveContainer width="100%" height="100%">
                             {chart.type === 'Histogramme' ? (
@@ -2080,7 +2175,7 @@ function App({ forceVisitor = false }) {
                 {canEdit && (
                   <button 
                     onClick={() => {
-                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [] });
+                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [] });
                       setIsModalOpen(true);
                     }}
                     className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
@@ -2312,6 +2407,68 @@ function App({ forceVisitor = false }) {
                   + Ajouter un filtre supplémentaire
                 </button>
               )}
+
+              {/* Chart-level visible filters for visitors */}
+              <div className="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg space-y-3">
+                <h3 className="font-bold text-yellow-900">Filtres visibles pour le visiteur (ce graphique)</h3>
+                {(currentChartConfig.visible_filters || []).map((vf, idx) => {
+                  const col = (typeof vf === 'string') ? vf : (vf && vf.column) || '';
+                  const defVal = (typeof vf === 'object' && vf) ? (vf.default || '') : '';
+                  return (
+                    <div key={idx} className="p-2 bg-white border rounded flex gap-2 items-center">
+                      <select
+                        className="flex-1 p-2 border-2 border-yellow-300 rounded bg-white"
+                        value={col}
+                        onChange={e => {
+                          const newVis = [...(currentChartConfig.visible_filters || [])];
+                          newVis[idx] = { column: e.target.value, default: '' };
+                          setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
+                        }}
+                      >
+                        <option value="">-- Colonne à afficher --</option>
+                        {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
+                      </select>
+
+                      {col && (
+                        <select
+                          className="w-48 p-2 border-2 border-yellow-300 rounded bg-white"
+                          value={defVal}
+                          onChange={e => {
+                            const newVis = [...(currentChartConfig.visible_filters || [])];
+                            const item = (typeof newVis[idx] === 'string') ? { column: newVis[idx], default: '' } : (newVis[idx] || {});
+                            item.default = e.target.value;
+                            newVis[idx] = item;
+                            setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
+                          }}
+                        >
+                          <option value="">-- Défaut (aucun) --</option>
+                          {getUniqueValuesForColumn(col).map(v => <option key={v} value={v}>{v}</option>)}
+                        </select>
+                      )}
+
+                      <button
+                        onClick={() => {
+                          const newVis = (currentChartConfig.visible_filters || []).filter((_, i) => i !== idx);
+                          setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
+                        }}
+                        className="px-3 py-2 bg-red-300 border-2 border-black rounded font-bold text-sm hover:bg-red-400"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  );
+                })}
+
+                <button
+                  onClick={() => {
+                    const newVis = [...(currentChartConfig.visible_filters || []), { column: '', default: '' }];
+                    setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
+                  }}
+                  className="w-full py-2 bg-yellow-200 border-2 border-yellow-700 rounded font-bold hover:bg-yellow-300 text-sm"
+                >
+                  + Ajouter un filtre visible
+                </button>
+              </div>
 
               <div>
                 <label className="block font-bold mb-1">Ajouter une mesure / note :</label>
@@ -2667,7 +2824,7 @@ function App({ forceVisitor = false }) {
                     <input
                       className="w-full p-2 border-2 border-black rounded"
                       value={formatDefaults(modalVisitorDefaultFilters)}
-                      onChange={e => setModalVisitorDefaultFilters(parseInputToObject(e.target.value))}
+                      onChange={e => setModalVisitorDefaultFilters(e.target.value)}
                       placeholder="Ex: Milieu=Total, Sexe=Masculin"
                     />
                   );
