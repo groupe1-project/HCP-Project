@@ -1,5 +1,6 @@
 from django.db import models
 from django.contrib.auth.models import AbstractUser
+from django.contrib.auth.base_user import BaseUserManager
 
 # 1. GESTION DES UTILISATEURS
 class CustomUser(AbstractUser):
@@ -12,6 +13,37 @@ class CustomUser(AbstractUser):
 
     def __str__(self):
         return f"{self.username} ({self.role})"
+
+
+class CustomUserManager(BaseUserManager):
+    """Manager personnalisé pour s'assurer que les superusers ont role='ADMIN'."""
+    use_in_migrations = True
+
+    def create_user(self, username, email=None, password=None, **extra_fields):
+        if not username:
+            raise ValueError('The given username must be set')
+        email = self.normalize_email(email)
+        user = self.model(username=username, email=email, **extra_fields)
+        user.set_password(password)
+        user.save(using=self._db)
+        return user
+
+    def create_superuser(self, username, email=None, password=None, **extra_fields):
+        extra_fields.setdefault('is_staff', True)
+        extra_fields.setdefault('is_superuser', True)
+        # Ensure role for superusers is ADMIN
+        extra_fields.setdefault('role', 'ADMIN')
+
+        if extra_fields.get('is_staff') is not True:
+            raise ValueError('Superuser must have is_staff=True.')
+        if extra_fields.get('is_superuser') is not True:
+            raise ValueError('Superuser must have is_superuser=True.')
+
+        return self.create_user(username, email, password, **extra_fields)
+
+
+# Attach the custom manager to the model
+CustomUser.add_to_class('objects', CustomUserManager())
 
 # 2. STRUCTURE DES THÉMATIQUES
 class Theme(models.Model):
@@ -88,6 +120,13 @@ class SousTheme(models.Model):
     # 3. Dictionnaire de variables pour les filtres disponibles
     filtres_disponibles = models.JSONField(default=list, blank=True, help_text="Liste des colonnes sur lesquelles on peut filtrer")
 
+    # --- Paramètres spécifiques à l'affichage visiteur (configurables par les admins) ---
+    # Colonnes visibles pour le visiteur (liste de noms de colonnes)
+    visitor_visible_columns = models.JSONField(default=list, blank=True, help_text="Colonnes visibles pour le mode visiteur")
+    # Filtres que le visiteur peut appliquer
+    visitor_filters = models.JSONField(default=list, blank=True, help_text="Filtres disponibles pour le visiteur")
+    # Filtres par défaut appliqués pour le visiteur (ex: {"Milieu": "Total"} ou "Total")
+    visitor_default_filters = models.JSONField(default=dict, blank=True, help_text="Filtres par défaut pour le visiteur")
 
     # Pour faciliter la lecture des colonnes dynamiques au Front
     @property

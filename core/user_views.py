@@ -49,7 +49,8 @@ class UserViewSet(viewsets.ModelViewSet):
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
         """Réinitialise le mot de passe d'un utilisateur (admin uniquement)"""
-        if request.user.role != 'ADMIN':
+        # Allow Django superusers as well as users with role 'ADMIN'
+        if not (request.user.role == 'ADMIN' or request.user.is_superuser):
             return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
         
         user = self.get_object()
@@ -96,7 +97,8 @@ L'équipe HCP
     @action(detail=True, methods=['post'])
     def archive(self, request, pk=None):
         """Archive un utilisateur (admin uniquement)"""
-        if request.user.role != 'ADMIN':
+        # Allow Django superusers as well as users with role 'ADMIN'
+        if not (request.user.role == 'ADMIN' or request.user.is_superuser):
             return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
         
         user = self.get_object()
@@ -108,7 +110,8 @@ L'équipe HCP
     @action(detail=True, methods=['post'])
     def unarchive(self, request, pk=None):
         """Réactive un utilisateur archivé (admin uniquement)"""
-        if request.user.role != 'ADMIN':
+        # Allow Django superusers as well as users with role 'ADMIN'
+        if not (request.user.role == 'ADMIN' or request.user.is_superuser):
             return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
 
         user = self.get_object()
@@ -119,7 +122,8 @@ L'équipe HCP
     
     def destroy(self, request, *args, **kwargs):
         """Supprime un utilisateur (admin uniquement)"""
-        if request.user.role != 'ADMIN':
+        # Allow Django superusers as well as users with role 'ADMIN'
+        if not (request.user.role == 'ADMIN' or request.user.is_superuser):
             return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
         
         return super().destroy(request, *args, **kwargs)

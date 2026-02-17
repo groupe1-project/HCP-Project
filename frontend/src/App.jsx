@@ -16,7 +16,7 @@ const SidebarButton = ({ label, onClick, active }) => (
   </button>
 );
 
-function App() {
+function App({ forceVisitor = false }) {
   // --- AUTHENTIFICATION (toujours appelé en premier) ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -27,6 +27,7 @@ function App() {
   const [themes, setThemes] = useState([]);
   const [selectedTheme, setSelectedTheme] = useState(null);
   const [selectedSubTheme, setSelectedSubTheme] = useState(null);
+  const [selectedCategorie, setSelectedCategorie] = useState(null);
   const [themeData, setThemeData] = useState({ titre: '', nbSousThemes: 1, statut: 'Public' });
   const [openThemeMenu, setOpenThemeMenu] = useState(null);
   const [themeMenuPos, setThemeMenuPos] = useState({ left: 0, top: 0 });
@@ -50,6 +51,12 @@ function App() {
   const [subThemeMeta, setSubThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   const [advancedConfig, setAdvancedConfig] = useState({ niveau_geo: null, type_unite: '', est_sommable: true, filtres_disponibles: [] });
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [configSubTheme, setConfigSubTheme] = useState(null);
+  const [modalVisitorCols, setModalVisitorCols] = useState([]);
+  const [modalVisitorFilters, setModalVisitorFilters] = useState([]);
+  const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
+  const [publicThemes, setPublicThemes] = useState([]);
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
   const [showAll, setShowAll] = useState(false);
@@ -76,16 +83,19 @@ function App() {
   const [searchSubTheme, setSearchSubTheme] = useState('');
   const [searchIndicateur, setSearchIndicateur] = useState('');
   const [useCategories, setUseCategories] = useState(false);
-  const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
-  const [expandedCategories, setExpandedCategories] = useState({});
-  const [selectedCategorie, setSelectedCategorie] = useState(null);
   const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
   const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
+  const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
+  const pathHasVisiteur = typeof window !== 'undefined' && window.location.pathname.includes('/visiteur');
+  const isVisitor = forceVisitor || pathHasVisiteur;
+  const canEdit = isAuthenticated && !isVisitor;
+  const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
+
   useEffect(() => {
     const token = localStorage.getItem('auth_token');
-    if (token) {
+    if (token && !isVisitor) {
       axios.defaults.headers.common['Authorization'] = `Token ${token}`;
       setIsAuthenticated(true);
     }
@@ -93,12 +103,12 @@ function App() {
   }, []);
 
   useEffect(() => { 
-    if (isAuthenticated) fetchThemes(); 
+    if (isAuthenticated || isVisitor) fetchThemes(); 
   }, [isAuthenticated]);
 
   // Recharger les thèmes quand on revient sur l'onglet Themes
   useEffect(() => {
-    if (isAuthenticated && activeMenu === 'Themes') {
+    if ((isAuthenticated || isVisitor) && activeMenu === 'Themes') {
       fetchThemes();
     }
   }, [activeMenu, isAuthenticated]);
@@ -116,6 +126,67 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (showAdvancedConfig) {
+      console.log('showAdvancedConfig=true — rendering advanced modal');
+      showToast('Ouverture de la modale avancée', 'info');
+    }
+  }, [showAdvancedConfig]);
+
+  // Écoute globale pour ouvrir la config visiteur depuis le sous-thème
+  useEffect(() => {
+    const handler = async (ev) => {
+      try {
+        const subThemeId = ev?.detail;
+        if (!subThemeId) return;
+
+        // chercher localement
+        let found = null;
+        for (const t of themes || []) {
+          const st = (t.sous_themes || []).find(s => String(s.id) === String(subThemeId));
+          if (st) { found = st; break; }
+        }
+        if (!found) {
+          const res = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${subThemeId}/`);
+          found = res.data;
+        }
+        if (!found) return;
+
+        // helper to parse possible stored defaults into an object
+        const parseDefaultsString = (raw) => {
+          if (!raw && raw !== '') return {};
+          if (typeof raw === 'object' && raw !== null) return raw;
+          if (typeof raw === 'string') {
+            try { return JSON.parse(raw); } catch (_) {}
+            const obj = {};
+            const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
+            parts.forEach(part => {
+              const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+              if (sep) {
+                const [k, v] = part.split(sep).map(s => s.trim());
+                if (k && v) obj[k] = v;
+              }
+            });
+            return obj;
+          }
+          return {};
+        };
+
+        setConfigSubTheme(found);
+        setModalVisitorCols(found.visitor_visible_columns || []);
+        setModalVisitorFilters(found.visitor_filters || found.filtres_disponibles || []);
+        setModalVisitorDefaultFilters(parseDefaultsString(found.visitor_default_filters || {}));
+        setConfigModalOpen(true);
+      } catch (err) {
+        console.error('Erreur ouverture config visiteur', err);
+        showToast('Impossible d\'ouvrir la configuration visiteur', 'error');
+      }
+    };
+
+    window.addEventListener('openVisitorConfig', handler);
+    return () => window.removeEventListener('openVisitorConfig', handler);
+  }, [themes]);
+
+  useEffect(() => {
     setSavedCharts(selectedSubTheme?.charts_config || []);
     // Initialiser les lignes exclues à partir de la config des graphes
     if (selectedSubTheme?.charts_config) {
@@ -128,6 +199,56 @@ function App() {
       setExcludedRowIndices({});
     }
   }, [selectedSubTheme]);
+
+  // When sub-theme changes, apply visitor-specific filters/defaults if in visitor mode
+  useEffect(() => {
+    if (!selectedSubTheme) return;
+    // If visitor view, prefer visitor_filters and apply visitor_default_filters
+    if (isVisitor) {
+      const vf = selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
+      // initialize dynamicFilters with defaults where provided
+      let defaults = selectedSubTheme.visitor_default_filters || {};
+      // If defaults is a string (admin typed plain text), try to parse JSON or 'key=value' pairs or apply heuristics
+      if (typeof defaults === 'string' && defaults) {
+        // try JSON first
+        try {
+          defaults = JSON.parse(defaults);
+        } catch (e) {
+          // try parsing key=value pairs like "Milieu=Total,Province=Azilal"
+          const obj = {};
+          const parts = defaults.split(',').map(p => p.trim()).filter(Boolean);
+          parts.forEach(part => {
+            const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+            if (sep) {
+              const [k, v] = part.split(sep).map(s => s.trim());
+              if (k && v) obj[k] = v;
+            }
+          });
+          if (Object.keys(obj).length > 0) {
+            defaults = obj;
+          } else {
+            // fallback: assign single value heuristically to first matching filter
+            const singleVal = defaults;
+            const heuristic = {};
+            for (const col of vf) {
+              const opts = getUniqueValuesForColumn(col);
+              if (opts.includes(String(singleVal))) {
+                heuristic[col] = String(singleVal);
+                break;
+              }
+            }
+            defaults = heuristic;
+          }
+        }
+      }
+
+      const initial = {};
+      vf.forEach(col => {
+        initial[col] = (defaults && typeof defaults === 'object' && defaults[col] !== undefined) ? defaults[col] : '';
+      });
+      setDynamicFilters(initial);
+    }
+  }, [selectedSubTheme, isVisitor]);
 
   // --- HELPER FUNCTIONS ---
   const handleLogin = () => {
@@ -242,7 +363,7 @@ function App() {
     try {
       await axios.post(`http://127.0.0.1:8000/api/themes/${id}/archive/`);
       showToast('Thème archivé', 'success');
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
     } catch (err) { console.error(err); showToast('Erreur lors de l\'archivage', 'error'); }
@@ -252,7 +373,7 @@ function App() {
     try {
       await axios.post(`http://127.0.0.1:8000/api/themes/${id}/unarchive/`);
       showToast('Thème désarchivé', 'success');
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
     } catch (err) { console.error(err); showToast('Erreur lors du désarchivage', 'error'); }
@@ -268,7 +389,7 @@ function App() {
       await axios.delete(`http://127.0.0.1:8000/api/themes/${id}/`);
       showToast('Thème supprimé', 'success');
       // refresh to ensure consistent state
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
     } catch (err) {
       console.error(err);
@@ -276,7 +397,7 @@ function App() {
       // rollback to previous state
       setThemes(prev);
       // try refetch as fallback
-      try { const res = await axios.get('http://127.0.0.1:8000/api/themes/'); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
+      try { const res = await axios.get(themesApiBase); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
     }
   };
 
@@ -284,7 +405,7 @@ function App() {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: newName });
       alert('Thème renommé');
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
     } catch (err) { console.error(err); alert('Erreur lors du renommage'); }
@@ -307,7 +428,7 @@ function App() {
       }
       const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/sous_themes/`, payload);
       alert('Sous-thème ajouté');
-      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
       const fresh = themesRes.data.find(t => t.id === themeId);
       if (fresh) setSelectedTheme(fresh);
@@ -318,9 +439,11 @@ function App() {
     try {
       const theme = themes.find(t => t.id === themeId);
       const ordre = theme?.categories?.length || 0;
-      await axios.post('http://127.0.0.1:8000/api/categories/', { nom: name, theme: themeId, ordre });
+      // Ensure the new category inherits the theme's visibility status
+      const payload = { nom: name, theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
+      await axios.post('http://127.0.0.1:8000/api/categories/', payload);
       alert('Catégorie ajoutée');
-      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
       const fresh = themesRes.data.find(t => t.id === themeId);
       if (fresh) setSelectedTheme(fresh);
@@ -331,7 +454,7 @@ function App() {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: newName });
       alert('Sous-thème renommé');
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       // update selectedTheme/selectedSubTheme if needed
       if (selectedTheme) {
@@ -352,7 +475,7 @@ function App() {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { archived: true });
       showToast('Sous-thème archivé', 'success');
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       // Mets à jour selectedTheme avec les sous-thèmes frais
       if (selectedTheme) {
@@ -371,7 +494,7 @@ function App() {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { archived: false });
       showToast('Sous-thème désarchivé', 'success');
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       // Mets à jour selectedTheme avec les sous-thèmes frais
       if (selectedTheme) {
@@ -407,7 +530,7 @@ function App() {
       await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${id}/`);
       showToast('Sous-thème supprimé', 'success');
       // refresh to ensure consistent state
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       // update selectedTheme to the fresh object if still present
       if (prevSelectedTheme) {
@@ -428,7 +551,7 @@ function App() {
       // rollback both themes list and selected theme
       setThemes(prevThemes);
       setSelectedTheme(prevSelectedTheme);
-      try { const res = await axios.get('http://127.0.0.1:8000/api/themes/'); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
+      try { const res = await axios.get(themesApiBase); setThemes(res.data); } catch(e){ console.error('Refetch failed', e); }
     }
   };
 
@@ -440,7 +563,7 @@ function App() {
       showToast('Catégorie supprimée', 'success');
       
       // Refresh to ensure consistent state
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme) {
         const fresh = res.data.find(t => t.id === selectedTheme.id);
@@ -482,7 +605,7 @@ function App() {
       }
       
       // Refresh themes and update selectedTheme
-      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
       if (selectedTheme && selectedTheme.id === themeId) {
         const freshTheme = themesRes.data.find(t => t.id === themeId);
@@ -502,7 +625,7 @@ function App() {
       alert('Tableau sauvegardé');
       setShowEditTable(false);
       // refresh
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
       if (freshTheme) setSelectedTheme(freshTheme);
@@ -518,10 +641,11 @@ function App() {
     const fd = new FormData();
     fd.append('file', file);
     try {
-      await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd, { headers: { 'Content-Type': 'multipart/form-data' } });
+      // Let the browser set the multipart boundary header automatically
+      await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd);
       alert('Import réussi');
       // refresh
-      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
       const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
       if (freshTheme) setSelectedTheme(freshTheme);
@@ -530,7 +654,7 @@ function App() {
         setSelectedSubTheme(freshSub);
         if (showEditTable) setEditTableRows(JSON.parse(JSON.stringify(freshSub.data || [])));
       }
-    } catch (err) { console.error(err); alert('Erreur lors de l\'import'); }
+    } catch (err) { console.error(err.response?.data || err); alert('Erreur lors de l\'import: ' + (err.response?.data?.error || err.message)); }
     if (e.target) e.target.value = null;
   };
 
@@ -554,7 +678,8 @@ function App() {
 
   const fetchThemes = async () => {
     try {
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const url = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
+      const res = await axios.get(url);
       setThemes(res.data);
     } catch (err) {
       // Affiche la réponse du serveur si disponible pour aider le debug
@@ -625,6 +750,22 @@ function App() {
     return passesTextFilter && passesDynamicFilters;
   }) || [];
 
+  const visibleColumnsForRender = React.useMemo(() => {
+    if (!selectedSubTheme) return [];
+    if (isVisitor) {
+      return (selectedSubTheme.visitor_visible_columns && selectedSubTheme.visitor_visible_columns.length) ? selectedSubTheme.visitor_visible_columns : (selectedSubTheme.columns || []);
+    }
+    return selectedSubTheme.columns || [];
+  }, [selectedSubTheme, isVisitor]);
+
+  const filtersForRender = React.useMemo(() => {
+    if (!selectedSubTheme) return [];
+    if (isVisitor) {
+      return (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
+    }
+    return selectedSubTheme.filtres_disponibles || [];
+  }, [selectedSubTheme, isVisitor]);
+
   // Gestion des graphiques
   const handleAddOrUpdateChart = async () => {
     // For Pie charts we still require X and Y (Y aggregated)
@@ -691,7 +832,7 @@ function App() {
       }
 
       // Refresh selected subtheme in state (so charts_config matches)
-      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const themesRes = await axios.get(themesApiBase);
       const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
       const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
       setSelectedSubTheme(freshSubTheme);
@@ -716,7 +857,7 @@ function App() {
       await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
       setSavedCharts(prev => prev.filter(c => c.id !== id));
       // refresh subtheme
-      const themesRes = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const themesRes = await axios.get(themesApiBase);
       const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
       const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
       setSelectedSubTheme(freshSubTheme);
@@ -732,7 +873,7 @@ function App() {
       // Call toggle-visibility action to cascade to sous-thèmes
       await axios.post(`http://127.0.0.1:8000/api/categories/${categorieId}/toggle-visibility/`, { is_visible: newVisibility });
       // Refresh themes and update selectedCategorie
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme) {
         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
@@ -754,7 +895,7 @@ function App() {
     try {
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subThemeId}/`, { is_visible: newVisibility });
       // refresh themes and update selectedTheme/selectedSubTheme
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme) {
         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
@@ -852,7 +993,7 @@ function App() {
       setFormStep(0);
       setUseCategories(false);
       setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
-    } catch (err) { alert("Erreur : " + err.message); }
+    } catch (err) { console.error(err.response?.data || err); alert("Erreur : " + (err.response?.data?.error || err.message)); }
   };
 
   const saveThemeMeta = async () => {
@@ -862,7 +1003,7 @@ function App() {
       alert('Métadonnées sauvegardées');
       setShowThemeMeta(false);
       // refresh themes and selectedTheme
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       const fresh = res.data.find(t => t.id === selectedTheme.id);
       setSelectedTheme(fresh);
@@ -879,7 +1020,7 @@ function App() {
       alert('Métadonnées du sous-thème sauvegardées');
       setShowSubThemeMeta(false);
       // refresh themes and selectedTheme + selectedSubTheme
-      const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+      const res = await axios.get(themesApiBase);
       setThemes(res.data);
       const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
       if (freshTheme) setSelectedTheme(freshTheme);
@@ -901,7 +1042,7 @@ function App() {
     return <div className="flex min-h-screen bg-[#f4f1e1] justify-center items-center"><p className="text-xl font-bold">Chargement...</p></div>;
   }
 
-  if (!isAuthenticated) {
+  if (!isAuthenticated && !isVisitor) {
     return <LoginPage onLoginSuccess={handleLogin} />;
   }
 
@@ -917,15 +1058,19 @@ function App() {
         <div className="bg-[#1a5d85] text-white py-2 px-4 font-bold text-center border-b border-black">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
-        <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => {setActiveMenu('Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null);}} />
-        <div className="mt-auto p-4 border-t-2 border-black bg-white space-y-2">
-          <button onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }} className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md flex items-center justify-center gap-2">
-            ⚙️ Paramètres
-          </button>
-          <button onClick={handleLogout} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md">
-            Déconnexion
-          </button>
-        </div>
+        {canEdit && (
+          <>
+            <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => {setActiveMenu('Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null);}} />
+            <div className="mt-auto p-4 border-t-2 border-black bg-white space-y-2">
+              <button onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }} className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md flex items-center justify-center gap-2">
+                ⚙️ Paramètres
+              </button>
+              <button onClick={handleLogout} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md">
+                Déconnexion
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* 2. CONTENU PRINCIPAL */}
@@ -980,12 +1125,13 @@ function App() {
                     key={st.id} 
                     onClick={async () => {
                       try {
-                        const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                        const res = await axios.get(themesApiBase);
                         const freshTheme = res.data.find(t => t.id === st.theme_id);
                         const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
                         setSelectedTheme(freshTheme);
                         setSelectedSubTheme(freshSubTheme);
                         setSavedCharts(freshSubTheme.charts_config || []);
+                        setActiveMenu('Themes');
                         setFormStep(4);
                         setShowAll(false);
                       } catch (err) { console.error(err); }
@@ -997,7 +1143,9 @@ function App() {
                     )}
                     <div className="text-sm opacity-75 mb-2">{st.theme_titre}</div>
                     <div className="text-lg">{st.nom}</div>
-                    <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    {canEdit && (
+                      <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1051,45 +1199,53 @@ function App() {
                       )}
                     </div>
                     <div className="flex mt-4 gap-2">
-                      <button onClick={(e) => { 
-                        e.stopPropagation(); 
-                        const rect = e.currentTarget.getBoundingClientRect(); 
-                        const menuHeight = 200; // hauteur estimée du menu
-                        const menuWidth = 224; // w-56
-                        const spaceBelow = window.innerHeight - rect.bottom;
-                        const spaceRight = window.innerWidth - rect.left;
-                        const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                        const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                        setActionMenuPos({ left, top }); 
-                        setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
-                        setOpenThemeMenu(null); 
-                      }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                      {canEdit && (
+                        <button onClick={(e) => { 
+                          e.stopPropagation(); 
+                          const rect = e.currentTarget.getBoundingClientRect(); 
+                          const menuHeight = 200; // hauteur estimée du menu
+                          const menuWidth = 224; // w-56
+                          const spaceBelow = window.innerHeight - rect.bottom;
+                          const spaceRight = window.innerWidth - rect.left;
+                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          setActionMenuPos({ left, top }); 
+                          setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
+                          setOpenThemeMenu(null); 
+                        }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                      )}
 
                       <div>
-                        <button onClick={(e) => { 
-                            e.stopPropagation();
-                            const rect = e.currentTarget.getBoundingClientRect();
-                            const menuHeight = 150;
-                            const menuWidth = 208; // w-52
-                            const spaceBelow = window.innerHeight - rect.bottom;
-                            const spaceRight = window.innerWidth - rect.left;
-                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                            setThemeMenuPos({ left, top });
-                            setOpenThemeMenu(openThemeMenu === t.id ? null : t.id);
-                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                        {canEdit && (
+                          <button onClick={(e) => { 
+                              e.stopPropagation();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuHeight = 150;
+                              const menuWidth = 208; // w-52
+                              const spaceBelow = window.innerHeight - rect.bottom;
+                              const spaceRight = window.innerWidth - rect.left;
+                              const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                              const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                              setThemeMenuPos({ left, top });
+                              setOpenThemeMenu(openThemeMenu === t.id ? null : t.id);
+                            }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                        )}
                       </div>
                     </div>
-                    <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${t.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    {canEdit && (
+                      <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${t.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    )}
                   </div>
                 ))}
               </div>
-              <button 
-                onClick={() => setFormStep(1)}
-                className="fixed bottom-10 right-10 bg-[#ffb366] hover:bg-[#ffa347] text-white font-bold py-4 px-8 rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
-              >
-                Ajouter un thème
-              </button>
+              {canEdit && (
+                <button 
+                  onClick={() => setFormStep(1)}
+                  className="fixed bottom-10 right-10 bg-[#ffb366] hover:bg-[#ffa347] text-white font-bold py-4 px-8 rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                >
+                  Ajouter un thème
+                </button>
+              )}
 
               {/* Floating theme menu (renders at viewport level to avoid being clipped) */}
               {openThemeMenu && (
@@ -1113,10 +1269,12 @@ function App() {
                         </button>
                       );
                     })()}
-                    <button onClick={(e) => { e.stopPropagation(); showConfirm('Supprimer ce thème ?', async () => { await deleteTheme(openThemeMenu); setOpenThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-white text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
-                      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
-                      Supprimer le thème
-                    </button>
+                    {canEdit && (
+                      <button onClick={(e) => { e.stopPropagation(); showConfirm('Supprimer ce thème ?', async () => { await deleteTheme(openThemeMenu); setOpenThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-white text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        Supprimer le thème
+                      </button>
+                    )}
                   </div>
                 </div>
               )}
@@ -1149,18 +1307,20 @@ function App() {
                             <span className="font-semibold">{cat.nom}</span>
                             <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
                           </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation();
-                              deleteCategorie(cat.id);
-                            }}
-                            className="p-1 hover:bg-red-200 rounded transition-colors text-red-600"
-                            title="Supprimer cette catégorie"
-                          >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                              <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M10 7V4a1 1 0 011-1h2a1 1 0 011 1v3m-6 0h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            </svg>
-                          </button>
+                          {canEdit && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                deleteCategorie(cat.id);
+                              }}
+                              className="p-1 hover:bg-red-200 rounded transition-colors text-red-600"
+                              title="Supprimer cette catégorie"
+                            >
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M10 7V4a1 1 0 011-1h2a1 1 0 011 1v3m-6 0h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            </button>
+                          )}
                         </div>
                       ));
                     })()}
@@ -1421,41 +1581,49 @@ function App() {
                   </h2>
                   {selectedCategorie ? (
                     <div className="flex items-center gap-2">
-                      <div className={`w-5 h-5 rounded-full border border-black ${selectedCategorie.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                      <select
-                        value={selectedCategorie.is_visible ? 'Public' : 'Privé'}
-                        onChange={async (e) => {
-                          const val = e.target.value;
-                          const newVis = val === 'Public';
-                          if (!confirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`)) return;
-                          await toggleCategoriePublication(selectedCategorie.id, newVis);
-                        }}
-                        className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
-                      >
-                        <option value="Public">Public 📢</option>
-                        <option value="Privé">Privé 🔒</option>
-                      </select>
+                      {canEdit && (
+                        <div className={`w-5 h-5 rounded-full border border-black ${selectedCategorie.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      )}
+                      {canEdit && (
+                        <select
+                          value={selectedCategorie.is_visible ? 'Public' : 'Privé'}
+                          onChange={async (e) => {
+                            const val = e.target.value;
+                            const newVis = val === 'Public';
+                            if (!confirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`)) return;
+                            await toggleCategoriePublication(selectedCategorie.id, newVis);
+                          }}
+                          className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                        >
+                          <option value="Public">Public 📢</option>
+                          <option value="Privé">Privé 🔒</option>
+                        </select>
+                      )}
                     </div>
                   ) : (
                     <div className="flex items-center gap-2">
-                      <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                      <select
-                        value={selectedTheme.is_visible ? 'Public' : 'Privé'}
-                        onChange={async (e) => {
-                          const val = e.target.value;
-                          const newVis = val === 'Public';
-                          if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
-                          await toggleThemePublication(selectedTheme.id, newVis);
-                        }}
-                        className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
-                      >
-                        <option value="Public">Public 📢</option>
-                        <option value="Privé">Privé 🔒</option>
-                      </select>
+                      {canEdit && (
+                        <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      )}
+                      {canEdit && (
+                        <select
+                          value={selectedTheme.is_visible ? 'Public' : 'Privé'}
+                          onChange={async (e) => {
+                            const val = e.target.value;
+                            const newVis = val === 'Public';
+                            if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
+                            await toggleThemePublication(selectedTheme.id, newVis);
+                          }}
+                          className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                        >
+                          <option value="Public">Public 📢</option>
+                          <option value="Privé">Privé 🔒</option>
+                        </select>
+                      )}
                     </div>
                   )}
                 </div>
-                <button onClick={() => { setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
+                <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
               </div>
               
               {/* Affichage avec catégories ou sans */}
@@ -1467,7 +1635,7 @@ function App() {
                       key={st.id || i} 
                       onClick={async () => { 
                         try {
-                          const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                          const res = await axios.get(themesApiBase);
                           const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                           const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
                           setSelectedSubTheme(freshSubTheme);
@@ -1482,41 +1650,45 @@ function App() {
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
                       {st.nom}
-                      <div className="flex justify-center gap-2 mt-4 text-black">
-                        <button onClick={(e) => { 
-                          e.stopPropagation(); 
-                          const rect = e.currentTarget.getBoundingClientRect(); 
-                          const menuHeight = 200;
-                          const menuWidth = 192; // w-48
-                          const spaceBelow = window.innerHeight - rect.bottom;
-                          const spaceRight = window.innerWidth - rect.left;
-                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                          setSubActionMenuPos({ left, top }); 
-                          setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
-                          setOpenActionMenu(null); 
-                          setOpenThemeMenu(null);
-                          setOpenSubThemeMenu(null);
-                          setOpenCategorieMenu(null); 
-                        }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                        <button onClick={(e) => { 
-                          e.stopPropagation(); 
-                          const rect = e.currentTarget.getBoundingClientRect(); 
-                          const menuHeight = 150;
-                          const menuWidth = 192; // w-48
-                          const spaceBelow = window.innerHeight - rect.bottom;
-                          const spaceRight = window.innerWidth - rect.left;
-                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                          setSubThemeMenuPos({ left, top }); 
-                          setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
-                          setOpenSubActionMenu(null); 
-                          setOpenActionMenu(null); 
-                          setOpenThemeMenu(null);
-                          setOpenCategorieMenu(null);
-                        }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
-                      </div> 
-                      <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      {canEdit && (
+                        <div className="flex justify-center gap-2 mt-4 text-black">
+                          <button onClick={(e) => { 
+                            e.stopPropagation(); 
+                            const rect = e.currentTarget.getBoundingClientRect(); 
+                            const menuHeight = 200;
+                            const menuWidth = 192; // w-48
+                            const spaceBelow = window.innerHeight - rect.bottom;
+                            const spaceRight = window.innerWidth - rect.left;
+                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            setSubActionMenuPos({ left, top }); 
+                            setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                            setOpenActionMenu(null); 
+                            setOpenThemeMenu(null);
+                            setOpenSubThemeMenu(null);
+                            setOpenCategorieMenu(null); 
+                          }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                          <button onClick={(e) => { 
+                            e.stopPropagation(); 
+                            const rect = e.currentTarget.getBoundingClientRect(); 
+                            const menuHeight = 150;
+                            const menuWidth = 192; // w-48
+                            const spaceBelow = window.innerHeight - rect.bottom;
+                            const spaceRight = window.innerWidth - rect.left;
+                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            setSubThemeMenuPos({ left, top }); 
+                            setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                            setOpenSubActionMenu(null); 
+                            setOpenActionMenu(null); 
+                            setOpenThemeMenu(null);
+                            setOpenCategorieMenu(null);
+                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                        </div>
+                      )}
+                      {canEdit && (
+                        <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1539,20 +1711,26 @@ function App() {
                             </span>
                           </div>
                           <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                            <div className={`w-5 h-5 rounded-full border border-black ${cat.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                            <select
-                              value={cat.is_visible ? 'Public' : 'Privé'}
-                              onChange={async (e) => {
-                                const val = e.target.value;
-                                const newVis = val === 'Public';
-                                if (!confirm(`Changer la visibilité de la catégorie "${cat.nom}" et de tous ses sous-thèmes ?`)) return;
-                                await toggleCategoriePublication(cat.id, newVis);
-                              }}
-                              className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
-                            >
-                              <option value="Public">Public 📢</option>
-                              <option value="Privé">Privé 🔒</option>
-                            </select>
+                            {canEdit && (
+                              <>
+                                <div className={`w-5 h-5 rounded-full border border-black ${cat.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                                <select
+                                  value={cat.is_visible ? 'Public' : 'Privé'}
+                                  onChange={async (e) => {
+                                    const val = e.target.value;
+                                    const newVis = val === 'Public';
+                                    if (!confirm(`Changer la visibilité de la catégorie "${cat.nom}" et de tous ses sous-thèmes ?`)) return;
+                                    await toggleCategoriePublication(cat.id, newVis);
+                                  }}
+                                >
+                                  <option value="Public">Public</option>
+                                  <option value="Privé">Privé</option>
+                                </select>
+                              </>
+                            )}
+                            {!canEdit && (
+                              <div className="w-5 h-5 opacity-0" />
+                            )}
                           </div>
                         </div>
                         
@@ -1563,7 +1741,7 @@ function App() {
                                 key={st.id || i} 
                                 onClick={async () => { 
                                   try {
-                                    const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                                    const res = await axios.get(themesApiBase);
                                     const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                                     const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
                                     setSelectedSubTheme(freshSubTheme);
@@ -1578,38 +1756,42 @@ function App() {
                                   <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                                 )}
                                 {st.nom}
-                                <div className="flex justify-center gap-2 mt-4 text-black">
-                                  <button onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    const rect = e.currentTarget.getBoundingClientRect(); 
-                                    const menuHeight = 200;
-                                    const menuWidth = 192; // w-48
-                                    const spaceBelow = window.innerHeight - rect.bottom;
-                                    const spaceRight = window.innerWidth - rect.left;
-                                    const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                                    const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                                    setSubActionMenuPos({ left, top }); 
-                                    setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
-                                    setOpenActionMenu(null); 
-                                    setOpenThemeMenu(null); 
-                                  }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                                  <button onClick={(e) => { 
-                                    e.stopPropagation(); 
-                                    const rect = e.currentTarget.getBoundingClientRect(); 
-                                    const menuHeight = 150;
-                                    const menuWidth = 192; // w-48
-                                    const spaceBelow = window.innerHeight - rect.bottom;
-                                    const spaceRight = window.innerWidth - rect.left;
-                                    const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                                    const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                                    setSubThemeMenuPos({ left, top }); 
-                                    setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
-                                    setOpenSubActionMenu(null); 
-                                    setOpenActionMenu(null); 
-                                    setOpenThemeMenu(null); 
-                                  }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
-                                </div> 
-                                <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                                {canEdit && (
+                                  <div className="flex justify-center gap-2 mt-4 text-black">
+                                    <button onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      const rect = e.currentTarget.getBoundingClientRect(); 
+                                      const menuHeight = 200;
+                                      const menuWidth = 192; // w-48
+                                      const spaceBelow = window.innerHeight - rect.bottom;
+                                      const spaceRight = window.innerWidth - rect.left;
+                                      const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                                      const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                                      setSubActionMenuPos({ left, top }); 
+                                      setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                                      setOpenActionMenu(null); 
+                                      setOpenThemeMenu(null); 
+                                    }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                                    <button onClick={(e) => { 
+                                      e.stopPropagation(); 
+                                      const rect = e.currentTarget.getBoundingClientRect(); 
+                                      const menuHeight = 150;
+                                      const menuWidth = 192; // w-48
+                                      const spaceBelow = window.innerHeight - rect.bottom;
+                                      const spaceRight = window.innerWidth - rect.left;
+                                      const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                                      const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                                      setSubThemeMenuPos({ left, top }); 
+                                      setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                                      setOpenSubActionMenu(null); 
+                                      setOpenActionMenu(null); 
+                                      setOpenThemeMenu(null); 
+                                    }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                                  </div>
+                                )}
+                                {canEdit && (
+                                  <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                                )}
                               </div>
                             ))}
                           </div>
@@ -1626,7 +1808,7 @@ function App() {
                       key={st.id || i} 
                       onClick={async () => { 
                         try {
-                          const res = await axios.get('http://127.0.0.1:8000/api/themes/');
+                                  const res = await axios.get(themesApiBase);
                           const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                           const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
                           setSelectedSubTheme(freshSubTheme);
@@ -1641,38 +1823,42 @@ function App() {
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
                       {st.nom}
-                      <div className="flex justify-center gap-2 mt-4 text-black">
-                        <button onClick={(e) => { 
-                          e.stopPropagation(); 
-                          const rect = e.currentTarget.getBoundingClientRect(); 
-                          const menuHeight = 200;
-                          const menuWidth = 192; // w-48
-                          const spaceBelow = window.innerHeight - rect.bottom;
-                          const spaceRight = window.innerWidth - rect.left;
-                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                          setSubActionMenuPos({ left, top }); 
-                          setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
-                          setOpenActionMenu(null); 
-                          setOpenThemeMenu(null); 
-                        }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                        <button onClick={(e) => { 
-                          e.stopPropagation(); 
-                          const rect = e.currentTarget.getBoundingClientRect(); 
-                          const menuHeight = 150;
-                          const menuWidth = 192; // w-48
-                          const spaceBelow = window.innerHeight - rect.bottom;
-                          const spaceRight = window.innerWidth - rect.left;
-                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                          setSubThemeMenuPos({ left, top }); 
-                          setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
-                          setOpenSubActionMenu(null); 
-                          setOpenActionMenu(null); 
-                          setOpenThemeMenu(null); 
-                        }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
-                      </div> 
-                      <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      {canEdit && (
+                        <div className="flex justify-center gap-2 mt-4 text-black">
+                          <button onClick={(e) => { 
+                            e.stopPropagation(); 
+                            const rect = e.currentTarget.getBoundingClientRect(); 
+                            const menuHeight = 200;
+                            const menuWidth = 192; // w-48
+                            const spaceBelow = window.innerHeight - rect.bottom;
+                            const spaceRight = window.innerWidth - rect.left;
+                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            setSubActionMenuPos({ left, top }); 
+                            setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
+                            setOpenActionMenu(null); 
+                            setOpenThemeMenu(null); 
+                          }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                          <button onClick={(e) => { 
+                            e.stopPropagation(); 
+                            const rect = e.currentTarget.getBoundingClientRect(); 
+                            const menuHeight = 150;
+                            const menuWidth = 192; // w-48
+                            const spaceBelow = window.innerHeight - rect.bottom;
+                            const spaceRight = window.innerWidth - rect.left;
+                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            setSubThemeMenuPos({ left, top }); 
+                            setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
+                            setOpenSubActionMenu(null); 
+                            setOpenActionMenu(null); 
+                            setOpenThemeMenu(null); 
+                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                        </div>
+                      )}
+                      {canEdit && (
+                        <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1689,31 +1875,59 @@ function App() {
                   Sous thème : {selectedSubTheme.nom}
                 </h3>
                 <div className="flex items-center gap-3">
-                  <div className={`w-5 h-5 rounded-full border border-black ${selectedSubTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                  <select
-                    value={selectedSubTheme.is_visible ? 'Public' : 'Privé'}
-                    onChange={async (e) => {
-                      const val = e.target.value;
-                      const newVis = val === 'Public';
-                      if (!confirm('Changer le statut du sous-thème ?')) return;
-                      await toggleSubThemePublication(selectedSubTheme.id, newVis);
-                    }}
-                    className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none"
-                  >
-                    <option value="Public">Public 📢</option>
-                    <option value="Privé">Privé 🔒</option>
-                  </select>
-                  <button onClick={() => { setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
+                  {canEdit ? (
+                    <>
+                      <div className={`w-5 h-5 rounded-full border border-black ${selectedSubTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                      <select
+                        value={selectedSubTheme.is_visible ? 'Public' : 'Privé'}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          const newVis = val === 'Public';
+                          if (!confirm('Changer le statut du sous-thème ?')) return;
+                          await toggleSubThemePublication(selectedSubTheme.id, newVis);
+                        }}
+                        className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none"
+                      >
+                        <option value="Public">Public</option>
+                        <option value="Privé">Privé</option>
+                      </select>
+                    </>
+                  ) : (
+                    <div className="w-5 h-5 opacity-0" />
+                  )}
+
+                  {/* Bouton pour ouvrir la configuration Visiteur depuis la page du sous-thème */}
+                  {canEdit && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        // Ouvrir la modale localement sur cette page via événement global
+                        try {
+                          window.dispatchEvent(new CustomEvent('openVisitorConfig', { detail: selectedSubTheme.id }));
+                        } catch (err) {
+                          const ev = document.createEvent('CustomEvent');
+                          ev.initCustomEvent('openVisitorConfig', true, true, selectedSubTheme.id);
+                          window.dispatchEvent(ev);
+                        }
+                        showToast('Ouverture configuration visiteur', 'info');
+                      }}
+                      className="bg-red-600 text-white px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-red-700"
+                    >
+                      ⚙️ Visiteur
+                    </button>
+                  )}
+
+                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
                   <button onClick={() => setFormStep(3)} className="bg-orange-400 text-white px-4 py-1 border-2 border-black rounded-lg font-bold shadow-md">Fermer</button>
                 </div>
               </div>
 
               {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
-              {selectedSubTheme.filtres_disponibles && selectedSubTheme.filtres_disponibles.length > 0 && (
+              {filtersForRender && filtersForRender.length > 0 && (
                 <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3">
                   <h3 className="font-bold text-blue-900">🔍 Filtres Disponibles</h3>
                   <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
-                    {selectedSubTheme.filtres_disponibles.map(filterCol => (
+                    {filtersForRender.map(filterCol => (
                       <div key={filterCol}>
                         <label className="text-sm font-bold text-gray-700 block mb-1">{filterCol}</label>
                         <select
@@ -1733,7 +1947,9 @@ function App() {
               )}
 
               {/* BOUTON CONFIGURATION AVANCÉE */}
-              <button onClick={() => { setAdvancedConfig({ niveau_geo: selectedSubTheme?.niveau_geo || null, type_unite: selectedSubTheme?.type_unite || '', est_sommable: selectedSubTheme?.est_sommable ?? true, filtres_disponibles: selectedSubTheme?.filtres_disponibles || [] }); setShowAdvancedConfig(true); }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
+              {canEdit && (
+                <button onClick={(e) => { e.stopPropagation(); showToast('Ouverture configuration avancée', 'info'); setAdvancedConfig({ niveau_geo: selectedSubTheme?.niveau_geo || null, type_unite: selectedSubTheme?.type_unite || '', est_sommable: selectedSubTheme?.est_sommable ?? true, filtres_disponibles: selectedSubTheme?.filtres_disponibles || [] }); setShowAdvancedConfig(true); }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
+              )}
 
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
               <div className="space-y-4">
@@ -1741,7 +1957,7 @@ function App() {
                   <table className="w-full text-center border-collapse">
                     <thead className="bg-gray-100 border-b-2 border-black font-bold sticky top-0 z-10">
                       <tr>
-                        {selectedSubTheme.columns?.map(col => (
+                        {visibleColumnsForRender.map(col => (
                           <th key={col} className="p-2 border-r border-black min-w-[150px]">
                             <div className="text-blue-800 italic mb-2 uppercase text-[10px]">{col}</div>
                             <input 
@@ -1755,13 +1971,31 @@ function App() {
                       </tr>
                     </thead>
                     <tbody>
-                      {(showAll ? filteredData : filteredData.slice(0, 3)).map((row, i) => (
-                        <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
-                          {selectedSubTheme.columns?.map(col => (
-                            <td key={col} className="border-r border-gray-300 p-2 text-xs">{row[col]}</td>
-                          ))}
-                        </tr>
-                      ))}
+                      {(() => {
+                        const displayedRows = showAll ? filteredData : filteredData.slice(0, 3);
+                        return displayedRows.map((row, i) => {
+                          const prev = i > 0 ? displayedRows[i - 1] : null;
+                          return (
+                            <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
+                              {visibleColumnsForRender.map((col, idx) => {
+                                // hide the cell only if:
+                                // - there is a previous row
+                                // - the value in this column is identical to previous
+                                // - AND all columns to the left are identical between rows
+                                let hide = false;
+                                if (prev && prev[col] === row[col]) {
+                                  const leftCols = visibleColumnsForRender.slice(0, idx);
+                                  const allLeftEqual = leftCols.every(lc => prev[lc] === row[lc]);
+                                  hide = allLeftEqual;
+                                }
+                                return (
+                                  <td key={col} className="border-r border-gray-300 p-2 text-xs">{hide ? '' : row[col]}</td>
+                                );
+                              })}
+                            </tr>
+                          );
+                        });
+                      })()}
                     </tbody>
                   </table>
                 </div>
@@ -1770,7 +2004,9 @@ function App() {
                     {showAll ? "Réduire le tableau" : "Afficher tout le tableau"}
                   </button>
 
-                  <button onClick={openEditTable} className="bg-[#ffd56b] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Modifier le tableau</button>
+                  {canEdit && (
+                    <button onClick={openEditTable} className="bg-[#ffd56b] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Modifier le tableau</button>
+                  )}
 
                   <button onClick={exportTableCSV} className="bg-[#62a3ff] text-white px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Exporter le tableau</button>
                 </div>
@@ -1784,10 +2020,12 @@ function App() {
 
                     return (
                       <div key={chart.id} className="border-4 border-orange-400 p-6 rounded-2xl bg-white shadow-lg relative">
-                        <div className="absolute top-4 right-4 flex gap-2">
-                          <button onClick={() => openEditModal(chart)} className="bg-blue-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Modifier</button>
-                          <button onClick={() => deleteChart(chart.id)} className="bg-red-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Supprimer</button>
-                        </div>
+                        {canEdit && (
+                          <div className="absolute top-4 right-4 flex gap-2">
+                            <button onClick={() => openEditModal(chart)} className="bg-blue-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Modifier</button>
+                            <button onClick={() => deleteChart(chart.id)} className="bg-red-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Supprimer</button>
+                          </div>
+                        )}
                         
                         <div className="h-64 w-full mt-4">
                           <ResponsiveContainer width="100%" height="100%">
@@ -1839,15 +2077,17 @@ function App() {
                 </div>
 
                 {/* BOUTON DÉCLENCHEUR POP-UP */}
-                <button 
-                  onClick={() => {
-                    setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [] });
-                    setIsModalOpen(true);
-                  }}
-                  className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
-                >
-                  + Ajouter un Graphique
-                </button>
+                {canEdit && (
+                  <button 
+                    onClick={() => {
+                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [] });
+                      setIsModalOpen(true);
+                    }}
+                    className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
+                  >
+                    + Ajouter un Graphique
+                  </button>
+                )}
               </div>
             </div>
           )}
@@ -2143,40 +2383,15 @@ function App() {
         </div>
       )}
 
-      {showSubThemeMeta && (
-         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-             <h2 className="text-xl font-black mb-4 text-center">Métadonnées du sous-thème</h2>
-             <div className="grid grid-cols-1 gap-4">
-               <textarea placeholder="Définition" className="p-2 border-2 border-black rounded h-32" value={subThemeMeta.definition_text} onChange={e => setSubThemeMeta({...subThemeMeta, definition_text: e.target.value})} />
-               <div className="flex gap-4">
-                 <textarea placeholder="Unité" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.unite_text} onChange={e => setSubThemeMeta({...subThemeMeta, unite_text: e.target.value})} />
-                 <textarea placeholder="Périodicité" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.periodicite_text} onChange={e => setSubThemeMeta({...subThemeMeta, periodicite_text: e.target.value})} />
-               </div>
-               <textarea placeholder="Indication" className="p-2 border-2 border-black rounded h-20" value={subThemeMeta.indication_text} onChange={e => setSubThemeMeta({...subThemeMeta, indication_text: e.target.value})} />
-               <div className="flex gap-4">
-                 <textarea placeholder="Source" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.source_text} onChange={e => setSubThemeMeta({...subThemeMeta, source_text: e.target.value})} />
-                 <textarea placeholder="Couverture" className="flex-1 p-2 border-2 border-black rounded h-20" value={subThemeMeta.couverture_text} onChange={e => setSubThemeMeta({...subThemeMeta, couverture_text: e.target.value})} />
-               </div>
-             </div>
-             <div className="flex gap-4 mt-6">
-               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
-               <button onClick={saveSubThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">Enregistrer</button>
-             </div>
-           </div>
-         </div>
-      )}
-
-      {/* Popup Configuration Avancée */}
       {showAdvancedConfig && (
-        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black mb-4 text-center">⚙️ Configuration Avancée</h2>
-            <div className="grid grid-cols-1 gap-4">
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-[9999] p-4" onClick={(e) => e.stopPropagation()}>
+          <div className="bg-white border border-black p-6 rounded-2xl w-full max-w-xl max-h-[80vh] overflow-y-auto shadow-lg z-[10000]" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-bold text-center mb-4">⚙️ Configuration Avancée</h2>
+            <div className="space-y-4">
               <div>
                 <label className="block font-bold mb-2">Granularité Géographique</label>
-                <select 
-                  value={advancedConfig.niveau_geo || ''} 
+                <select
+                  value={advancedConfig.niveau_geo || ''}
                   onChange={e => setAdvancedConfig({...advancedConfig, niveau_geo: e.target.value || null})}
                   className="w-full p-2 border-2 border-black rounded bg-white outline-none"
                 >
@@ -2186,96 +2401,348 @@ function App() {
                   <option value="Communale">Communale</option>
                 </select>
               </div>
-              
+
               <div>
                 <label className="block font-bold mb-2">Type d'Unité</label>
-                <input 
-                  type="text" 
-                  placeholder="Ex: %, Effectif, DH, Km" 
-                  value={advancedConfig.type_unite || ''} 
+                <input
+                  type="text"
+                  placeholder="Ex: %, Effectif, DH, Km"
+                  value={advancedConfig.type_unite || ''}
                   onChange={e => setAdvancedConfig({...advancedConfig, type_unite: e.target.value})}
                   className="w-full p-2 border-2 border-black rounded outline-none"
                 />
               </div>
-              
-              <div>
-                <label className="flex items-center gap-3 cursor-pointer">
-                  <input 
-                    type="checkbox" 
-                    checked={advancedConfig.est_sommable ?? true}
-                    onChange={e => setAdvancedConfig({...advancedConfig, est_sommable: e.target.checked})}
-                    className="w-5 h-5 border-2 border-black rounded"
-                  />
-                  <span className="font-bold">Les données sont sommables (effectifs)<br/>Sinon: moyennes (taux/ratios)</span>
-                </label>
+
+              <div className="flex items-center gap-3">
+                <input
+                  id="est_sommable"
+                  type="checkbox"
+                  checked={advancedConfig.est_sommable ?? true}
+                  onChange={e => setAdvancedConfig({...advancedConfig, est_sommable: e.target.checked})}
+                  className="w-5 h-5 border-2 border-black rounded"
+                />
+                <label htmlFor="est_sommable" className="font-bold">Les données sont sommables (effectifs)</label>
               </div>
-              
+
               <div>
-                <label className="block font-bold mb-2">Colonnes disponibles pour filtrer</label>
-                <p className="text-sm text-gray-600 mb-2">(Séparées par des virgules)</p>
-                <input 
-                  type="text" 
-                  placeholder="Ex: Année, Sexe, Milieu, Région" 
+                <label className="block font-bold mb-2">Colonnes disponibles pour filtrer (séparées par des virgules)</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Année, Sexe, Milieu, Région"
                   value={Array.isArray(advancedConfig.filtres_disponibles) ? advancedConfig.filtres_disponibles.join(', ') : ''}
                   onChange={e => setAdvancedConfig({...advancedConfig, filtres_disponibles: e.target.value ? e.target.value.split(',').map(s => s.trim()) : []})}
                   className="w-full p-2 border-2 border-black rounded outline-none"
                 />
               </div>
             </div>
+
             <div className="flex gap-4 mt-6">
               <button onClick={() => setShowAdvancedConfig(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
-              <button onClick={() => { 
-                // Mettre à jour le sous-thème avec les configurations avancées
-                setSubThemeMeta({...subThemeMeta, niveau_geo: advancedConfig.niveau_geo, type_unite: advancedConfig.type_unite, est_sommable: advancedConfig.est_sommable, filtres_disponibles: advancedConfig.filtres_disponibles});
-                axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
-                  niveau_geo: advancedConfig.niveau_geo,
-                  type_unite: advancedConfig.type_unite,
-                  est_sommable: advancedConfig.est_sommable,
-                  filtres_disponibles: advancedConfig.filtres_disponibles
-                }).then(() => {
+              <button onClick={async () => {
+                try {
+                  // update local state
+                  setSubThemeMeta({...subThemeMeta, niveau_geo: advancedConfig.niveau_geo, type_unite: advancedConfig.type_unite, est_sommable: advancedConfig.est_sommable, filtres_disponibles: advancedConfig.filtres_disponibles});
+                  await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
+                    niveau_geo: advancedConfig.niveau_geo,
+                    type_unite: advancedConfig.type_unite,
+                    est_sommable: advancedConfig.est_sommable,
+                    filtres_disponibles: advancedConfig.filtres_disponibles
+                  });
                   showToast('Configuration avancée enregistrée', 'success');
                   setShowAdvancedConfig(false);
-                  // Rafraîchir le sous-thème
-                  const res = axios.get('http://127.0.0.1:8000/api/themes/');
-                  res.then(r => {
-                    setThemes(r.data);
-                    const freshTheme = r.data.find(t => t.id === selectedTheme?.id);
-                    if (freshTheme) setSelectedTheme(freshTheme);
-                    const freshSubTheme = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
-                    if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
-                  });
-                }).catch(err => {
+                  // refresh themes and selected subtheme
+                  const res = await axios.get(themesApiBase);
+                  setThemes(res.data);
+                  const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
+                  if (freshTheme) setSelectedTheme(freshTheme);
+                  const freshSubTheme = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
+                  if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
+                } catch (err) {
                   console.error(err);
                   showToast('Erreur lors de l\'enregistrement', 'error');
-                });
+                }
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">Enregistrer</button>
             </div>
           </div>
         </div>
       )}
 
-      {showThemeMeta && (
-         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-2xl max-h-[70vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-             <h2 className="text-xl font-black mb-4 text-center">Métadonnées du thème</h2>
-             <div className="grid grid-cols-1 gap-4">
-               <textarea placeholder="Définition" className="p-2 border-2 border-black rounded h-32" value={themeMeta.definition_text} onChange={e => setThemeMeta({...themeMeta, definition_text: e.target.value})} />
-               <div className="flex gap-4">
-                 <textarea placeholder="Unité" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.unite_text} onChange={e => setThemeMeta({...themeMeta, unite_text: e.target.value})} />
-                 <textarea placeholder="Périodicité" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.periodicite_text} onChange={e => setThemeMeta({...themeMeta, periodicite_text: e.target.value})} />
-               </div>
-               <textarea placeholder="Indication" className="p-2 border-2 border-black rounded h-20" value={themeMeta.indication_text} onChange={e => setThemeMeta({...themeMeta, indication_text: e.target.value})} />
-               <div className="flex gap-4">
-                 <textarea placeholder="Source" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.source_text} onChange={e => setThemeMeta({...themeMeta, source_text: e.target.value})} />
-                 <textarea placeholder="Couverture" className="flex-1 p-2 border-2 border-black rounded h-20" value={themeMeta.couverture_text} onChange={e => setThemeMeta({...themeMeta, couverture_text: e.target.value})} />
-               </div>
+      {showSubThemeMeta && (
+         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+           <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
+             <div className="bg-[#4a77b4] text-white rounded-t-lg px-4 py-3">
+               <h2 className="text-lg font-bold text-center">Métadonnées</h2>
              </div>
-             <div className="flex gap-4 mt-6">
-               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
-               <button onClick={saveThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">Enregistrer</button>
+             <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
+               {isVisitor ? (
+                 <div className="space-y-4">
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Définition</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{subThemeMeta.definition_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Unité</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.unite_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Périodicité</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.periodicite_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Indication</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{subThemeMeta.indication_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Source</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.source_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Couverture</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.couverture_text || '—'}</div>
+                   </div>
+                 </div>
+               ) : (
+                 <div className="space-y-4">
+                   <div>
+                     <div className="font-semibold">Définition</div>
+                     <textarea placeholder="Définition" className="mt-2 w-full p-2 border-2 border-black rounded min-h-[120px]" value={subThemeMeta.definition_text} onChange={e => setSubThemeMeta({...subThemeMeta, definition_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Unité</div>
+                     <textarea placeholder="Unité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.unite_text} onChange={e => setSubThemeMeta({...subThemeMeta, unite_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Périodicité</div>
+                     <textarea placeholder="Périodicité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.periodicite_text} onChange={e => setSubThemeMeta({...subThemeMeta, periodicite_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Indication</div>
+                     <textarea placeholder="Indication" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.indication_text} onChange={e => setSubThemeMeta({...subThemeMeta, indication_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Source</div>
+                     <textarea placeholder="Source" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.source_text} onChange={e => setSubThemeMeta({...subThemeMeta, source_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Couverture</div>
+                     <textarea placeholder="Couverture" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.couverture_text} onChange={e => setSubThemeMeta({...subThemeMeta, couverture_text: e.target.value})} />
+                   </div>
+                 </div>
+               )}
+
+              
+             </div>
+             <div className="flex gap-4 mt-4 px-4 pb-4">
+               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-[#4a77b4] text-white py-2 rounded-lg font-bold">Fermer</button>
+               {!isVisitor && <button onClick={saveSubThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">Enregistrer</button>}
              </div>
            </div>
          </div>
+      )}
+      {showThemeMeta && (
+         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+           <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
+             <div className="bg-[#4a77b4] text-white rounded-t-lg px-4 py-3">
+               <h2 className="text-lg font-bold text-center">Métadonnées</h2>
+             </div>
+             <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
+               {isVisitor ? (
+                 <div className="space-y-4">
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Définition</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{themeMeta.definition_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Unité</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.unite_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Périodicité</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.periodicite_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Indication</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{themeMeta.indication_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Source</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.source_text || '—'}</div>
+                   </div>
+                   <div>
+                     <div className="font-semibold text-[#23354a]">Couverture</div>
+                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.couverture_text || '—'}</div>
+                   </div>
+                 </div>
+               ) : (
+                 <div className="space-y-4">
+                   <div>
+                     <div className="font-semibold">Définition</div>
+                     <textarea placeholder="Définition" className="mt-2 w-full p-2 border-2 border-black rounded min-h-[120px]" value={themeMeta.definition_text} onChange={e => setThemeMeta({...themeMeta, definition_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Unité</div>
+                     <textarea placeholder="Unité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.unite_text} onChange={e => setThemeMeta({...themeMeta, unite_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Périodicité</div>
+                     <textarea placeholder="Périodicité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.periodicite_text} onChange={e => setThemeMeta({...themeMeta, periodicite_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Indication</div>
+                     <textarea placeholder="Indication" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.indication_text} onChange={e => setThemeMeta({...themeMeta, indication_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Source</div>
+                     <textarea placeholder="Source" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.source_text} onChange={e => setThemeMeta({...themeMeta, source_text: e.target.value})} />
+                   </div>
+                   <div>
+                     <div className="font-semibold">Couverture</div>
+                     <textarea placeholder="Couverture" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.couverture_text} onChange={e => setThemeMeta({...themeMeta, couverture_text: e.target.value})} />
+                   </div>
+                 </div>
+               )}
+             </div>
+             <div className="flex gap-4 mt-4 px-4 pb-4">
+               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-[#4a77b4] text-white py-2 rounded-lg font-bold">Fermer</button>
+               {!isVisitor && <button onClick={saveThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">Enregistrer</button>}
+             </div>
+           </div>
+         </div>
+      )}
+      
+
+      
+
+      {/* Visitor configuration modal (in-place) */}
+      {configModalOpen && configSubTheme && (
+        <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setConfigModalOpen(false)}>
+          <div className="bg-white border border-black p-6 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-y-auto shadow-lg" onClick={(e) => e.stopPropagation()}>
+            <h2 className="text-lg font-bold text-center mb-4">⚙️ Configuration Visiteur</h2>
+
+            <div className="space-y-4">
+              <div>
+                <label className="block font-bold mb-2">Colonnes visibles pour le visiteur</label>
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorCols.join(', ')} onChange={e => setModalVisitorCols(e.target.value ? e.target.value.split(',').map(s => s.trim()) : [])} />
+                <div className="text-sm italic text-gray-600">Séparer les noms de colonnes par des virgules.</div>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-2">Filtres disponibles</label>
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorFilters.join(', ')} onChange={e => setModalVisitorFilters(e.target.value ? e.target.value.split(',').map(s => s.trim()) : [])} />
+                <div className="text-sm italic text-gray-600">Colonnes que le visiteur peut utiliser pour filtrer.</div>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-2">Filtres par défaut</label>
+                {/* show a human-friendly string while keeping state as an object */}
+                {(() => {
+                  const formatDefaults = (val) => {
+                    if (!val) return '';
+                    if (typeof val === 'string') {
+                      try { val = JSON.parse(val); } catch (_) {}
+                    }
+                    if (typeof val === 'object' && val !== null) {
+                      return Object.entries(val).map(([k, v]) => `${k}=${v}`).join(', ');
+                    }
+                    return String(val);
+                  };
+
+                  const parseInputToObject = (txt) => {
+                    if (!txt && txt !== '') return {};
+                    if (typeof txt === 'object') return txt;
+                    try { return JSON.parse(txt); } catch (_) {}
+                    const obj = {};
+                    const parts = String(txt).split(',').map(p => p.trim()).filter(Boolean);
+                    parts.forEach(part => {
+                      const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+                      if (sep) {
+                        const [k, v] = part.split(sep).map(s => s.trim());
+                        if (k && v) obj[k] = v;
+                      }
+                    });
+                    return obj;
+                  };
+
+                  return (
+                    <input
+                      className="w-full p-2 border-2 border-black rounded"
+                      value={formatDefaults(modalVisitorDefaultFilters)}
+                      onChange={e => setModalVisitorDefaultFilters(parseInputToObject(e.target.value))}
+                      placeholder="Ex: Milieu=Total, Sexe=Masculin"
+                    />
+                  );
+                })()}
+                <div className="text-sm italic text-gray-600">Exemple: Milieu=Total ou Année=2020</div>
+              </div>
+            </div>
+
+            <div className="flex gap-4 mt-6">
+              <button onClick={() => setConfigModalOpen(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={async () => {
+                try {
+                  // normalize modalVisitorDefaultFilters before sending
+                  let parsedDefaults = modalVisitorDefaultFilters;
+                  if (typeof parsedDefaults === 'string' && parsedDefaults.trim()) {
+                    try {
+                      parsedDefaults = JSON.parse(parsedDefaults);
+                    } catch (e) {
+                      const obj = {};
+                      const parts = parsedDefaults.split(',').map(p => p.trim()).filter(Boolean);
+                      parts.forEach(part => {
+                        const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+                        if (sep) {
+                          const [k, v] = part.split(sep).map(s => s.trim());
+                          if (k && v) obj[k] = v;
+                        }
+                      });
+                      if (Object.keys(obj).length > 0) parsedDefaults = obj;
+                    }
+                  }
+
+                  const payload = {
+                    visitor_visible_columns: modalVisitorCols,
+                    visitor_filters: modalVisitorFilters,
+                    visitor_default_filters: parsedDefaults
+                  };
+                  await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`, payload);
+                  showToast('Configuration visiteur enregistrée', 'success');
+                  // fetch the updated sous-thème and update local state so the view refreshes immediately
+                  try {
+                    const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);
+                    const freshSubTheme = freshRes.data;
+                    setSelectedSubTheme(freshSubTheme);
+                    // also refresh the themes list to keep things in sync
+                    const res = await axios.get(themesApiBase);
+                    setThemes(res.data);
+                    const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
+                    if (freshTheme) setSelectedTheme(freshTheme);
+                    // additionally refresh public themes so visitor view can update if needed
+                    try {
+                      const pub = await axios.get('http://127.0.0.1:8000/api/public-themes/');
+                      setPublicThemes(pub.data);
+                      if (typeof window !== 'undefined' && window.location.pathname.includes('/visiteur')) {
+                        setThemes(pub.data);
+                        // try to find the subtheme in public payload and set it
+                        for (const t of pub.data || []) {
+                          const st = (t.sous_themes || []).find(s => String(s.id) === String(configSubTheme.id));
+                          if (st) { setSelectedSubTheme(st); break; }
+                        }
+                      }
+                    } catch (pubErr) {
+                      console.warn('Impossible de rafraîchir public-themes', pubErr);
+                    }
+                  } catch (refreshErr) {
+                    console.error('Erreur lors du rafraîchissement du sous-thème', refreshErr);
+                  }
+                  setConfigModalOpen(false);
+                } catch (err) {
+                  console.error(err);
+                  showToast('Erreur lors de l\'enregistrement', 'error');
+                }
+              }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Enregistrer</button>
+            </div>
+          </div>
+        </div>
       )}
 
       {/* Modal for Managing Chart Rows */}

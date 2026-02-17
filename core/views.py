@@ -8,7 +8,8 @@ from django.template.loader import render_to_string
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
-from rest_framework.permissions import IsAuthenticated
+from rest_framework.permissions import IsAuthenticated, AllowAny
+from django.db.models import Q
 from .models import Theme, Categorie, SousTheme, Indicateur, Donnee, CustomUser, UserThemeAssignment, UserRequest
 from .serializers import (
     ThemeSerializer, CategorieSerializer, SousThemeSerializer,
@@ -631,3 +632,38 @@ L'équipe HCP
         except Exception as e:
             logger.exception('Erreur réinitialisation mot de passe')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+
+class PublicThemeViewSet(viewsets.ReadOnlyModelViewSet):
+    """Endpoints publics en lecture seule pour les thèmes visibles.
+
+    On utilise des `Prefetch` pour s'assurer que les catégories et sous-thèmes
+    imbriqués exposés sont uniquement ceux marqués `is_visible=True`.
+    """
+    from django.db.models import Prefetch
+
+    queryset = Theme.objects.filter(is_visible=True, archived=False).prefetch_related(
+        Prefetch(
+            'categories',
+            queryset=Categorie.objects.filter(is_visible=True).prefetch_related(
+                Prefetch('sous_themes', queryset=SousTheme.objects.filter(is_visible=True, archived=False))
+            )
+        ),
+        Prefetch('sous_themes', queryset=SousTheme.objects.filter(is_visible=True, archived=False))
+    ).order_by('id')
+    serializer_class = ThemeSerializer
+    permission_classes = [AllowAny]
+
+
+class PublicSousThemeViewSet(viewsets.ReadOnlyModelViewSet):
+    """Endpoints publics en lecture seule pour les sous-thèmes visibles.
+
+    Les sous-thèmes sont retournés seulement s'ils sont `is_visible=True` et
+    si leur catégorie est publique (ou n'ont pas de catégorie).
+    """
+    queryset = SousTheme.objects.filter(
+        is_visible=True,
+        archived=False
+    ).filter(Q(categorie__isnull=True) | Q(categorie__is_visible=True)).order_by('id')
+    serializer_class = SousThemeSerializer
+    permission_classes = [AllowAny]

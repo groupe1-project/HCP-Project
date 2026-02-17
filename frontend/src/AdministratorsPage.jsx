@@ -33,6 +33,11 @@ const AdministratorsPage = () => {
   const [selectedSubTheme, setSelectedSubTheme] = useState(null);
   const [themes, setThemes] = useState([]);
   const [subThemes, setSubThemes] = useState([]);
+  const [configModalOpen, setConfigModalOpen] = useState(false);
+  const [configSubTheme, setConfigSubTheme] = useState(null);
+  const [modalVisitorCols, setModalVisitorCols] = useState([]);
+  const [modalVisitorFilters, setModalVisitorFilters] = useState([]);
+  const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   
@@ -70,6 +75,46 @@ const AdministratorsPage = () => {
     document.addEventListener('click', handleClickOutside);
     return () => document.removeEventListener('click', handleClickOutside);
   }, [openMenuId]);
+
+  // Écouter les demandes d'ouverture de la configuration visiteur depuis d'autres composants
+  useEffect(() => {
+    const handler = async (e) => {
+      try {
+        const subThemeId = e?.detail;
+        if (!subThemeId) return;
+
+        // S'assurer que les thèmes sont chargés
+        if (!themes || themes.length === 0) await fetchThemes();
+
+        // Chercher le sous-thème dans la liste locale
+        let found = null;
+        for (const t of themes || []) {
+          const st = (t.sous_themes || []).find(s => String(s.id) === String(subThemeId) || s.id === subThemeId);
+          if (st) { found = st; break; }
+        }
+
+        // Si non trouvé localement, tenter de le récupérer depuis l'API
+        if (!found) {
+          const res = await axios.get(`${API_BASE}/sousthemes/${subThemeId}/`);
+          found = res.data;
+        }
+
+        if (found) {
+          setConfigSubTheme(found);
+          setModalVisitorCols(found.visitor_visible_columns || []);
+          setModalVisitorFilters(found.visitor_filters || found.filtres_disponibles || []);
+          setModalVisitorDefaultFilters(found.visitor_default_filters || {});
+          setConfigModalOpen(true);
+          setActiveTab('themes');
+        }
+      } catch (err) {
+        console.error('Erreur lors de l\'ouverture de la configuration visiteur', err);
+      }
+    };
+
+    window.addEventListener('openVisitorConfig', handler);
+    return () => window.removeEventListener('openVisitorConfig', handler);
+  }, [themes]);
 
   const fetchSaisisseurs = async () => {
     try {
@@ -1127,7 +1172,10 @@ const AdministratorsPage = () => {
                             <div className="flex items-center">
                               <span className="text-blue-600 mr-2">└─</span>
                               <div>
-                                <div className="font-semibold text-gray-800">{subTheme.nom}</div>
+                                <div className="flex items-center gap-3">
+                                  <div className="font-semibold text-gray-800">{subTheme.nom}</div>
+                                  {/* 'Visiteur' button removed from admin themes list */}
+                                </div>
                                 <div className="text-xs text-gray-500">ID: {subTheme.id}</div>
                               </div>
                             </div>
@@ -1175,6 +1223,7 @@ const AdministratorsPage = () => {
                               >
                                 {subTheme.archived ? '↩' : '📦'}
                               </button>
+                                {/* 'Visiteur' button removed from admin actions */}
                             </div>
                           </td>
                         </tr>
@@ -1352,6 +1401,102 @@ const AdministratorsPage = () => {
               >
                 Fermer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal - Configuration Visiteur par Sous-thème */}
+      {configModalOpen && configSubTheme && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-black">Configurer la vue Visiteur — {configSubTheme.nom}</h2>
+              <button onClick={() => setConfigModalOpen(false)} className="text-gray-500 hover:text-gray-700 text-2xl">✕</button>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+              <div>
+                <label className="font-bold mb-2 block">Colonnes disponibles</label>
+                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded border">
+                  {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {})).map(c => (
+                    <label key={c} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" className="w-4 h-4" checked={modalVisitorCols.includes(c)} onChange={(e) => {
+                        if (e.target.checked) setModalVisitorCols(prev => Array.from(new Set([...prev, c])));
+                        else setModalVisitorCols(prev => prev.filter(x => x !== c));
+                      }} />
+                      <span>{c}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold mb-2 block">Filtres disponibles</label>
+                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded border">
+                  {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {})).map(c => (
+                    <label key={`f-${c}`} className="flex items-center gap-2 text-sm">
+                      <input type="checkbox" className="w-4 h-4" checked={modalVisitorFilters.includes(c)} onChange={(e) => {
+                        if (e.target.checked) setModalVisitorFilters(prev => Array.from(new Set([...prev, c])));
+                        else setModalVisitorFilters(prev => prev.filter(x => x !== c));
+                        if (!e.target.checked) setModalVisitorDefaultFilters(prev => { const copy = {...prev}; delete copy[c]; return copy; });
+                      }} />
+                      <span>{c}</span>
+                    </label>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold mb-2 block">Filtres par défaut</label>
+                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded border">
+                  {modalVisitorFilters.length === 0 && <div className="text-sm text-gray-600">Aucun filtre sélectionné</div>}
+                  {modalVisitorFilters.map(f => {
+                    const opts = Array.from(new Set((configSubTheme.data || []).map(r => r && r[f]).filter(v => v !== null && v !== undefined)));
+                    return (
+                      <div key={`d-${f}`} className="text-sm">
+                        <label className="block font-semibold">{f}</label>
+                        <select className="w-full p-2 rounded border" value={modalVisitorDefaultFilters[f] ?? ''} onChange={(e) => setModalVisitorDefaultFilters(prev => ({...prev, [f]: e.target.value}))}>
+                          <option value="">-- Aucun --</option>
+                          {opts.map(o => <option key={String(o)} value={String(o)}>{String(o)}</option>)}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+
+            <div className="flex gap-3 mt-6">
+              <button className="px-4 py-2 bg-green-500 text-white rounded font-bold" onClick={async () => {
+                try {
+                  const payload = {
+                    visitor_visible_columns: modalVisitorCols,
+                    visitor_filters: modalVisitorFilters,
+                    visitor_default_filters: modalVisitorDefaultFilters
+                  };
+                  await axios.patch(`${API_BASE}/sousthemes/${configSubTheme.id}/`, payload);
+                  // update local state
+                  setSubThemes(prev => prev.map(x => x.id === configSubTheme.id ? { ...x, ...payload } : x));
+                  // also update themes list to keep UI consistent
+                  setThemes(prev => prev.map(t => ({ ...t, sous_themes: t.sous_themes?.map(st => st.id === configSubTheme.id ? { ...st, ...payload } : st) })));
+                  setConfigModalOpen(false);
+                  alert('Configuration visiteur sauvegardée.');
+                } catch (err) {
+                  console.error('Erreur sauvegarde config visiteur', err);
+                  alert('Erreur lors de la sauvegarde');
+                }
+              }}>Enregistrer</button>
+
+              <button className="px-4 py-2 bg-gray-200 rounded font-bold" onClick={() => {
+                // reset modal to original values
+                setModalVisitorCols(configSubTheme.visitor_visible_columns || []);
+                setModalVisitorFilters(configSubTheme.visitor_filters || configSubTheme.filtres_disponibles || []);
+                setModalVisitorDefaultFilters(configSubTheme.visitor_default_filters || {});
+              }}>Recharger</button>
+
+              <div className="flex-1" />
+              <button className="px-4 py-2 bg-red-400 text-white rounded font-bold" onClick={() => setConfigModalOpen(false)}>Fermer</button>
             </div>
           </div>
         </div>

@@ -28,7 +28,26 @@ class SousThemeSerializer(serializers.ModelSerializer):
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
             # Nouveaux champs
             'niveau_geo', 'type_unite', 'est_sommable', 'filtres_disponibles'
+            , 'visitor_visible_columns', 'visitor_filters', 'visitor_default_filters'
         ]
+
+    def to_representation(self, instance):
+        # Use default representation then include visitor fields if present on the instance
+        rep = super().to_representation(instance)
+        # Add visitor fields (may be new)
+        try:
+            rep['visitor_visible_columns'] = instance.visitor_visible_columns or []
+        except Exception:
+            rep['visitor_visible_columns'] = []
+        try:
+            rep['visitor_filters'] = instance.visitor_filters or []
+        except Exception:
+            rep['visitor_filters'] = []
+        try:
+            rep['visitor_default_filters'] = instance.visitor_default_filters or {}
+        except Exception:
+            rep['visitor_default_filters'] = {}
+        return rep
 
     def get_data(self, obj):
         # Retourne le contenu JSON des données Excel

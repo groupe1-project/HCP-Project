@@ -1,7 +1,11 @@
 from django.contrib import admin
 from django.urls import path, include
 from rest_framework.routers import DefaultRouter
-from core.views import ThemeViewSet, CategorieViewSet, SousThemeViewSet, UserThemeAssignmentViewSet, UserRequestViewSet
+from core.views import (
+    ThemeViewSet, CategorieViewSet, SousThemeViewSet,
+    UserThemeAssignmentViewSet, UserRequestViewSet,
+    PublicThemeViewSet, PublicSousThemeViewSet
+)
 from core.user_views import UserViewSet
 from core.auth_views import login, logout, request_reset, reset_password
 
@@ -9,6 +13,8 @@ router = DefaultRouter()
 router.register(r'themes', ThemeViewSet)
 router.register(r'categories', CategorieViewSet)
 router.register(r'sousthemes', SousThemeViewSet)
+router.register(r'public-themes', PublicThemeViewSet, basename='public-theme')
+router.register(r'public-sousthemes', PublicSousThemeViewSet, basename='public-soustheme')
 router.register(r'users', UserViewSet)
 router.register(r'user-theme-assignments', UserThemeAssignmentViewSet)
 router.register(r'user-requests', UserRequestViewSet)
