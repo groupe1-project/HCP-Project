@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
 import LoginPage from './LoginPage';
 import AdministratorsPage from './AdministratorsPage';
 
@@ -74,7 +74,11 @@ function App({ forceVisitor = false }) {
     filter_value: '', 
     filter_mode: 'include',
     filters: [],  // Nouveaux filtres multiples
-    visible_filters: [] // chart-level visitor-visible filters
+    visible_filters: [], // chart-level visitor-visible filters
+    title: '',
+    x_label: '',
+    y_label: '',
+    group_by: ''
   });
   const [chartVisitorFilters, setChartVisitorFilters] = useState({});
   const [excludedRowIndices, setExcludedRowIndices] = useState({});
@@ -722,6 +726,26 @@ function App({ forceVisitor = false }) {
     return Array.from(values).sort();
   };
 
+  // Custom tooltip: hide series with zero value for cleaner display
+  const CustomTooltip = ({ active, payload, label }) => {
+    if (!active || !payload) return null;
+    // payload items: { name, value, color }
+    const items = payload.filter(p => p && Number(p.value) !== 0 && p.value !== null && p.value !== undefined);
+    if (!items || items.length === 0) return null;
+    return (
+      <div className="bg-white p-2 border border-gray-300 rounded shadow-lg">
+        <div className="font-bold mb-1">{label}</div>
+        {items.map((p, i) => (
+          <div key={i} className="flex items-center gap-2 text-sm">
+            <div style={{ width: 10, height: 10, background: p.color || p.fill || '#000' }} />
+            <div className="font-semibold">{p.name}</div>
+            <div className="ml-2">: {p.value}</div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const getFilteredChartData = (chart) => {
     const data = selectedSubTheme?.data || [];
     
@@ -835,6 +859,10 @@ function App({ forceVisitor = false }) {
           filter_mode: currentChartConfig.filter_mode,
           filters: currentChartConfig.filters || [],
           visible_filters: currentChartConfig.visible_filters || [],
+          title: currentChartConfig.title || '',
+          x_label: currentChartConfig.x_label || '',
+              y_label: currentChartConfig.y_label || '',
+              group_by: currentChartConfig.group_by || '',
         });
         const updated = res.data;
         setSavedCharts(prev => prev.map(c => c.id === updated.id ? updated : c));
@@ -850,6 +878,10 @@ function App({ forceVisitor = false }) {
           filter_mode: currentChartConfig.filter_mode,
           filters: currentChartConfig.filters || [],
           visible_filters: currentChartConfig.visible_filters || [],
+          title: currentChartConfig.title || '',
+          x_label: currentChartConfig.x_label || '',
+              y_label: currentChartConfig.y_label || '',
+              group_by: currentChartConfig.group_by || '',
         });
         const created = res.data;
         setSavedCharts(prev => [...prev, created]);
@@ -863,7 +895,7 @@ function App({ forceVisitor = false }) {
       setSavedCharts(freshSubTheme.charts_config || []);
 
       setIsModalOpen(false);
-      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [] });
+      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '', group_by: '' });
     } catch (err) {
       console.error('Erreur en sauvegarde du graphique', err);
       alert('Erreur lors de la sauvegarde du graphique');
@@ -2085,6 +2117,37 @@ function App({ forceVisitor = false }) {
                       });
                     }
 
+                    // If chart defines a grouping column, prepare multi-series data
+                    let multiSeries = null;
+                    if (chart.group_by) {
+                      const groupCol = chart.group_by;
+                      const groupValues = Array.from(new Set((chartData || []).map(r => String(r[groupCol] ?? '')))).filter(g => g !== '');
+                      const xValues = Array.from(new Set((chartData || []).map(r => String(r[chart.x] ?? '')))).sort();
+                      const aggregation = {}; // aggregation[x][group] = sum
+                      (chartData || []).forEach(r => {
+                        const xVal = String(r[chart.x] ?? 'N/A');
+                        const g = String(r[groupCol] ?? 'N/A');
+                        const raw = r[chart.y];
+                        const val = raw === null || raw === undefined || raw === '' ? 0 : parseFloat(String(raw).replace(/,/g, '.')) || 0;
+                        aggregation[xVal] = aggregation[xVal] || {};
+                        aggregation[xVal][g] = (aggregation[xVal][g] || 0) + val;
+                      });
+
+                      const seriesData = xValues.map(xVal => {
+                        const obj = { [chart.x]: xVal };
+                        groupValues.forEach(g => { obj[g] = (aggregation[xVal] && aggregation[xVal][g]) ? aggregation[xVal][g] : 0; });
+                        return obj;
+                      });
+
+                      // For scatter we prepare per-group arrays
+                      const seriesScatterData = {};
+                      groupValues.forEach(g => {
+                        seriesScatterData[g] = xValues.map(xVal => ({ [chart.x]: xVal, [chart.y]: (aggregation[xVal] && aggregation[xVal][g]) ? aggregation[xVal][g] : 0 }));
+                      });
+
+                      multiSeries = { seriesData, groupValues, seriesScatterData };
+                    }
+
                     return (
                       <div key={chart.id} className="border-4 border-orange-400 p-6 rounded-2xl bg-white shadow-lg relative">
                         {canEdit && (
@@ -2122,24 +2185,111 @@ function App({ forceVisitor = false }) {
                           </div>
                         )}
 
+                        {chart.title && (
+                          <h3 className="text-lg font-bold text-center mb-2">{chart.title}</h3>
+                        )}
+
                         <div className="h-64 w-full mt-4">
                           <ResponsiveContainer width="100%" height="100%">
                             {chart.type === 'Histogramme' ? (
-                              <BarChart data={chartData}>
-                                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis label={{ value: selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} /><Tooltip /><Bar dataKey={chart.y} fill="#4a77b4" />
-                              </BarChart>
+                              multiSeries ? (
+                                (() => {
+                                  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91', '#6B7280', '#10B981'];
+                                  return (
+                                    <BarChart data={multiSeries.seriesData}>
+                                      <CartesianGrid strokeDasharray="3 3" />
+                                      <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
+                                      <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                      <Tooltip content={<CustomTooltip />} />
+                                      <Legend />
+                                      {multiSeries.groupValues.map((g, idx) => (
+                                        <Bar key={g} dataKey={g} fill={COLORS[idx % COLORS.length]} />
+                                      ))}
+                                    </BarChart>
+                                  );
+                                })()
+                              ) : (
+                                <BarChart data={chartData} barCategoryGap="18%" barGap={6}>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
+                                  <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                  <Tooltip content={<CustomTooltip />} />
+                                  <Bar dataKey={chart.y} fill="#4a77b4" />
+                                </BarChart>
+                              )
                             ) : chart.type === 'Courbes' ? (
-                              <LineChart data={chartData}>
-                                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis label={{ value: selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} /><Tooltip /><Line type="monotone" dataKey={chart.y} stroke="#4a77b4" strokeWidth={3} />
-                              </LineChart>
+                              multiSeries ? (
+                                (() => {
+                                  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91', '#6B7280', '#10B981'];
+                                  return (
+                                    <LineChart data={multiSeries.seriesData}>
+                                      <CartesianGrid strokeDasharray="3 3" />
+                                      <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
+                                      <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                      <Tooltip content={<CustomTooltip />} />
+                                      <Legend />
+                                      {multiSeries.groupValues.map((g, idx) => (
+                                        <Line key={g} type="monotone" dataKey={g} stroke={COLORS[idx % COLORS.length]} strokeWidth={3} dot={false} />
+                                      ))}
+                                    </LineChart>
+                                  );
+                                })()
+                              ) : (
+                                <LineChart data={chartData}>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
+                                  <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                  <Tooltip content={<CustomTooltip />} />
+                                  <Line type="monotone" dataKey={chart.y} stroke="#4a77b4" strokeWidth={3} />
+                                </LineChart>
+                              )
                             ) : chart.type === 'Nuage de points' ? (
-                              <ScatterChart>
-                                <CartesianGrid strokeDasharray="3 3" /><XAxis dataKey={chart.x} /><YAxis dataKey={chart.y} label={{ value: selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} /><Tooltip />
-                                <Scatter data={chartData} fill="#4a77b4" />
-                              </ScatterChart>
+                              multiSeries ? (
+                                (() => {
+                                  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91', '#6B7280', '#10B981'];
+                                  return (
+                                    <ScatterChart>
+                                      <CartesianGrid strokeDasharray="3 3" />
+                                      <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
+                                      <YAxis dataKey={chart.y} label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                      <Tooltip content={<CustomTooltip />} />
+                                      <Legend />
+                                      {multiSeries.groupValues.map((g, idx) => (
+                                        <Scatter key={g} name={g} data={multiSeries.seriesScatterData[g]} fill={COLORS[idx % COLORS.length]} />
+                                      ))}
+                                    </ScatterChart>
+                                  );
+                                })()
+                              ) : (
+                                <ScatterChart>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
+                                  <YAxis dataKey={chart.y} label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                  <Tooltip content={<CustomTooltip />} />
+                                  <Scatter data={chartData} fill="#4a77b4" />
+                                </ScatterChart>
+                              )
                             ) : chart.type === 'Secteur' ? (
                               (() => {
                                 const map = {};
+                                if (multiSeries) {
+                                  // aggregate across all X to get totals per group
+                                  const pieData = multiSeries.groupValues.map(g => {
+                                    let total = 0;
+                                    multiSeries.seriesData.forEach(d => { total += Number(d[g] || 0); });
+                                    return { name: g, value: total };
+                                  }).filter(d => d.value > 0);
+                                  const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
+                                  return (
+                                    <PieChart>
+                                      <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8" label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                                        {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
+                                      </Pie>
+                                        <Tooltip content={<CustomTooltip />} />
+                                      <Legend />
+                                    </PieChart>
+                                  );
+                                }
                                 chartData.forEach(r => {
                                   const key = r[chart.x] ?? 'N/A';
                                   const val = parseFloat(r[chart.y]) || 0;
@@ -2149,10 +2299,10 @@ function App({ forceVisitor = false }) {
                                 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
                                 return (
                                   <PieChart>
-                                    <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8">
+                                    <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8" label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}>
                                       {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
                                     </Pie>
-                                    <Tooltip />
+                                    <Tooltip content={<CustomTooltip />} />
                                   </PieChart>
                                 );
                               })()
@@ -2175,7 +2325,7 @@ function App({ forceVisitor = false }) {
                 {canEdit && (
                   <button 
                     onClick={() => {
-                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [] });
+                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '' });
                       setIsModalOpen(true);
                     }}
                     className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
@@ -2478,6 +2628,60 @@ function App({ forceVisitor = false }) {
                   onChange={e => setCurrentChartConfig({...currentChartConfig, mesure: e.target.value})}
                   placeholder="Expliquez ce graphique..."
                 />
+              </div>
+
+              <div className="grid grid-cols-1 gap-3">
+                <div>
+                  <label className="block font-bold mb-1">Titre du graphique (affiché au-dessus) :</label>
+                  <input
+                    type="text"
+                    className="w-full p-2 border-2 border-black rounded-lg bg-white"
+                    value={currentChartConfig.title || ''}
+                    onChange={e => setCurrentChartConfig({...currentChartConfig, title: e.target.value})}
+                    placeholder="Titre du graphique"
+                  />
+                </div>
+
+              <div className="p-4 bg-green-50 border-2 border-green-300 rounded-lg space-y-3">
+                <label className="block font-bold mb-1">Grouper par colonne (crée plusieurs séries)</label>
+                <select
+                  className="w-full p-2 border-2 border-green-300 rounded bg-white"
+                  value={currentChartConfig.group_by || ''}
+                  onChange={e => setCurrentChartConfig({...currentChartConfig, group_by: e.target.value})}
+                >
+                  <option value="">-- Aucun --</option>
+                  {selectedSubTheme.columns?.map(c => (
+                    <option key={c} value={c} disabled={c === currentChartConfig.x}>{c}{c === currentChartConfig.x ? ' (disable : same as X)' : ''}</option>
+                  ))}
+                </select>
+                {currentChartConfig.group_by === currentChartConfig.x && currentChartConfig.group_by !== '' && (
+                  <div className="text-sm text-red-600 mt-1">Le groupement sur la même colonne que l'axe X produit des séries avec beaucoup de zéros — choisissez une colonne différente (ex: Province).</div>
+                )}
+                <div className="text-xs italic text-gray-600">Sélectionnez une colonne dont les valeurs définiront une courbe/série distincte (ex: Province).</div>
+              </div>
+
+                <div className="flex gap-3">
+                  <div className="flex-1">
+                    <label className="block font-bold mb-1">Label Axe X (optionnel)</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border-2 border-black rounded-lg bg-white"
+                      value={currentChartConfig.x_label || ''}
+                      onChange={e => setCurrentChartConfig({...currentChartConfig, x_label: e.target.value})}
+                      placeholder="Ex: Année, Catégorie"
+                    />
+                  </div>
+                  <div className="flex-1">
+                    <label className="block font-bold mb-1">Label Axe Y (optionnel)</label>
+                    <input
+                      type="text"
+                      className="w-full p-2 border-2 border-black rounded-lg bg-white"
+                      value={currentChartConfig.y_label || ''}
+                      onChange={e => setCurrentChartConfig({...currentChartConfig, y_label: e.target.value})}
+                      placeholder="Ex: Valeur (%), Effectif"
+                    />
+                  </div>
+                </div>
               </div>
             </div>
 

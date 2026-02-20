@@ -71,6 +71,10 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             'filters': data.get('filters', []),
             # chart-level visitor-visible filters (array of {column, default} or simple column names)
             'visible_filters': data.get('visible_filters', []),
+            'title': data.get('title', ''),
+            'x_label': data.get('x_label', ''),
+            'y_label': data.get('y_label', ''),
+            'group_by': data.get('group_by', ''),
         }
         config = st.charts_config or []
         config.append(new_chart)
@@ -101,6 +105,10 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     ch['excluded_rows'] = data.get('excluded_rows', ch.get('excluded_rows', []))
                     ch['filters'] = data.get('filters', ch.get('filters', []))
                     ch['visible_filters'] = data.get('visible_filters', ch.get('visible_filters', []))
+                    ch['title'] = data.get('title', ch.get('title', ''))
+                    ch['x_label'] = data.get('x_label', ch.get('x_label', ''))
+                    ch['y_label'] = data.get('y_label', ch.get('y_label', ''))
+                    ch['group_by'] = data.get('group_by', ch.get('group_by', ''))
                     config[i] = ch
                     st.charts_config = config
                     st.save()

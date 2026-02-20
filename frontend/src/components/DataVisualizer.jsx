@@ -62,6 +62,25 @@ export default function DataVisualizer({
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Local tooltip: hide zero-valued entries for a cleaner display
+  const CustomTooltipLocal = ({ active, payload, label }) => {
+    if (!active || !payload) return null;
+    const items = payload.filter(p => p && Number(p.value) !== 0 && p.value !== null && p.value !== undefined);
+    if (!items || items.length === 0) return null;
+    return (
+      <div className="bg-white p-2 border border-gray-300 rounded shadow-lg">
+        <div className="font-bold mb-1">{label}</div>
+        {items.map((p, i) => (
+          <div key={i} className="flex items-center gap-2 text-sm">
+            <div style={{ width: 10, height: 10, background: p.color || p.fill || '#000' }} />
+            <div className="font-semibold">{p.name || 'Valeur'}</div>
+            <div className="ml-2">: {p.value}</div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
   const filteredRows = useMemo(() => {
     if (!data_json || !Array.isArray(data_json)) return [];
     return data_json.filter(row => {
@@ -187,7 +206,7 @@ export default function DataVisualizer({
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey={labelColumn} />
               <YAxis />
-              <Tooltip />
+              <Tooltip content={<CustomTooltipLocal />} />
               <Bar dataKey="value" fill="#4a77b4" />
             </BarChart>
           </ResponsiveContainer>
