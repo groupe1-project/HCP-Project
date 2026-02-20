@@ -2587,7 +2587,11 @@ function App({ forceVisitor = false }) {
                   type="text"
                   placeholder="Ex: Année, Sexe, Milieu, Région"
                   value={Array.isArray(advancedConfig.filtres_disponibles) ? advancedConfig.filtres_disponibles.join(', ') : ''}
-                  onChange={e => setAdvancedConfig({...advancedConfig, filtres_disponibles: e.target.value ? e.target.value.split(',').map(s => s.trim()) : []})}
+                  onChange={e => {
+                    const txt = e.target.value || '';
+                    const arr = txt.split(',').map(s => s.trim()).filter(s => s !== '');
+                    setAdvancedConfig({...advancedConfig, filtres_disponibles: arr});
+                  }}
                   className="w-full p-2 border-2 border-black rounded outline-none"
                 />
               </div>
@@ -2779,13 +2783,21 @@ function App({ forceVisitor = false }) {
             <div className="space-y-4">
               <div>
                 <label className="block font-bold mb-2">Colonnes visibles pour le visiteur</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorCols.join(', ')} onChange={e => setModalVisitorCols(e.target.value ? e.target.value.split(',').map(s => s.trim()) : [])} />
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorCols.join(', ')} onChange={e => {
+                  const txt = e.target.value || '';
+                  const arr = txt.split(',').map(s => s.trim()).filter(s => s !== '');
+                  setModalVisitorCols(arr);
+                }} />
                 <div className="text-sm italic text-gray-600">Séparer les noms de colonnes par des virgules.</div>
               </div>
 
               <div>
                 <label className="block font-bold mb-2">Filtres disponibles</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorFilters.join(', ')} onChange={e => setModalVisitorFilters(e.target.value ? e.target.value.split(',').map(s => s.trim()) : [])} />
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorFilters.join(', ')} onChange={e => {
+                  const txt = e.target.value || '';
+                  const arr = txt.split(',').map(s => s.trim()).filter(s => s !== '');
+                  setModalVisitorFilters(arr);
+                }} />
                 <div className="text-sm italic text-gray-600">Colonnes que le visiteur peut utiliser pour filtrer.</div>
               </div>
 
