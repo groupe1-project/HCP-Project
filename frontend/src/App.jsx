@@ -51,10 +51,13 @@ function App({ forceVisitor = false }) {
   const [subThemeMeta, setSubThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   const [advancedConfig, setAdvancedConfig] = useState({ niveau_geo: null, type_unite: '', est_sommable: true, filtres_disponibles: [] });
+  const [advancedConfigFiltersText, setAdvancedConfigFiltersText] = useState('');
   const [configModalOpen, setConfigModalOpen] = useState(false);
   const [configSubTheme, setConfigSubTheme] = useState(null);
   const [modalVisitorCols, setModalVisitorCols] = useState([]);
   const [modalVisitorFilters, setModalVisitorFilters] = useState([]);
+  const [modalVisitorColsText, setModalVisitorColsText] = useState('');
+  const [modalVisitorFiltersText, setModalVisitorFiltersText] = useState('');
   const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
   const [publicThemes, setPublicThemes] = useState([]);
   const [showEditTable, setShowEditTable] = useState(false);
@@ -178,8 +181,12 @@ function App({ forceVisitor = false }) {
         };
 
         setConfigSubTheme(found);
-        setModalVisitorCols(found.visitor_visible_columns || []);
-        setModalVisitorFilters(found.visitor_filters || found.filtres_disponibles || []);
+        const cols = found.visitor_visible_columns || [];
+        const filters = found.visitor_filters || found.filtres_disponibles || [];
+        setModalVisitorCols(cols);
+        setModalVisitorFilters(filters);
+        setModalVisitorColsText(Array.isArray(cols) ? cols.join(', ') : String(cols || ''));
+        setModalVisitorFiltersText(Array.isArray(filters) ? filters.join(', ') : String(filters || ''));
         setModalVisitorDefaultFilters(parseDefaultsString(found.visitor_default_filters || {}));
         setConfigModalOpen(true);
       } catch (err) {
@@ -2004,7 +2011,14 @@ function App({ forceVisitor = false }) {
 
               {/* BOUTON CONFIGURATION AVANCÉE */}
               {canEdit && (
-                <button onClick={(e) => { e.stopPropagation(); showToast('Ouverture configuration avancée', 'info'); setAdvancedConfig({ niveau_geo: selectedSubTheme?.niveau_geo || null, type_unite: selectedSubTheme?.type_unite || '', est_sommable: selectedSubTheme?.est_sommable ?? true, filtres_disponibles: selectedSubTheme?.filtres_disponibles || [] }); setShowAdvancedConfig(true); }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
+                <button onClick={(e) => { 
+                    e.stopPropagation(); 
+                    showToast('Ouverture configuration avancée', 'info'); 
+                    const init = { niveau_geo: selectedSubTheme?.niveau_geo || null, type_unite: selectedSubTheme?.type_unite || '', est_sommable: selectedSubTheme?.est_sommable ?? true, filtres_disponibles: selectedSubTheme?.filtres_disponibles || [] };
+                    setAdvancedConfig(init); 
+                    setAdvancedConfigFiltersText(Array.isArray(init.filtres_disponibles) ? init.filtres_disponibles.join(', ') : String(init.filtres_disponibles || ''));
+                    setShowAdvancedConfig(true); 
+                  }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
               )}
 
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
@@ -2790,12 +2804,8 @@ function App({ forceVisitor = false }) {
                 <input
                   type="text"
                   placeholder="Ex: Année, Sexe, Milieu, Région"
-                  value={Array.isArray(advancedConfig.filtres_disponibles) ? advancedConfig.filtres_disponibles.join(', ') : ''}
-                  onChange={e => {
-                    const txt = e.target.value || '';
-                    const arr = txt.split(',').map(s => s.trim()).filter(s => s !== '');
-                    setAdvancedConfig({...advancedConfig, filtres_disponibles: arr});
-                  }}
+                  value={advancedConfigFiltersText}
+                  onChange={e => setAdvancedConfigFiltersText(e.target.value)}
                   className="w-full p-2 border-2 border-black rounded outline-none"
                 />
               </div>
@@ -2806,13 +2816,17 @@ function App({ forceVisitor = false }) {
               <button onClick={async () => {
                 try {
                   // update local state
-                  setSubThemeMeta({...subThemeMeta, niveau_geo: advancedConfig.niveau_geo, type_unite: advancedConfig.type_unite, est_sommable: advancedConfig.est_sommable, filtres_disponibles: advancedConfig.filtres_disponibles});
+                  // parse filters text into array before saving
+                  const parsed = String(advancedConfigFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== '');
+                  setSubThemeMeta({...subThemeMeta, niveau_geo: advancedConfig.niveau_geo, type_unite: advancedConfig.type_unite, est_sommable: advancedConfig.est_sommable, filtres_disponibles: parsed});
                   await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
                     niveau_geo: advancedConfig.niveau_geo,
                     type_unite: advancedConfig.type_unite,
                     est_sommable: advancedConfig.est_sommable,
-                    filtres_disponibles: advancedConfig.filtres_disponibles
+                    filtres_disponibles: parsed
                   });
+                  // keep advancedConfig synced
+                  setAdvancedConfig(prev => ({ ...prev, filtres_disponibles: parsed }));
                   showToast('Configuration avancée enregistrée', 'success');
                   setShowAdvancedConfig(false);
                   // refresh themes and selected subtheme
@@ -2987,22 +3001,14 @@ function App({ forceVisitor = false }) {
             <div className="space-y-4">
               <div>
                 <label className="block font-bold mb-2">Colonnes visibles pour le visiteur</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorCols.join(', ')} onChange={e => {
-                  const txt = e.target.value || '';
-                  const arr = txt.split(',').map(s => s.trim()).filter(s => s !== '');
-                  setModalVisitorCols(arr);
-                }} />
-                <div className="text-sm italic text-gray-600">Séparer les noms de colonnes par des virgules.</div>
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorColsText} onChange={e => setModalVisitorColsText(e.target.value)} />
+                <div className="text-sm italic text-gray-600">Séparer les noms de colonnes par des virgules. (Le texte est conservé tant que vous n'enregistrez pas.)</div>
               </div>
 
               <div>
                 <label className="block font-bold mb-2">Filtres disponibles</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorFilters.join(', ')} onChange={e => {
-                  const txt = e.target.value || '';
-                  const arr = txt.split(',').map(s => s.trim()).filter(s => s !== '');
-                  setModalVisitorFilters(arr);
-                }} />
-                <div className="text-sm italic text-gray-600">Colonnes que le visiteur peut utiliser pour filtrer.</div>
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorFiltersText} onChange={e => setModalVisitorFiltersText(e.target.value)} />
+                <div className="text-sm italic text-gray-600">Colonnes que le visiteur peut utiliser pour filtrer. (Le texte est conservé tant que vous n'enregistrez pas.)</div>
               </div>
 
               <div>
@@ -3072,13 +3078,22 @@ function App({ forceVisitor = false }) {
                     }
                   }
 
+                  // parse the text fields into arrays (only on save)
+                  const parsedCols = String(modalVisitorColsText || '').split(',').map(s => s.trim()).filter(s => s !== '');
+                  const parsedFilters = String(modalVisitorFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== '');
+
                   const payload = {
-                    visitor_visible_columns: modalVisitorCols,
-                    visitor_filters: modalVisitorFilters,
+                    visitor_visible_columns: parsedCols,
+                    visitor_filters: parsedFilters,
                     visitor_default_filters: parsedDefaults
                   };
                   await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`, payload);
                   showToast('Configuration visiteur enregistrée', 'success');
+                  // update local text/array states to reflect saved values
+                  setModalVisitorCols(parsedCols);
+                  setModalVisitorFilters(parsedFilters);
+                  setModalVisitorColsText(parsedCols.join(', '));
+                  setModalVisitorFiltersText(parsedFilters.join(', '));
                   // fetch the updated sous-thème and update local state so the view refreshes immediately
                   try {
                     const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);
