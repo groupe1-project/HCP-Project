@@ -65,6 +65,8 @@ function App({ forceVisitor = false }) {
   const [showAll, setShowAll] = useState(false);
   const [columnFilters, setColumnFilters] = useState({});
   const [dynamicFilters, setDynamicFilters] = useState({});
+  const [openFilter, setOpenFilter] = useState(null);
+  const [tempFilterSelection, setTempFilterSelection] = useState({});
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [savedCharts, setSavedCharts] = useState([]);
   const [currentChartConfig, setCurrentChartConfig] = useState({ 
@@ -129,6 +131,7 @@ function App({ forceVisitor = false }) {
       setOpenSubActionMenu(null);
       setOpenSubThemeMenu(null);
       setOpenCategorieMenu(null);
+      setOpenFilter(null);
     };
     document.addEventListener('click', handler);
     return () => document.removeEventListener('click', handler);
@@ -238,7 +241,9 @@ function App({ forceVisitor = false }) {
     if (!selectedSubTheme) return;
     // If visitor view, prefer visitor_filters and apply visitor_default_filters
     if (isVisitor) {
-      const vf = selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
+      const rawVf = selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
+      // normalize to array of column names (strings)
+      const vf = (rawVf || []).map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
       // initialize dynamicFilters with defaults where provided
       let defaults = selectedSubTheme.visitor_default_filters || {};
       // If defaults is a string (admin typed plain text), try to parse JSON or 'key=value' pairs or apply heuristics
@@ -796,8 +801,14 @@ function App({ forceVisitor = false }) {
     // Filtre par valeurs sélectionnées (dynamicFilters basé sur filtres_disponibles)
     const passesDynamicFilters = Object.keys(dynamicFilters).every(key => {
       const selectedValue = dynamicFilters[key];
-      if (!selectedValue) return true; // Pas de filtre sélectionné
-      return String(row[key] || '') === selectedValue;
+      if (selectedValue === null || selectedValue === undefined) return true;
+      // support arrays (multi-select) and single-value for backward compatibility
+      if (Array.isArray(selectedValue)) {
+        if (selectedValue.length === 0) return true;
+        return selectedValue.map(String).includes(String(row[key] || ''));
+      }
+      if (selectedValue === '') return true;
+      return String(row[key] || '') === String(selectedValue);
     });
     
     return passesTextFilter && passesDynamicFilters;
@@ -814,7 +825,8 @@ function App({ forceVisitor = false }) {
   const filtersForRender = React.useMemo(() => {
     if (!selectedSubTheme) return [];
     if (isVisitor) {
-      return (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
+      const raw = (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
+      return (raw || []).map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
     }
     return selectedSubTheme.filtres_disponibles || [];
   }, [selectedSubTheme, isVisitor]);
@@ -1991,18 +2003,85 @@ function App({ forceVisitor = false }) {
                   <h3 className="font-bold text-blue-900">🔍 Filtres Disponibles</h3>
                   <div className="flex gap-3">
                     {filtersForRender.map(filterCol => (
-                      <div key={filterCol}>
+                      <div key={filterCol} className="relative">
                         <label className="text-sm font-bold text-gray-700 block mb-1">{filterCol}</label>
-                        <select
-                          value={dynamicFilters[filterCol] || ''}
-                          onChange={(e) => setDynamicFilters({...dynamicFilters, [filterCol]: e.target.value})}
-                          className="w-40 p-2 border-2 border-blue-300 rounded bg-white outline-none text-sm"
+                        <button
+                          type="button"
+                          className="w-40 text-left p-2 border-2 border-blue-300 rounded bg-white outline-none text-sm"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            // open popover and init temp selection from dynamicFilters
+                            setOpenFilter(filterCol);
+                            setTempFilterSelection(prev => {
+                              const raw = dynamicFilters[filterCol];
+                              const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+                              return { ...(prev || {}), [filterCol]: new Set(arr.map(String)) };
+                            });
+                          }}
                         >
-                          <option value="">-- Tous --</option>
-                          {getUniqueValuesForColumn(filterCol).map(val => (
-                            <option key={val} value={val}>{val}</option>
-                          ))}
-                        </select>
+                          {(() => {
+                            const cur = dynamicFilters[filterCol];
+                            if (Array.isArray(cur) && cur.length > 0) return `${cur.length} sélectionné(s)`;
+                            if (cur && !Array.isArray(cur)) return String(cur);
+                            return '-- Tous --';
+                          })()}
+                        </button>
+
+                        {openFilter === filterCol && (
+                          <div className="absolute z-50 left-0 top-full mt-1 bg-white border-2 border-blue-300 rounded-lg shadow-lg p-3 w-64 max-h-56 overflow-auto">
+                            <div className="flex flex-col gap-1">
+                              {getUniqueValuesForColumn(filterCol).map(val => {
+                                const set = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
+                                const checked = set.has(String(val));
+                                return (
+                                  <label key={val} className="flex items-center gap-2 text-sm">
+                                    <input
+                                      type="checkbox"
+                                      checked={checked}
+                                      onChange={(ev) => {
+                                        ev.stopPropagation();
+                                        setTempFilterSelection(prev => {
+                                          const copy = { ...(prev || {}) };
+                                          const s = new Set(copy[filterCol] || []);
+                                          if (s.has(String(val))) s.delete(String(val)); else s.add(String(val));
+                                          copy[filterCol] = s;
+                                          return copy;
+                                        });
+                                      }}
+                                    />
+                                    <span>{val}</span>
+                                  </label>
+                                );
+                              })}
+                            </div>
+                            <div className="flex justify-between items-center gap-2 mt-3">
+                              <div className="text-xs text-gray-600">{getUniqueValuesForColumn(filterCol).length} option(s)</div>
+                              <div className="flex gap-2">
+                                <button
+                                  type="button"
+                                  className="px-3 py-1 bg-[#4a77b4] text-white rounded font-semibold"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const s = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
+                                    setDynamicFilters(prev => ({ ...prev, [filterCol]: Array.from(s) }));
+                                    setOpenFilter(null);
+                                  }}
+                                >Appliquer</button>
+                                <button type="button" className="px-3 py-1 bg-gray-100 rounded" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>Fermer</button>
+                                <button
+                                  type="button"
+                                  className="px-3 py-1 bg-red-500 text-white rounded"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setTempFilterSelection(prev => ({ ...(prev || {}), [filterCol]: new Set() }));
+                                    setDynamicFilters(prev => ({ ...prev, [filterCol]: [] }));
+                                    setOpenFilter(null);
+                                  }}
+                                >Effacer</button>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     ))}
                   </div>

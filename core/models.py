@@ -128,6 +128,9 @@ class SousTheme(models.Model):
     # Filtres par défaut appliqués pour le visiteur (ex: {"Milieu": "Total"} ou "Total")
     visitor_default_filters = models.JSONField(default=dict, blank=True, help_text="Filtres par défaut pour le visiteur")
 
+    # Colonnes que le visiteur peut pivoter / transposer (ex: pour tableaux croisés)
+    visitor_pivot_columns = models.JSONField(default=list, blank=True, help_text="Colonnes que le visiteur peut pivoter/transposer")
+
     # Pour faciliter la lecture des colonnes dynamiques au Front
     @property
     def columns(self):

@@ -47,6 +47,10 @@ class SousThemeSerializer(serializers.ModelSerializer):
             rep['visitor_default_filters'] = instance.visitor_default_filters or {}
         except Exception:
             rep['visitor_default_filters'] = {}
+        try:
+            rep['visitor_pivot_columns'] = instance.visitor_pivot_columns or []
+        except Exception:
+            rep['visitor_pivot_columns'] = []
         return rep
 
     def get_data(self, obj):

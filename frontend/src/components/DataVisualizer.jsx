@@ -8,7 +8,9 @@ export default function DataVisualizer({
   isVisitor = true,
   visitorVisibleColumns = [],
 }) {
-  const [appliedFilters, setAppliedFilters] = useState(() => ({ ...(filtre_par_defaut || {}) }));
+  const [appliedFilters, setAppliedFilters] = useState({});
+  const [openFilter, setOpenFilter] = useState(null);
+  const [tempSelection, setTempSelection] = useState({});
 
   const columns = useMemo(() => {
     const cols = new Set();
@@ -56,8 +58,15 @@ export default function DataVisualizer({
   }, [data_json, filtres_disponibles]);
 
   useEffect(() => {
-    if (isVisitor && filtre_par_defaut) {
-      setAppliedFilters(prev => ({ ...filtre_par_defaut, ...prev }));
+    if (filtre_par_defaut) {
+      const converted = {};
+      Object.keys(filtre_par_defaut).forEach(k => {
+        const v = filtre_par_defaut[k];
+        if (v === null || v === undefined || v === '') converted[k] = [];
+        else if (Array.isArray(v)) converted[k] = v.map(String);
+        else converted[k] = [String(v)];
+      });
+      setAppliedFilters(prev => ({ ...prev, ...converted }));
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -86,7 +95,12 @@ export default function DataVisualizer({
     return data_json.filter(row => {
       return Object.keys(appliedFilters || {}).every(col => {
         const val = appliedFilters[col];
-        if (val === null || val === undefined || val === '') return true;
+        if (val === null || val === undefined) return true;
+        if (Array.isArray(val)) {
+          if (val.length === 0) return true;
+          return val.map(String).includes(String(row[col] ?? ''));
+        }
+        if (val === '') return true;
         return String(row[col] ?? '') === String(val);
       });
     });
@@ -164,18 +178,80 @@ export default function DataVisualizer({
     <div className="bg-white border-2 border-gray-200 rounded-lg p-4 space-y-4">
       <div className="flex flex-col md:flex-row md:items-end md:gap-4 gap-2">
         {(filtres_disponibles || []).map(col => (
-          <div key={col} className="flex-1">
+          <div key={col} className="flex-1 relative">
             <label className="block text-xs font-semibold mb-1">{col}</label>
-            <select
-              className="w-full p-2 border rounded bg-white"
-              value={appliedFilters[col] ?? ''}
-              onChange={e => setAppliedFilters(prev => ({ ...prev, [col]: e.target.value }))}
+            <button
+              type="button"
+              className="w-full text-left p-2 border-2 border-blue-300 rounded bg-white"
+              onClick={() => {
+                setOpenFilter(col);
+                setTempSelection(prev => {
+                  const raw = appliedFilters[col];
+                  const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+                  return { ...(prev || {}), [col]: new Set(arr.map(String)) };
+                });
+              }}
             >
-              <option value="">-- Tous --</option>
-              {optionsFor[col]?.map(opt => (
-                <option key={opt} value={opt}>{opt}</option>
-              ))}
-            </select>
+              {(() => {
+                const cur = appliedFilters[col];
+                if (Array.isArray(cur) && cur.length > 0) return `${cur.length} sélectionné(s)`;
+                if (!Array.isArray(cur) && cur) return String(cur);
+                return '-- Tous --';
+              })()}
+            </button>
+
+            {openFilter === col && (
+              <div className="absolute left-0 top-full mt-1 z-50 bg-white border-2 border-blue-300 rounded-lg shadow-lg p-3 w-full max-h-56 overflow-auto">
+                <div className="flex flex-col gap-1">
+                  {optionsFor[col]?.map(opt => {
+                    const set = tempSelection[col] || new Set();
+                    const checked = set.has(String(opt));
+                    return (
+                      <label key={opt} className="flex items-center gap-2 text-sm">
+                        <input
+                          type="checkbox"
+                          checked={checked}
+                          onChange={() => {
+                            setTempSelection(prev => {
+                              const copy = { ...(prev || {}) };
+                              const s = new Set(copy[col] || []);
+                              if (s.has(String(opt))) s.delete(String(opt)); else s.add(String(opt));
+                              copy[col] = s;
+                              return copy;
+                            });
+                          }}
+                        />
+                        <span>{opt}</span>
+                      </label>
+                    );
+                  })}
+                </div>
+                <div className="flex justify-between items-center gap-2 mt-3">
+                  <div className="text-xs text-gray-600">{optionsFor[col]?.length || 0} option(s)</div>
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      className="px-3 py-1 bg-[#4a77b4] text-white rounded font-semibold"
+                      onClick={() => {
+                        const s = tempSelection[col] || new Set();
+                        setAppliedFilters(prev => ({ ...prev, [col]: Array.from(s) }));
+                        setOpenFilter(null);
+                      }}
+                    >Appliquer</button>
+                    <button type="button" className="px-3 py-1 bg-gray-100 rounded" onClick={() => setOpenFilter(null)}>Fermer</button>
+                    <button
+                      type="button"
+                      className="px-3 py-1 bg-red-500 text-white rounded"
+                      onClick={() => {
+                        setTempSelection(prev => ({ ...(prev || {}), [col]: new Set() }));
+                        setAppliedFilters(prev => ({ ...prev, [col]: [] }));
+                        setOpenFilter(null);
+                      }}
+                    >Effacer</button>
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
         ))}
       </div>
