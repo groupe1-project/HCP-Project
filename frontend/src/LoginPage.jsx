@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
-function LoginPage({ onLoginSuccess }) {
+function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [error, setError] = useState('');
@@ -26,17 +26,51 @@ function LoginPage({ onLoginSuccess }) {
       });
 
       if (res.data.token) {
-        // Sauvegarde le token et les infos utilisateur
-        localStorage.setItem('auth_token', res.data.token);
-        localStorage.setItem('user_id', res.data.user_id);
-        localStorage.setItem('username', res.data.username);
-        localStorage.setItem('user_email', res.data.email);
-        localStorage.setItem('user_role', res.data.role);
+        // Sauvegarde le token et les infos utilisateur (isolées par mode)
+        if (loginMode === 'saisisseur') {
+          localStorage.setItem('auth_token_saisisseur', res.data.token);
+          localStorage.setItem('user_id_saisisseur', res.data.user_id);
+          localStorage.setItem('username_saisisseur', res.data.username);
+          localStorage.setItem('user_email_saisisseur', res.data.email);
+          localStorage.setItem('user_role_saisisseur', res.data.role);
+        } else if (loginMode === 'admin') {
+          localStorage.setItem('auth_token_admin', res.data.token);
+          localStorage.setItem('user_id_admin', res.data.user_id);
+          localStorage.setItem('username_admin', res.data.username);
+          localStorage.setItem('user_email_admin', res.data.email);
+          localStorage.setItem('user_role_admin', res.data.role);
+        } else {
+          localStorage.setItem('auth_token', res.data.token);
+          localStorage.setItem('user_id', res.data.user_id);
+          localStorage.setItem('username', res.data.username);
+          localStorage.setItem('user_email', res.data.email);
+          localStorage.setItem('user_role', res.data.role);
+        }
 
-        // Configure axios pour les appels futurs
+        // Configure axios pour les appels futurs avec le token courant
         axios.defaults.headers.common['Authorization'] = `Token ${res.data.token}`;
 
-        onLoginSuccess();
+        // Remember which auth context we used
+        try { localStorage.setItem('auth_context', loginMode); } catch (e) {}
+
+        // If this is a saisisseur login flow, redirect to the saisisseur path
+        if (loginMode === 'saisisseur' && res.data.role === 'SAISISSEUR') {
+          try {
+            // persist active menu for saisisseur
+            localStorage.setItem('activeMenu', 'Saisisseur');
+          } catch (e) {}
+          window.location.href = `/${res.data.username}`;
+          return;
+        }
+
+          // If this is an admin login flow, keep the user on /admin and persist menu
+          if (loginMode === 'admin' && res.data.role === 'ADMIN') {
+            try { localStorage.setItem('activeMenu', 'Admin'); } catch (e) {}
+            window.location.href = '/admin';
+            return;
+          }
+
+          onLoginSuccess();
       }
     } catch (err) {
       const errorMsg = err.response?.data?.error || 'Erreur de connexion';
@@ -251,8 +285,8 @@ function LoginPage({ onLoginSuccess }) {
         </div>
         
         <h1 className="text-2xl font-bold text-center text-[#1a5d85] mb-2">
-          Espace Administrateur
-        </h1>
+            {loginMode === 'saisisseur' ? 'Espace Saisisseur' : 'Espace Administrateur'}
+          </h1>
         <p className="text-center text-gray-600 text-sm mb-6">
           Base de Données - Région Béni Mellal-Khénifra
         </p>
@@ -306,7 +340,7 @@ function LoginPage({ onLoginSuccess }) {
         </form>
 
         <p className="text-center text-xs text-gray-500 mt-6">
-          Interface réservée aux administrateurs
+          {loginMode === 'saisisseur' ? 'Interface de connexion pour les saisisseurs' : 'Interface réservée aux administrateurs'}
         </p>
       </div>
     </div>

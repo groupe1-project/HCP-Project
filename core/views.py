@@ -40,11 +40,34 @@ class SousThemeViewSet(viewsets.ModelViewSet):
     permission_classes = [IsAuthenticated]
 
     def get_queryset(self):
-        """Filtrer les sous-thèmes par thème si le paramètre 'theme' est fourni"""
+        """Filtrer les sous-thèmes par thème si le paramètre 'theme' est fourni.
+        Si l'utilisateur est un `SAISISSEUR`, limiter aux sous-thèmes/ thèmes qui
+        lui sont assignés via `UserThemeAssignment`.
+        """
         queryset = super().get_queryset()
         theme_id = self.request.query_params.get('theme', None)
+        user = getattr(self.request, 'user', None)
+
+        # Restrict by provided theme query param first
         if theme_id is not None:
             queryset = queryset.filter(theme_id=theme_id)
+
+        # If saisisseur, further restrict to assigned sous-themes or themes
+        try:
+            if user and getattr(user, 'role', None) == 'SAISISSEUR':
+                assignments = UserThemeAssignment.objects.filter(user=user)
+                st_ids = set()
+                theme_ids = set()
+                for a in assignments:
+                    if a.sous_theme_id:
+                        st_ids.add(a.sous_theme_id)
+                    if a.theme_id:
+                        theme_ids.add(a.theme_id)
+                return queryset.filter(Q(id__in=list(st_ids)) | Q(theme_id__in=list(theme_ids)))
+        except Exception:
+            # On any error, fall back to the unfiltered queryset
+            pass
+
         return queryset
 
     @action(detail=True, methods=['get', 'post'], url_path='charts')
@@ -141,8 +164,29 @@ class ThemeViewSet(viewsets.ModelViewSet):
     serializer_class = ThemeSerializer
     permission_classes = [IsAuthenticated]
 
+    def get_queryset(self):
+        """If the user is a `SAISISSEUR`, return only themes assigned to them."""
+        qs = super().get_queryset()
+        user = getattr(self.request, 'user', None)
+        try:
+            if user and getattr(user, 'role', None) == 'SAISISSEUR':
+                assignments = UserThemeAssignment.objects.filter(user=user)
+                theme_ids = set()
+                for a in assignments:
+                    if a.theme_id:
+                        theme_ids.add(a.theme_id)
+                    if a.sous_theme_id and a.sous_theme and a.sous_theme.theme_id:
+                        theme_ids.add(a.sous_theme.theme_id)
+                return qs.filter(id__in=list(theme_ids))
+        except Exception:
+            pass
+        return qs
+
     @action(detail=False, methods=['post'])
     def enregistrer_complet(self, request):
+        # Only ADMIN users may create themes via this endpoint
+        if not (getattr(request.user, 'role', None) == 'ADMIN'):
+            return Response({'error': 'Accès refusé : seulement les administrateurs peuvent créer des thèmes.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             # 1. Récupération et création du Thème
             titre = request.data.get('titre')
@@ -261,6 +305,8 @@ class ThemeViewSet(viewsets.ModelViewSet):
     def archive(self, request, pk=None):
         """Marque un thème comme archivé et archive tous ses sous-thèmes."""
         try:
+            if not (getattr(request.user, 'role', None) == 'ADMIN'):
+                return Response({'error': 'Accès refusé : seulement les administrateurs peuvent archiver un thème.'}, status=status.HTTP_403_FORBIDDEN)
             theme = self.get_object()
             theme.archived = True
             theme.save()
@@ -274,6 +320,8 @@ class ThemeViewSet(viewsets.ModelViewSet):
     def unarchive(self, request, pk=None):
         """Retire la marque d'archivage d'un thème et désarchive tous ses sous-thèmes."""
         try:
+            if not (getattr(request.user, 'role', None) == 'ADMIN'):
+                return Response({'error': 'Accès refusé : seulement les administrateurs peuvent désarchiver un thème.'}, status=status.HTTP_403_FORBIDDEN)
             theme = self.get_object()
             theme.archived = False
             theme.save()
@@ -287,6 +335,9 @@ class ThemeViewSet(viewsets.ModelViewSet):
     def add_sous_theme(self, request, pk=None):
         """Ajoute un sous-thème au thème courant."""
         try:
+            # Only ADMINs may add a sous-theme at the theme level
+            if not (getattr(request.user, 'role', None) == 'ADMIN'):
+                return Response({'error': 'Accès refusé : seulement les administrateurs peuvent ajouter un sous-thème depuis l\'interface thème.'}, status=status.HTTP_403_FORBIDDEN)
             theme = self.get_object()
             nom = request.data.get('nom') or request.data.get('name')
             if not nom:

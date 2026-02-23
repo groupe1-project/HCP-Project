@@ -3,7 +3,7 @@ import axios from 'axios';
 
 const API_BASE = 'http://127.0.0.1:8000/api';
 
-const AdministratorsPage = () => {
+const AdministratorsPage = ({ isSaisisseur = false }) => {
   // État pour l'onglet actif
   const [activeTab, setActiveTab] = useState('users'); // 'users' ou 'themes'
   
@@ -47,16 +47,19 @@ const AdministratorsPage = () => {
   
   // Charger les utilisateurs au montage
   useEffect(() => {
-    // Configurer axios avec le token d'authentification
-    const token = localStorage.getItem('auth_token');
-    if (token) {
-      axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-    }
-    
+    // Configure axios with the token relevant to admin context
+    try {
+      const token = localStorage.getItem('auth_token_admin') || localStorage.getItem('auth_token');
+      if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+    } catch (e) {}
+
+    // Pour un saisisseur, ne pas lancer les fetchs administrateurs (page vide pour l'instant)
+    if (isSaisisseur) return;
+
     fetchSaisisseurs();
     fetchThemes();
     fetchUserRequests();
-  }, []);
+  }, [isSaisisseur]);
 
   // Vérifier les permissions
   useEffect(() => {
@@ -102,7 +105,12 @@ const AdministratorsPage = () => {
         if (found) {
           setConfigSubTheme(found);
           setModalVisitorCols(found.visitor_visible_columns || []);
-          setModalVisitorFilters(found.visitor_filters || found.filtres_disponibles || []);
+          const rawFilters = found.visitor_filters || found.filtres_disponibles || [];
+          const normalizeFilters = (arr) => {
+            if (!Array.isArray(arr)) return [];
+            return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
+          };
+          setModalVisitorFilters(normalizeFilters(rawFilters));
           setModalVisitorDefaultFilters(found.visitor_default_filters || {});
           setConfigModalOpen(true);
           setActiveTab('themes');
@@ -115,6 +123,16 @@ const AdministratorsPage = () => {
     window.addEventListener('openVisitorConfig', handler);
     return () => window.removeEventListener('openVisitorConfig', handler);
   }, [themes]);
+
+  // Si c'est la vue saisisseur, afficher un espace vide / placeholder
+  if (isSaisisseur) {
+    return (
+      <div className="p-8 flex-1">
+        <h2 className="text-2xl font-bold text-[#1a5d85]">Espace saisisseur</h2>
+        <p className="mt-4 text-gray-700">Zone en développement — contenu à venir.</p>
+      </div>
+    );
+  }
 
   const fetchSaisisseurs = async () => {
     try {

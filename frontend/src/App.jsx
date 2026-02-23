@@ -20,9 +20,16 @@ function App({ forceVisitor = false }) {
   // --- AUTHENTIFICATION (toujours appelé en premier) ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
+  const [userRole, setUserRole] = useState('');
+  const [authContext, setAuthContext] = useState(() => {
+    try { return localStorage.getItem('auth_context') || ''; } catch (e) { return ''; }
+  });
 
   // --- ÉTATS (toujours déclarés, même s'ils ne sont pas utilisés si non authentifié) ---
-  const [activeMenu, setActiveMenu] = useState('Themes');
+  const [activeMenu, setActiveMenu] = useState(() => {
+    if (typeof window === 'undefined') return 'Themes';
+    return localStorage.getItem('activeMenu') || 'Themes';
+  });
   const [formStep, setFormStep] = useState(0); 
   const [themes, setThemes] = useState([]);
   const [selectedTheme, setSelectedTheme] = useState(null);
@@ -99,19 +106,113 @@ function App({ forceVisitor = false }) {
   const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
-  const pathHasVisiteur = typeof window !== 'undefined' && window.location.pathname.includes('/visiteur');
+  const pathname = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
+  const pathHasVisiteur = pathname === '/visiteur' || pathname.startsWith('/visiteur/');
+  const pathHasSaisisseur = pathname === '/saisisseur' || pathname.startsWith('/saisisseur/');
+  const pathHasAdmin = pathname === '/admin' || pathname.startsWith('/admin/');
   const isVisitor = forceVisitor || pathHasVisiteur;
+  const isSaisisseur = pathHasSaisisseur || (userRole === 'SAISISSEUR' && isAuthenticated);
   const canEdit = isAuthenticated && !isVisitor;
   const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
 
   useEffect(() => {
-    const token = localStorage.getItem('auth_token');
-    if (token && !isVisitor) {
-      axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-      setIsAuthenticated(true);
+    // Select token/user info based on stored auth_context (preferred) or current path
+    try {
+      const authContext = localStorage.getItem('auth_context');
+      let token = null;
+      let role = '';
+
+      if (authContext === 'admin') {
+        token = localStorage.getItem('auth_token_admin');
+        role = localStorage.getItem('user_role_admin') || '';
+      } else if (authContext === 'saisisseur') {
+        token = localStorage.getItem('auth_token_saisisseur');
+        role = localStorage.getItem('user_role_saisisseur') || '';
+      } else if (pathHasAdmin) {
+        token = localStorage.getItem('auth_token_admin');
+        role = localStorage.getItem('user_role_admin') || '';
+      } else if (pathHasSaisisseur) {
+        token = localStorage.getItem('auth_token_saisisseur');
+        role = localStorage.getItem('user_role_saisisseur') || '';
+      } else {
+        token = localStorage.getItem('auth_token');
+        role = localStorage.getItem('user_role') || '';
+      }
+
+      if (token && !isVisitor) {
+        axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+        setIsAuthenticated(true);
+      } else {
+        delete axios.defaults.headers.common['Authorization'];
+      }
+      setUserRole(role);
+    } catch (e) {
+      console.error('Erreur lors de l\'initialisation du token', e);
+    } finally {
+      setAuthLoading(false);
     }
-    setAuthLoading(false);
   }, []);
+
+  // Keep axios Authorization header in sync with the current auth_context
+  useEffect(() => {
+    try {
+      const ctx = authContext || localStorage.getItem('auth_context');
+      let token = null;
+      if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
+      else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
+      else token = localStorage.getItem('auth_token');
+
+      if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+      else delete axios.defaults.headers.common['Authorization'];
+    } catch (e) {
+      console.error('Erreur sync auth header', e);
+    }
+  }, [authContext]);
+
+  // When user switches menu or path, prefer the matching auth context if a token exists.
+  useEffect(() => {
+    try {
+      // If activeMenu explicitly Saisisseur, prefer saisisseur context
+      if (activeMenu === 'Saisisseur' || pathHasSaisisseur) {
+        if (localStorage.getItem('auth_token_saisisseur')) {
+          localStorage.setItem('auth_context', 'saisisseur');
+          setAuthContext('saisisseur');
+          return;
+        }
+      }
+
+      // If activeMenu explicitly Admin, prefer admin context
+      if (activeMenu === 'Admin' || pathHasAdmin) {
+        if (localStorage.getItem('auth_token_admin')) {
+          localStorage.setItem('auth_context', 'admin');
+          setAuthContext('admin');
+          return;
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+  }, [activeMenu, pathHasSaisisseur, pathHasAdmin]);
+
+  // Enforce and persist role-based active menu so saisisseur reste sur son espace après refresh
+  useEffect(() => {
+    // If the user is a saisisseur, ensure they don't land on Admin
+    if (isSaisisseur && activeMenu === 'Admin') {
+      setActiveMenu('Saisisseur');
+      try { localStorage.setItem('activeMenu', 'Saisisseur'); } catch (e) {}
+      return;
+    }
+
+    // If not a saisisseur but stored menu is 'Saisisseur', fall back to Themes
+    if (!isSaisisseur && activeMenu === 'Saisisseur') {
+      setActiveMenu('Themes');
+      try { localStorage.setItem('activeMenu', 'Themes'); } catch (e) {}
+      return;
+    }
+
+    // Persist any change to activeMenu
+    try { localStorage.setItem('activeMenu', activeMenu); } catch (e) {}
+  }, [isSaisisseur, activeMenu]);
 
   useEffect(() => { 
     if (isAuthenticated || isVisitor) fetchThemes(); 
@@ -185,11 +286,16 @@ function App({ forceVisitor = false }) {
 
         setConfigSubTheme(found);
         const cols = found.visitor_visible_columns || [];
-        const filters = found.visitor_filters || found.filtres_disponibles || [];
+        const rawFilters = found.visitor_filters || found.filtres_disponibles || [];
+        const normalizeFilters = (arr) => {
+          if (!Array.isArray(arr)) return [];
+          return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
+        };
+        const filters = normalizeFilters(rawFilters);
         setModalVisitorCols(cols);
         setModalVisitorFilters(filters);
         setModalVisitorColsText(Array.isArray(cols) ? cols.join(', ') : String(cols || ''));
-        setModalVisitorFiltersText(Array.isArray(filters) ? filters.join(', ') : String(filters || ''));
+        setModalVisitorFiltersText(filters.join(', '));
         setModalVisitorDefaultFilters(parseDefaultsString(found.visitor_default_filters || {}));
         setConfigModalOpen(true);
       } catch (err) {
@@ -218,89 +324,94 @@ function App({ forceVisitor = false }) {
 
   // Initialize per-chart visitor filters state from savedCharts (defaults)
   useEffect(() => {
-    const map = {};
-    (savedCharts || []).forEach(chart => {
-      const vf = chart.visible_filters || [];
-      if (!vf || vf.length === 0) return;
-      const obj = {};
-      vf.forEach(item => {
-        if (!item) return;
-        if (typeof item === 'string') {
-          obj[item] = '';
-        } else if (typeof item === 'object' && item.column) {
-          obj[item.column] = item.default || '';
-        }
-      });
-      map[chart.id] = obj;
-    });
-    setChartVisitorFilters(map);
-  }, [savedCharts]);
-
-  // When sub-theme changes, apply visitor-specific filters/defaults if in visitor mode
-  useEffect(() => {
-    if (!selectedSubTheme) return;
-    // If visitor view, prefer visitor_filters and apply visitor_default_filters
-    if (isVisitor) {
-      const rawVf = selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
-      // normalize to array of column names (strings)
-      const vf = (rawVf || []).map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
-      // initialize dynamicFilters with defaults where provided
-      let defaults = selectedSubTheme.visitor_default_filters || {};
-      // If defaults is a string (admin typed plain text), try to parse JSON or 'key=value' pairs or apply heuristics
-      if (typeof defaults === 'string' && defaults) {
-        // try JSON first
-        try {
-          defaults = JSON.parse(defaults);
-        } catch (e) {
-          // try parsing key=value pairs like "Milieu=Total,Province=Azilal"
-          const obj = {};
-          const parts = defaults.split(',').map(p => p.trim()).filter(Boolean);
-          parts.forEach(part => {
-            const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
-            if (sep) {
-              const [k, v] = part.split(sep).map(s => s.trim());
-              if (k && v) obj[k] = v;
-            }
-          });
-          if (Object.keys(obj).length > 0) {
-            defaults = obj;
-          } else {
-            // fallback: assign single value heuristically to first matching filter
-            const singleVal = defaults;
-            const heuristic = {};
-            for (const col of vf) {
-              const opts = getUniqueValuesForColumn(col);
-              if (opts.includes(String(singleVal))) {
-                heuristic[col] = String(singleVal);
-                break;
-              }
-            }
-            defaults = heuristic;
-          }
-        }
+    try {
+      // If the user navigated to /admin or /saisisseur and a token for that context exists,
+      // prefer to set the authContext accordingly so subsequent requests use the right token.
+      if (pathHasAdmin && localStorage.getItem('auth_token_admin')) {
+        setAuthContext('admin');
+      } else if (pathHasSaisisseur && localStorage.getItem('auth_token_saisisseur')) {
+        setAuthContext('saisisseur');
       }
 
-      const initial = {};
-      vf.forEach(col => {
-        initial[col] = (defaults && typeof defaults === 'object' && defaults[col] !== undefined) ? defaults[col] : '';
-      });
-      setDynamicFilters(initial);
-    }
-  }, [selectedSubTheme, isVisitor]);
+      const ctx = authContext || localStorage.getItem('auth_context');
+      let token = null;
+      let role = '';
 
+      if (ctx === 'admin') {
+        token = localStorage.getItem('auth_token_admin');
+        role = localStorage.getItem('user_role_admin') || '';
+      } else if (ctx === 'saisisseur') {
+        token = localStorage.getItem('auth_token_saisisseur');
+        role = localStorage.getItem('user_role_saisisseur') || '';
+      } else if (pathHasAdmin) {
+        token = localStorage.getItem('auth_token_admin');
+        role = localStorage.getItem('user_role_admin') || '';
+      } else if (pathHasSaisisseur) {
+        token = localStorage.getItem('auth_token_saisisseur');
+        role = localStorage.getItem('user_role_saisisseur') || '';
+      } else {
+        token = localStorage.getItem('auth_token');
+        role = localStorage.getItem('user_role') || '';
+      }
+
+      if (token && !isVisitor) {
+        axios.defaults.headers.common['Authorization'] = `Token ${token}`;
+        setIsAuthenticated(true);
+      } else {
+        delete axios.defaults.headers.common['Authorization'];
+      }
+      setUserRole(role);
+    } catch (e) {
+      console.error("Erreur lors de l'initialisation du token", e);
+    } finally {
+      setAuthLoading(false);
+    }
+  }, [authContext]);
+  
   // --- HELPER FUNCTIONS ---
   const handleLogin = () => {
     setIsAuthenticated(true);
+    // refresh userRole from stored auth_context
+    try {
+      const authContext = localStorage.getItem('auth_context');
+      if (authContext === 'admin') setUserRole(localStorage.getItem('user_role_admin') || '');
+      else if (authContext === 'saisisseur') setUserRole(localStorage.getItem('user_role_saisisseur') || '');
+      else setUserRole(localStorage.getItem('user_role') || '');
+    } catch (e) { setUserRole(localStorage.getItem('user_role') || ''); }
+    // refresh authContext state
+    try { setAuthContext(localStorage.getItem('auth_context') || ''); } catch (e) { setAuthContext(''); }
+    // if current path is /admin and user is admin, ensure active menu is Admin
+    try {
+      const p = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
+      if (p.startsWith('/admin') && (localStorage.getItem('user_role_admin') === 'ADMIN' || localStorage.getItem('user_role') === 'ADMIN')) {
+        setActiveMenu('Admin');
+        try { localStorage.setItem('activeMenu', 'Admin'); } catch (e) {}
+      }
+    } catch (e) {}
   };
 
   const handleLogout = () => {
+    // remove tokens for all contexts to fully logout
     localStorage.removeItem('auth_token');
     localStorage.removeItem('user_id');
     localStorage.removeItem('username');
     localStorage.removeItem('user_email');
     localStorage.removeItem('user_role');
+    localStorage.removeItem('auth_token_admin');
+    localStorage.removeItem('user_id_admin');
+    localStorage.removeItem('username_admin');
+    localStorage.removeItem('user_email_admin');
+    localStorage.removeItem('user_role_admin');
+    localStorage.removeItem('auth_token_saisisseur');
+    localStorage.removeItem('user_id_saisisseur');
+    localStorage.removeItem('username_saisisseur');
+    localStorage.removeItem('user_email_saisisseur');
+    localStorage.removeItem('user_role_saisisseur');
+    try { localStorage.removeItem('activeMenu'); localStorage.removeItem('auth_context'); } catch (e) {}
+    setAuthContext('');
     delete axios.defaults.headers.common['Authorization'];
     setIsAuthenticated(false);
+    setUserRole('');
   };
 
   const updateAccount = async () => {
@@ -717,7 +828,16 @@ function App({ forceVisitor = false }) {
   const fetchThemes = async () => {
     try {
       const url = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
-      const res = await axios.get(url);
+      // Determine which token to use for this fetch to ensure correct filtering for saisisseur
+      let token = null;
+      try {
+        const ctx = authContext || localStorage.getItem('auth_context');
+        if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
+        else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
+        else token = localStorage.getItem('auth_token');
+      } catch (e) { token = localStorage.getItem('auth_token'); }
+
+      const res = await axios.get(url, token ? { headers: { Authorization: `Token ${token}` } } : {});
       setThemes(res.data);
     } catch (err) {
       // Affiche la réponse du serveur si disponible pour aider le debug
@@ -1117,8 +1237,29 @@ function App({ forceVisitor = false }) {
     return <div className="flex min-h-screen bg-[#f4f1e1] justify-center items-center"><p className="text-xl font-bold">Chargement...</p></div>;
   }
 
+  // Early guard: if path is /saisisseur (or starts with) and user not authenticated,
+  // immediately render the saisisseur login page to avoid showing admin login.
+  if (!isAuthenticated && pathHasSaisisseur) {
+    return <LoginPage onLoginSuccess={handleLogin} loginMode={'saisisseur'} />;
+  }
+
+  // If path is /admin and not authenticated, render admin login page
+  if (!isAuthenticated && pathHasAdmin) {
+    return <LoginPage onLoginSuccess={handleLogin} loginMode={'admin'} />;
+  }
+
   if (!isAuthenticated && !isVisitor) {
-    return <LoginPage onLoginSuccess={handleLogin} />;
+    const loginMode = pathHasSaisisseur ? 'saisisseur' : 'admin';
+    try {
+      // If the path looks like a direct saisisseur username path (e.g. '/jean')
+      // and the user is not authenticated nor explicitly on /saisisseur or /admin, redirect to the saisisseur login page.
+      if (pathname !== '/' && !pathHasSaisisseur && !pathHasVisiteur && !pathHasAdmin && !pathname.includes('.') ) {
+        window.location.replace('/saisisseur');
+        return null;
+      }
+    } catch (e) {}
+
+    return <LoginPage onLoginSuccess={handleLogin} loginMode={loginMode} />;
   }
 
   // --- RENDU PRINCIPAL (Admin) ---
@@ -1135,7 +1276,11 @@ function App({ forceVisitor = false }) {
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
         {canEdit && (
           <>
-            <SidebarButton label="Espace admin" active={activeMenu === 'Admin'} onClick={() => {setActiveMenu('Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null);}} />
+            <SidebarButton
+              label={isSaisisseur ? 'Espace saisisseur' : 'Espace admin'}
+              active={activeMenu === (isSaisisseur ? 'Saisisseur' : 'Admin')}
+              onClick={() => { setActiveMenu(isSaisisseur ? 'Saisisseur' : 'Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null); }}
+            />
             <div className="mt-auto p-4 border-t-2 border-black bg-white space-y-2">
               <button onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }} className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md flex items-center justify-center gap-2">
                 ⚙️ Paramètres
@@ -1227,9 +1372,9 @@ function App({ forceVisitor = false }) {
             </div>
           )}
 
-          {/* PAGE ADMINISTRATEURS */}
-          {activeMenu === 'Admin' && (
-            <AdministratorsPage />
+          {/* PAGE ADMINISTRATEURS / SAISISSEUR */}
+          {(activeMenu === 'Admin' || activeMenu === 'Saisisseur') && (
+            <AdministratorsPage isSaisisseur={isSaisisseur} />
           )}
 
           {/* ÉTAPE 0 : GRILLE DES THÈMES */}
@@ -1274,7 +1419,7 @@ function App({ forceVisitor = false }) {
                       )}
                     </div>
                     <div className="flex mt-4 gap-2">
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <button onClick={(e) => { 
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
@@ -1291,7 +1436,7 @@ function App({ forceVisitor = false }) {
                       )}
 
                       <div>
-                        {canEdit && (
+                        {canEdit && userRole === 'ADMIN' && (
                           <button onClick={(e) => { 
                               e.stopPropagation();
                               const rect = e.currentTarget.getBoundingClientRect();
@@ -1307,13 +1452,13 @@ function App({ forceVisitor = false }) {
                         )}
                       </div>
                     </div>
-                    {canEdit && (
+                    {canEdit && userRole === 'ADMIN' && (
                       <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${t.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                     )}
                   </div>
                 ))}
               </div>
-              {canEdit && (
+              {canEdit && userRole === 'ADMIN' && (
                 <button 
                   onClick={() => setFormStep(1)}
                   className="fixed bottom-10 right-10 bg-[#ffb366] hover:bg-[#ffa347] text-white font-bold py-4 px-8 rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
