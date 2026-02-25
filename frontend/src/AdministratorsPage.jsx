@@ -40,6 +40,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
+  const [previewModalOpen, setPreviewModalOpen] = useState(false);
+  const [previewContent, setPreviewContent] = useState(null);
   
   // États pour les assignations multiples
   const [pendingAssignments, setPendingAssignments] = useState([]);
@@ -567,10 +569,62 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
-  const handleValidateSaisisseur = async (userId) => {
-    // Pour l'instant, juste une confirmation visuelle
-    // Cette fonctionnalité sera développée quand le saisisseur pourra signaler la fin de son travail
-    alert('Cette fonctionnalité sera disponible prochainement.\nElle permettra de valider les modifications faites par le saisisseur.');
+  const handleDeleteAssignment = async (assignmentId) => {
+    if (!confirm('Supprimer cette assignation ? Cette action est irréversible.')) return;
+    try {
+      await axios.delete(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
+      alert('Assignation supprimée');
+      fetchSaisisseurs();
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error("Erreur lors de la suppression de l'assignation:", error);
+      alert(error.response?.data?.error || 'Erreur lors de la suppression');
+    }
+  };
+
+  const handleValidateSaisisseur = async (assignmentId) => {
+    // Validate a saisisseur submission: fetch assignment, parse notes and apply to sous-theme
+    try {
+      const res = await axios.get(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
+      const assignment = res.data;
+      let notesObj = {};
+      try { notesObj = assignment.notes ? JSON.parse(assignment.notes) : {}; } catch (e) { notesObj = { raw: assignment.notes }; }
+
+      if (assignment.sous_theme) {
+        const payload = {};
+        if (notesObj.tables) payload.data_json = notesObj.tables;
+        if (notesObj.charts) payload.charts_config = notesObj.charts;
+        if (notesObj.meta) Object.assign(payload, notesObj.meta);
+
+        if (Object.keys(payload).length > 0) {
+          await axios.patch(`${API_BASE}/sousthemes/${assignment.sous_theme}/`, payload);
+        }
+      }
+
+      // Mark assignment completed
+      await axios.patch(`${API_BASE}/user-theme-assignments/${assignmentId}/`, { statut: 'Complété', progression: 100 });
+      alert('Modifications validées et appliquées.');
+      fetchSaisisseurs();
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error('Erreur lors de la validation:', error);
+      alert(error.response?.data?.error || 'Erreur lors de la validation');
+    }
+  };
+
+  const handleOpenSubmissionPreview = async (assignmentId) => {
+    try {
+      const res = await axios.get(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
+      const assignment = res.data;
+      let notesObj = {};
+      try { notesObj = assignment.notes ? JSON.parse(assignment.notes) : {}; } catch (e) { notesObj = { raw: assignment.notes }; }
+      setPreviewContent({ assignment, notes: notesObj });
+      setPreviewModalOpen(true);
+      setOpenMenuId(null);
+    } catch (err) {
+      console.error('Erreur ouverture soumission:', err);
+      alert('Impossible d\'ouvrir la soumission');
+    }
   };
 
   const getRoleLabel = (role) => {
@@ -756,7 +810,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-[#4a77b4] text-white border-b-2 border-black\">
+              <thead className="bg-[#4a77b4] text-white border-b-2 border-black">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-bold">Nom</th>
                   <th className="px-6 py-3 text-left text-sm font-bold">Email</th>
@@ -894,7 +948,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-[#4a77b4] text-white border-b-2 border-black\">
+              <thead className="bg-[#4a77b4] text-white border-b-2 border-black">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-bold">Utilisateur</th>
                   <th className="px-6 py-3 text-left text-sm font-bold">Tache</th>
@@ -1048,12 +1102,20 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               </button>
                               <button
                                 onClick={() => {
-                                  handleValidateSaisisseur(assignment.user);
+                                  handleValidateSaisisseur(assignment.id);
                                   setOpenMenuId(null);
                                 }}
                                 className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm"
                               >
                                 ✅ Valider les modifications
+                              </button>
+                              <button
+                                onClick={() => {
+                                  handleOpenSubmissionPreview(assignment.id);
+                                }}
+                                className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm border-t"
+                              >
+                                🔍 Aperçu de la soumission
                               </button>
                               {isUserArchived ? (
                                 <button
@@ -1076,6 +1138,15 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   📦 Archiver
                                 </button>
                               )}
+                              <button
+                                onClick={() => {
+                                  handleDeleteAssignment(assignment.id);
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full text-left px-4 py-2 hover:bg-red-100 text-red-600 flex items-center gap-2 text-sm border-t rounded-b-lg"
+                              >
+                                🗑️ Supprimer
+                              </button>
                             </div>
                           )}
                         </td>
@@ -1094,23 +1165,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {activeTab === 'themes' && (
         <>
           <div className="flex justify-between items-center mb-6 bg-white border-4 border-black px-6 py-4 rounded-3xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-            <h1 className="text-3xl font-black text-gray-800\">📊 Gestion des Thèmes</h1>
-            <div className="text-lg font-bold text-gray-700 bg-[#a2e3f7] px-4 py-2 rounded-xl border-2 border-black\">
+            <h1 className="text-3xl font-black text-gray-800">📊 Gestion des Thèmes</h1>
+            <div className="text-lg font-bold text-gray-700 bg-[#a2e3f7] px-4 py-2 rounded-xl border-2 border-black">
               Total: {allThemes.length} thème(s)
             </div>
           </div>
 
           {/* Tableau des thèmes */}
-          <div className="bg-white border-4 border-black rounded-3xl overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]\">
-            <table className="w-full\">
-              <thead className="bg-[#6d92c7] text-white border-b-2 border-black\">
+          <div className="bg-white border-4 border-black rounded-3xl overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+            <table className="w-full">
+              <thead className="bg-[#6d92c7] text-white border-b-2 border-black">
                 <tr>
-                  <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider w-12\"></th>
-                  <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider\">Thème</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32\">Statut</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32\">Archivage</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32\">Sous-thèmes</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-40\">Actions</th>
+                  <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider w-12"></th>
+                  <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider">Thème</th>
+                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32">Statut</th>
+                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32">Archivage</th>
+                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32">Sous-thèmes</th>
+                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-40">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -1262,7 +1333,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             </table>
 
             {allThemes.length === 0 && (
-              <div className="p-8 text-center text-gray-500 italic font-semibold\">
+              <div className="p-8 text-center text-gray-500 italic font-semibold">
                 📭 Aucun thème créé
               </div>
             )}
@@ -1274,32 +1345,32 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {showAddModal && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
           <div className="bg-[#fef9f2] border-4 border-black p-8 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-3xl font-black mb-6 text-center text-gray-800\">➕ Ajouter Utilisateur</h2>
+            <h2 className="text-3xl font-black mb-6 text-center text-gray-800">➕ Ajouter Utilisateur</h2>
             {errorMessage && (
-              <div className="mb-4 p-4 bg-[#f28a8a] border-2 border-black text-white rounded-xl font-bold\">
+              <div className="mb-4 p-4 bg-[#f28a8a] border-2 border-black text-white rounded-xl font-bold">
                 ⚠️ {errorMessage}
               </div>
             )}
             <form onSubmit={handleAddSaisisseur}>
               <div className="mb-4">
-                <label className="block text-sm font-bold mb-2 text-gray-700\">Nom Complet</label>
+                <label className="block text-sm font-bold mb-2 text-gray-700">Nom Complet</label>
                 <input
                   type="text"
                   required
                   value={newSaisisseur.name}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, name: e.target.value })}
-                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold\n"
+                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold"
                   placeholder="Nom et Prénom"
                 />
               </div>
               <div className="mb-4">
-                <label className="block text-sm font-bold mb-2 text-gray-700\">Email</label>
+                <label className="block text-sm font-bold mb-2 text-gray-700">Email</label>
                 <input
                   type="email"
                   required
                   value={newSaisisseur.email}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, email: e.target.value })}
-                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold\n"
+                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold"
                   placeholder="email@exemple.com"
                 />
               </div>
@@ -1325,7 +1396,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-4 py-3 bg-gray-300 text-black border-2 border-black rounded-xl font-bold hover:bg-gray-400 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition\n"
+                  className="flex-1 px-4 py-3 bg-gray-300 text-black border-2 border-black rounded-xl font-bold hover:bg-gray-400 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
                 >
                   ✕ Annuler
                 </button>
@@ -1411,6 +1482,69 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 </table>
               </div>
             )}
+
+        {/* Modal: Aperçu Soumission Saisisseur */}
+        {previewModalOpen && previewContent && (
+          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-lg p-6 max-w-4xl w-full max-h-[90vh] overflow-auto">
+              <div className="flex justify-between items-center mb-4">
+                <h2 className="text-2xl font-bold">Aperçu de la soumission — {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}</h2>
+                <button onClick={() => setPreviewModalOpen(false)} className="text-gray-500 hover:text-gray-700 text-2xl">✕</button>
+              </div>
+
+              <div className="space-y-4">
+                <div>
+                  <h3 className="font-bold">Métadonnées</h3>
+                  <pre className="whitespace-pre-wrap text-sm p-3 bg-gray-50 border rounded">{JSON.stringify(previewContent.notes.meta || {}, null, 2)}</pre>
+                </div>
+
+                <div>
+                  <h3 className="font-bold">Graphiques</h3>
+                  {Array.isArray(previewContent.notes.charts) && previewContent.notes.charts.length > 0 ? (
+                    previewContent.notes.charts.map((c, i) => (
+                      <div key={i} className="p-3 bg-white border rounded mb-2">
+                        <div className="font-semibold">{c.title || `Graphique ${i+1}`}</div>
+                        <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(c, null, 2)}</pre>
+                      </div>
+                    ))
+                  ) : (
+                    <div className="text-sm text-gray-600">Aucun graphique soumis</div>
+                  )}
+                </div>
+
+                <div>
+                  <h3 className="font-bold">Tableau (aperçu)</h3>
+                  {Array.isArray(previewContent.notes.tables) && previewContent.notes.tables.length > 0 ? (
+                    <div className="overflow-auto border rounded">
+                      <table className="w-full table-auto text-sm">
+                        <thead className="bg-gray-100">
+                          <tr>
+                            {Object.keys(previewContent.notes.tables[0] || {}).slice(0,8).map((h) => (
+                              <th key={h} className="px-2 py-1 text-left">{h}</th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {previewContent.notes.tables.slice(0,6).map((r, idx) => (
+                            <tr key={idx} className="border-t">
+                              {Object.values(r).slice(0,8).map((v, j) => <td key={j} className="px-2 py-1">{String(v)}</td>)}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  ) : (
+                    <div className="text-sm text-gray-600">Aucun tableau soumis</div>
+                  )}
+                </div>
+              </div>
+
+              <div className="mt-4 flex justify-end gap-2">
+                <button onClick={() => setPreviewModalOpen(false)} className="px-4 py-2 bg-gray-300 rounded">Fermer</button>
+              </div>
+            </div>
+          </div>
+        )}
 
             <div className="mt-6 flex justify-end gap-2 sticky bottom-0 bg-white pt-4">
               <button

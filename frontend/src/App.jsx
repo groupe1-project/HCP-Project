@@ -3,6 +3,7 @@ import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
 import LoginPage from './LoginPage';
 import AdministratorsPage from './AdministratorsPage';
+import ChartModal from './components/ChartModal';
 
 // --- COMPOSANTS DE STYLE ---
 const SidebarButton = ({ label, onClick, active }) => (
@@ -52,6 +53,7 @@ function App({ forceVisitor = false }) {
   const [actionModalThemeId, setActionModalThemeId] = useState(null);
   const [actionModalCategorieId, setActionModalCategorieId] = useState(null);
   const [rows, setRows] = useState([]);
+  const [assignedSubThemes, setAssignedSubThemes] = useState([]);
   const [showThemeMeta, setShowThemeMeta] = useState(false);
   const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
   const [showSubThemeMeta, setShowSubThemeMeta] = useState(false);
@@ -114,6 +116,47 @@ function App({ forceVisitor = false }) {
   const isSaisisseur = pathHasSaisisseur || (userRole === 'SAISISSEUR' && isAuthenticated);
   const canEdit = isAuthenticated && !isVisitor;
   const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
+
+  // Helper: when a saisisseur saves, persist changes as a draft in UserThemeAssignment.notes
+  const saveDraftAssignmentForSaisisseur = async (partialNotes = {}, statut = 'En cours') => {
+    try {
+      const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+      if (!userId) return alert('Utilisateur non identifié (saisisseur)');
+      if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
+
+      // Find existing assignment for this user + sous_theme
+      const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+      const existing = resp.data.find(a => String(a.user) === String(userId) && a.sous_theme === selectedSubTheme.id);
+
+      // Merge notes with existing
+      let mergedNotes = {};
+      if (existing && existing.notes) {
+        try { mergedNotes = existing.notes ? JSON.parse(existing.notes) : {}; } catch (e) { mergedNotes = {}; }
+      }
+      mergedNotes = { ...mergedNotes, ...partialNotes };
+
+      if (existing) {
+        await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(mergedNotes), statut });
+      } else {
+        await axios.post('http://127.0.0.1:8000/api/user-theme-assignments/', {
+          user: parseInt(userId, 10),
+          theme: selectedSubTheme.theme,
+          sous_theme: selectedSubTheme.id,
+          statut,
+          notes: JSON.stringify(mergedNotes)
+        });
+      }
+
+      // Note: do not mutate global selected subtheme or charts here. Drafts are stored
+      // on the server in the assignment notes and should not affect live views
+      // visible to admins/visitors until validation.
+
+      showToast('Brouillon enregistré', 'success');
+    } catch (err) {
+      console.error('Erreur sauvegarde brouillon saisisseur', err);
+      alert('Erreur lors de l\'enregistrement du brouillon');
+    }
+  };
 
   useEffect(() => {
     // Select token/user info based on stored auth_context (preferred) or current path
@@ -218,6 +261,43 @@ function App({ forceVisitor = false }) {
     if (isAuthenticated || isVisitor) fetchThemes(); 
   }, [isAuthenticated]);
 
+  // For saisisseur: fetch assignments and preload assigned sous-thèmes
+  useEffect(() => {
+    if (!isSaisisseur) return;
+    const loadAssignments = async () => {
+      try {
+        const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+        if (!userId) return;
+        const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+        const my = resp.data.filter(a => String(a.user) === String(userId) && a.sous_theme);
+        const subs = [];
+        for (const a of my) {
+          try {
+            const r = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${a.sous_theme}/`);
+            subs.push({ id: a.sous_theme, nom: r.data.nom, theme: r.data.theme });
+          } catch (e) { console.error('Erreur fetch soustheme', e); }
+        }
+        setAssignedSubThemes(subs);
+      } catch (err) {
+        console.error('Erreur chargement assignations saisisseur', err);
+      }
+    };
+    loadAssignments();
+  }, [isSaisisseur]);
+
+  // When saisisseur opens the indicators form, prefill rows.indicateur with assigned sous-thèmes
+  useEffect(() => {
+    if (!isSaisisseur) return;
+    if (formStep !== 2) return; // indicators form step
+    if (!assignedSubThemes || assignedSubThemes.length === 0) return;
+    // if rows already contain non-empty indicateur, don't overwrite
+    const hasContent = rows.some(r => r.indicateur && String(r.indicateur).trim() !== '');
+    if (hasContent) return;
+
+    const preRows = assignedSubThemes.map(s => ({ sousTheme: '', unite: '', definition: '', indicateur: s.nom || '', source: '', periodicite: '', file: null }));
+    setRows(preRows);
+  }, [isSaisisseur, formStep, assignedSubThemes]);
+
   // Recharger les thèmes quand on revient sur l'onglet Themes
   useEffect(() => {
     if ((isAuthenticated || isVisitor) && activeMenu === 'Themes') {
@@ -281,8 +361,8 @@ function App({ forceVisitor = false }) {
             });
             return obj;
           }
-          return {};
-        };
+            return {};
+          };
 
         setConfigSubTheme(found);
         const cols = found.visitor_visible_columns || [];
@@ -292,6 +372,7 @@ function App({ forceVisitor = false }) {
           return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
         };
         const filters = normalizeFilters(rawFilters);
+
         setModalVisitorCols(cols);
         setModalVisitorFilters(filters);
         setModalVisitorColsText(Array.isArray(cols) ? cols.join(', ') : String(cols || ''));
@@ -321,6 +402,106 @@ function App({ forceVisitor = false }) {
       setExcludedRowIndices({});
     }
   }, [selectedSubTheme]);
+
+  // Populate chartVisitorFilters with defaults from each chart's visible_filters
+  useEffect(() => {
+    try {
+      const map = {};
+      (savedCharts || []).forEach(chart => {
+        const vf = chart.visible_filters || [];
+        if (!vf || vf.length === 0) return;
+        const defaults = {};
+        vf.forEach(item => {
+          if (!item) return;
+          if (typeof item === 'string') {
+            defaults[item] = '';
+          } else if (item && item.column) {
+            defaults[item.column] = item.default || '';
+          }
+        });
+        map[chart.id] = defaults;
+      });
+      setChartVisitorFilters(map);
+    } catch (err) {
+      console.error('Error initializing chart visitor filters defaults', err);
+    }
+  }, [savedCharts]);
+
+  // Apply sub-theme-level visitor default filters (e.g. Annee=2022) to each chart's visitor selections
+  useEffect(() => {
+    if (!isVisitor || !selectedSubTheme) return;
+    try {
+      const raw = selectedSubTheme.visitor_default_filters || {};
+      const parse = (rawVal) => {
+        if (rawVal === null || rawVal === undefined) return {};
+        if (typeof rawVal === 'object') return rawVal || {};
+        if (typeof rawVal === 'string') {
+          try { return JSON.parse(rawVal); } catch (_) {}
+          const out = {};
+          rawVal.split(',').map(s => s.trim()).filter(Boolean).forEach(part => {
+            const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+            if (!sep) return;
+            const [k, v] = part.split(sep).map(p => p.trim());
+            if (k && v) out[k] = v;
+          });
+          return out;
+        }
+        return {};
+      };
+
+      const defaultsObj = parse(raw);
+      const newMap = { ...(chartVisitorFilters || {}) };
+      (savedCharts || []).forEach(chart => {
+        const vf = chart.visible_filters || [];
+        if (!vf || vf.length === 0) return;
+        newMap[chart.id] = { ...(newMap[chart.id] || {}) };
+        vf.forEach(item => {
+          const col = typeof item === 'string' ? item : (item && item.column) || '';
+          if (!col) return;
+          if (defaultsObj && Object.prototype.hasOwnProperty.call(defaultsObj, col)) {
+            newMap[chart.id][col] = defaultsObj[col];
+          } else if (typeof item === 'object' && item && item.default) {
+            // fallback to per-chart defined default
+            if (!newMap[chart.id][col]) newMap[chart.id][col] = item.default;
+          }
+        });
+      });
+      setChartVisitorFilters(newMap);
+    } catch (err) {
+      console.error('Error applying subtheme visitor default filters to charts', err);
+    }
+  }, [selectedSubTheme, isVisitor, savedCharts]);
+
+  // Apply sub-theme-level visitor default filters to table dynamic filters (so the table is filtered for visitors)
+  useEffect(() => {
+    if (!isVisitor || !selectedSubTheme) return;
+    try {
+      const raw = selectedSubTheme.visitor_default_filters || {};
+      const parseDefaults = (rawVal) => {
+        if (rawVal === null || rawVal === undefined) return {};
+        if (typeof rawVal === 'object') return rawVal || {};
+        if (typeof rawVal === 'string') {
+          try { return JSON.parse(rawVal); } catch (_) {}
+          const out = {};
+          rawVal.split(',').map(s => s.trim()).filter(Boolean).forEach(part => {
+            const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+            if (!sep) return;
+            const [k, v] = part.split(sep).map(p => p.trim());
+            if (k && v) out[k] = v;
+          });
+          return out;
+        }
+        return {};
+      };
+
+      const defaults = parseDefaults(raw);
+      if (!defaults || Object.keys(defaults).length === 0) return;
+      // Merge into dynamicFilters (table filter state). Use string values (not arrays) so filteredData matches.
+      setDynamicFilters(prev => ({ ...(prev || {}), ...defaults }));
+    } catch (err) {
+      console.error('Error applying visitor default filters to table', err);
+    }
+  }, [selectedSubTheme, isVisitor]);
 
   // Initialize per-chart visitor filters state from savedCharts (defaults)
   useEffect(() => {
@@ -369,6 +550,109 @@ function App({ forceVisitor = false }) {
   }, [authContext]);
   
   // --- HELPER FUNCTIONS ---
+  const getTableRows = (sub) => {
+    if (!sub) return [];
+    try {
+      // Lightweight debug to help trace why imported tables show only header
+      if (typeof console !== 'undefined' && console.debug) {
+        const info = {
+          id: sub.id || null,
+          keys: Object.keys(sub || {}),
+          hasDataArray: Array.isArray(sub.data),
+          dataJsonType: sub.data_json ? typeof sub.data_json : null
+        };
+        // try to detect rows length when possible
+        try {
+          if (Array.isArray(sub.data)) info.dataLen = sub.data.length;
+          else if (sub.data_json && typeof sub.data_json === 'object' && Array.isArray(sub.data_json.rows)) info.dataJsonRows = sub.data_json.rows.length;
+          else if (typeof sub.data_json === 'string') {
+            const p = JSON.parse(sub.data_json);
+            if (Array.isArray(p)) info.dataJsonRows = p.length;
+            else if (p && Array.isArray(p.rows)) info.dataJsonRows = p.rows.length;
+          }
+        } catch (__) { /* ignore parse errors */ }
+        console.debug('getTableRows called:', info);
+      }
+    } catch (e) {
+      console.warn('getTableRows debug failed', e);
+    }
+    // Prefer explicit `data` if it's an array
+    if (Array.isArray(sub.data)) return sub.data;
+    // If `data_json` exists, it may be an object or a JSON string
+    const dj = sub.data_json ?? sub.dataJson ?? sub.dataJsonString ?? null;
+    if (Array.isArray(dj)) return dj;
+    if (dj && typeof dj === 'object') {
+      if (Array.isArray(dj.rows)) return dj.rows;
+      // sometimes the stored object is { "rows": [...] } or similar
+      // fallback: try to find the first array value
+      const vals = Object.values(dj).find(v => Array.isArray(v));
+      if (Array.isArray(vals)) return vals;
+    }
+    if (typeof dj === 'string') {
+      try {
+        const parsed = JSON.parse(dj);
+        if (Array.isArray(parsed)) return parsed;
+        if (parsed && Array.isArray(parsed.rows)) return parsed.rows;
+      } catch (e) {
+        // not JSON — ignore
+      }
+    }
+    // Last resort: if sub.data is object, try to get values
+    if (sub.data && typeof sub.data === 'object') {
+      // If it's an object-of-arrays (columns -> arrays), convert to array of row objects
+      const colEntries = Object.entries(sub.data).filter(([k, v]) => Array.isArray(v));
+      if (colEntries.length > 0) {
+        const maxLen = Math.max(...colEntries.map(([, v]) => v.length));
+        const rows = Array.from({ length: maxLen }, (_, i) => {
+          const obj = {};
+          colEntries.forEach(([k, v]) => { obj[k] = v[i] !== undefined ? v[i] : ''; });
+          return obj;
+        });
+        return rows;
+      }
+      // fallback: try to find the first array value
+      const vals = Object.values(sub.data).find(v => Array.isArray(v));
+      if (Array.isArray(vals)) return vals;
+    }
+
+    // Handle other common import wrappers (data_json may contain sheet maps etc.)
+    try {
+      const djWrapped = sub.data_json && typeof sub.data_json === 'object' ? sub.data_json : null;
+      if (djWrapped) {
+        // If keys are sheet names mapping to { rows: [...] } or arrays
+        for (const key of Object.keys(djWrapped)) {
+          const val = djWrapped[key];
+          if (Array.isArray(val)) return val;
+          if (val && Array.isArray(val.rows)) return val.rows;
+          // sometimes sheet -> { data: { columns... } }
+          if (val && val.data && typeof val.data === 'object') {
+            const entries = Object.entries(val.data).filter(([k, v]) => Array.isArray(v));
+            if (entries.length > 0) {
+              const maxLen = Math.max(...entries.map(([, v]) => v.length));
+              return Array.from({ length: maxLen }, (_, i) => {
+                const obj = {};
+                entries.forEach(([k, v]) => { obj[k] = v[i] !== undefined ? v[i] : ''; });
+                return obj;
+              });
+            }
+          }
+        }
+      }
+    } catch (e) {
+      // ignore
+    }
+    return [];
+  };
+
+  const selectSubTheme = (sub) => {
+    if (!sub) return setSelectedSubTheme(sub);
+    try {
+      const rows = getTableRows(sub) || [];
+      setSelectedSubTheme({ ...sub, data: rows });
+    } catch (e) {
+      setSelectedSubTheme(sub);
+    }
+  };
   const handleLogin = () => {
     setIsAuthenticated(true);
     // refresh userRole from stored auth_context
@@ -450,7 +734,7 @@ function App({ forceVisitor = false }) {
 
   const handleDeleteRowFromChart = (chartId, chart, rowIndex) => {
     // Créer une clé unique basée sur X et Y
-    const row = selectedSubTheme?.data?.[rowIndex];
+    const row = getTableRows(selectedSubTheme)[rowIndex];
     if (!row) return;
     const rowKey = `${chart.x}:${row[chart.x]}|${chart.y}:${row[chart.y]}`;
     const newExcluded = [...(excludedRowIndices[chartId] || []), rowKey];
@@ -463,7 +747,7 @@ function App({ forceVisitor = false }) {
   };
 
   const handleRestoreRowToChart = (chartId, chart, rowIndex) => {
-    const row = selectedSubTheme?.data?.[rowIndex];
+    const row = getTableRows(selectedSubTheme)[rowIndex];
     if (!row) return;
     const rowKey = `${chart.x}:${row[chart.x]}|${chart.y}:${row[chart.y]}`;
     const newExcluded = (excludedRowIndices[chartId] || []).filter(key => key !== rowKey);
@@ -504,7 +788,7 @@ function App({ forceVisitor = false }) {
   };
 
   const openEditTable = () => {
-    setEditTableRows(JSON.parse(JSON.stringify(selectedSubTheme?.data || [])));
+    setEditTableRows(JSON.parse(JSON.stringify(getTableRows(selectedSubTheme) || [])));
     setShowEditTable(true);
   };
 
@@ -610,7 +894,7 @@ function App({ forceVisitor = false }) {
         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
         if (freshTheme) setSelectedTheme(freshTheme);
         const freshSub = freshTheme?.sous_themes?.find(st => st.id === id);
-        if (freshSub) setSelectedSubTheme(freshSub);
+        if (freshSub) selectSubTheme(freshSub);
         // Update selectedCategorie if present
         if (selectedCategorie && freshTheme) {
           const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
@@ -768,19 +1052,35 @@ function App({ forceVisitor = false }) {
   };
 
   const saveEditedTable = async () => {
-    if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, { data_json: editTableRows });
-      alert('Tableau sauvegardé');
+      if (isSaisisseur) {
+        // Save table rows in assignment notes as draft
+        await saveDraftAssignmentForSaisisseur({ tables: editTableRows }, 'En cours');
+        alert('Brouillon de la table enregistré');
+        setShowEditTable(false);
+        return;
+      }
+
+      const res = await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
+        data_json: editTableRows,
+      });
+      const updated = res.data;
+      selectSubTheme(updated);
+      alert('Table enregistrée');
+
       setShowEditTable(false);
-      // refresh
-      const res = await axios.get(themesApiBase);
-      setThemes(res.data);
-      const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
+      // refresh themes and selection
+      const themesRes = await axios.get(themesApiBase);
+      setThemes(themesRes.data);
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
       if (freshTheme) setSelectedTheme(freshTheme);
       const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
-      if (freshSub) setSelectedSubTheme(freshSub);
-    } catch (err) { console.error(err); alert('Erreur lors de la sauvegarde du tableau'); }
+      if (freshSub) selectSubTheme(freshSub);
+    } catch (err) {
+      console.error('Erreur en sauvegarde du tableau', err);
+      alert('Erreur lors de la sauvegarde du tableau');
+      setShowEditTable(false);
+    }
   };
 
   const handleImportFileChange = async (e) => {
@@ -790,6 +1090,13 @@ function App({ forceVisitor = false }) {
     const fd = new FormData();
     fd.append('file', file);
     try {
+      if (isSaisisseur) {
+        // For saisisseur, do not directly replace the server table; store as a draft instead.
+        alert('Import non autorisé en tant que saisisseur. Utilisez l\'éditeur et cliquez sur "Enregistrer (brouillon)" pour enregistrer vos modifications.');
+        if (e.target) e.target.value = null;
+        return;
+      }
+
       // Let the browser set the multipart boundary header automatically
       await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd);
       alert('Import réussi');
@@ -800,17 +1107,18 @@ function App({ forceVisitor = false }) {
       if (freshTheme) setSelectedTheme(freshTheme);
       const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
       if (freshSub) {
-        setSelectedSubTheme(freshSub);
-        if (showEditTable) setEditTableRows(JSON.parse(JSON.stringify(freshSub.data || [])));
+        selectSubTheme(freshSub);
+        if (showEditTable) setEditTableRows(JSON.parse(JSON.stringify(getTableRows(freshSub) || [])));
       }
     } catch (err) { console.error(err.response?.data || err); alert('Erreur lors de l\'import: ' + (err.response?.data?.error || err.message)); }
     if (e.target) e.target.value = null;
   };
 
   const exportTableCSV = () => {
-    if (!selectedSubTheme || !selectedSubTheme.data || selectedSubTheme.data.length === 0) return alert('Aucun tableau à exporter');
+    const rowsArr = getTableRows(selectedSubTheme);
+    if (!selectedSubTheme || !rowsArr || rowsArr.length === 0) return alert('Aucun tableau à exporter');
     const cols = selectedSubTheme.columns || [];
-    const rows = selectedSubTheme.data || [];
+    const rows = rowsArr;
     const header = cols.join(',');
     const lines = rows.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','));
     const csv = [header, ...lines].join('\n');
@@ -847,7 +1155,7 @@ function App({ forceVisitor = false }) {
 
   // Fonction pour obtenir les valeurs uniques d'une colonne
   const getUniqueValuesForColumn = (columnName) => {
-    const data = selectedSubTheme?.data || [];
+    const data = getTableRows(selectedSubTheme);
     const values = new Set();
     data.forEach(row => {
       const val = row[columnName];
@@ -879,7 +1187,7 @@ function App({ forceVisitor = false }) {
   };
 
   const getFilteredChartData = (chart) => {
-    const data = selectedSubTheme?.data || [];
+    const data = getTableRows(selectedSubTheme);
     
     // Appliquer le filtre de colonne primaire
     let filtered = data;
@@ -912,7 +1220,7 @@ function App({ forceVisitor = false }) {
 
   // Logique de filtrage du tableau avec les deux types de filtres
 
-  const filteredData = selectedSubTheme?.data?.filter(row => {
+  const filteredData = getTableRows(selectedSubTheme).filter(row => {
     // Filtre par recherche texte (columnFilters)
     const passesTextFilter = Object.keys(columnFilters).every(key => 
       String(row[key] || '').toLowerCase().includes(columnFilters[key].toLowerCase())
@@ -962,7 +1270,7 @@ function App({ forceVisitor = false }) {
 
     // Type-specific validation (Y numeric for scatter/secteur when present)
     if ((currentChartConfig.type === 'Nuage de points' || currentChartConfig.type === 'Secteur') && selectedSubTheme && currentChartConfig.y) {
-      const hasNumeric = (selectedSubTheme.data || []).some(r => {
+      const hasNumeric = getTableRows(selectedSubTheme).some(r => {
         const raw = r[currentChartConfig.y];
         if (raw === null || raw === undefined || raw === '') return false;
         const n = parseFloat(String(raw).replace(/,/g, '.'));
@@ -986,6 +1294,18 @@ function App({ forceVisitor = false }) {
     }
 
     try {
+      if (isSaisisseur) {
+        // Save chart config in assignment notes as draft
+        const newChart = { ...currentChartConfig };
+        // remove transient props
+        delete newChart.__temp;
+        // Merge into existing draft
+        await saveDraftAssignmentForSaisisseur({ charts: (savedCharts || []).concat(newChart) }, 'En cours');
+        setIsModalOpen(false);
+        setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '', group_by: '' });
+        return;
+      }
+
       if (currentChartConfig.id) {
         // Update existing chart
         const res = await axios.put(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${currentChartConfig.id}/`, {
@@ -1030,7 +1350,7 @@ function App({ forceVisitor = false }) {
       const themesRes = await axios.get(themesApiBase);
       const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
       const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
-      setSelectedSubTheme(freshSubTheme);
+      selectSubTheme(freshSubTheme);
       setSavedCharts(freshSubTheme.charts_config || []);
 
       setIsModalOpen(false);
@@ -1055,7 +1375,7 @@ function App({ forceVisitor = false }) {
       const themesRes = await axios.get(themesApiBase);
       const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
       const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
-      setSelectedSubTheme(freshSubTheme);
+      selectSubTheme(freshSubTheme);
     } catch (err) {
       console.error('Erreur suppression graphique', err);
       alert('Erreur lors de la suppression');
@@ -1096,7 +1416,7 @@ function App({ forceVisitor = false }) {
         const freshTheme = res.data.find(t => t.id === selectedTheme.id);
         if (freshTheme) setSelectedTheme(freshTheme);
         const freshSubTheme = freshTheme && freshTheme.sous_themes ? freshTheme.sous_themes.find(sub => sub.id === subThemeId) : null;
-        if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
+        if (freshSubTheme) selectSubTheme(freshSubTheme);
         // Update selectedCategorie if present
         if (selectedCategorie && freshTheme) {
           const freshCat = freshTheme.categories?.find(c => c.id === selectedCategorie.id);
@@ -1211,6 +1531,13 @@ function App({ forceVisitor = false }) {
   const saveSubThemeMeta = async () => {
     if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
     try {
+      if (isSaisisseur) {
+        await saveDraftAssignmentForSaisisseur({ meta: subThemeMeta }, 'En cours');
+        alert('Brouillon des métadonnées enregistré');
+        setShowSubThemeMeta(false);
+        return;
+      }
+
       await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, subThemeMeta);
       alert('Métadonnées du sous-thème sauvegardées');
       setShowSubThemeMeta(false);
@@ -1220,7 +1547,7 @@ function App({ forceVisitor = false }) {
       const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
       if (freshTheme) setSelectedTheme(freshTheme);
       const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
-      if (freshSub) setSelectedSubTheme(freshSub);
+      if (freshSub) selectSubTheme(freshSub);
     } catch (err) {
       console.error('Erreur sauvegarde métadonnées sous-thème', err);
       alert('Erreur lors de la sauvegarde des métadonnées du sous-thème');
@@ -1349,7 +1676,7 @@ function App({ forceVisitor = false }) {
                         const freshTheme = res.data.find(t => t.id === st.theme_id);
                         const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
                         setSelectedTheme(freshTheme);
-                        setSelectedSubTheme(freshSubTheme);
+                        selectSubTheme(freshSubTheme);
                         setSavedCharts(freshSubTheme.charts_config || []);
                         setActiveMenu('Themes');
                         setFormStep(4);
@@ -1419,7 +1746,7 @@ function App({ forceVisitor = false }) {
                       )}
                     </div>
                     <div className="flex mt-4 gap-2">
-                      {canEdit && userRole === 'ADMIN' && (
+                      {canEdit && (
                         <button onClick={(e) => { 
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
@@ -1436,7 +1763,7 @@ function App({ forceVisitor = false }) {
                       )}
 
                       <div>
-                        {canEdit && userRole === 'ADMIN' && (
+                        {canEdit && (
                           <button onClick={(e) => { 
                               e.stopPropagation();
                               const rect = e.currentTarget.getBoundingClientRect();
@@ -1452,7 +1779,7 @@ function App({ forceVisitor = false }) {
                         )}
                       </div>
                     </div>
-                    {canEdit && userRole === 'ADMIN' && (
+                    {canEdit && (
                       <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${t.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                     )}
                   </div>
@@ -1489,7 +1816,7 @@ function App({ forceVisitor = false }) {
                         </button>
                       );
                     })()}
-                    {canEdit && (
+                    {canEdit && userRole === 'ADMIN' && (
                       <button onClick={(e) => { e.stopPropagation(); showConfirm('Supprimer ce thème ?', async () => { await deleteTheme(openThemeMenu); setOpenThemeMenu(null); }); }} className="w-full text-left px-4 py-2 bg-white text-red-600 hover:bg-red-50 transition-colors flex items-center gap-2">
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                         Supprimer le thème
@@ -1527,7 +1854,7 @@ function App({ forceVisitor = false }) {
                             <span className="font-semibold">{cat.nom}</span>
                             <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
                           </button>
-                          {canEdit && (
+                          {canEdit && userRole === 'ADMIN' && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1804,7 +2131,7 @@ function App({ forceVisitor = false }) {
                       {canEdit && (
                         <div className={`w-5 h-5 rounded-full border border-black ${selectedCategorie.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                       )}
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <select
                           value={selectedCategorie.is_visible ? 'Public' : 'Privé'}
                           onChange={async (e) => {
@@ -1825,7 +2152,7 @@ function App({ forceVisitor = false }) {
                       {canEdit && (
                         <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                       )}
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <select
                           value={selectedTheme.is_visible ? 'Public' : 'Privé'}
                           onChange={async (e) => {
@@ -1858,7 +2185,7 @@ function App({ forceVisitor = false }) {
                           const res = await axios.get(themesApiBase);
                           const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                           const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
-                          setSelectedSubTheme(freshSubTheme);
+                          selectSubTheme(freshSubTheme);
                           setSavedCharts(freshSubTheme.charts_config || []);
                           setFormStep(4); 
                           setShowAll(false);
@@ -1906,7 +2233,7 @@ function App({ forceVisitor = false }) {
                           }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                         </div>
                       )}
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                       )}
                     </div>
@@ -1931,7 +2258,7 @@ function App({ forceVisitor = false }) {
                             </span>
                           </div>
                           <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                            {canEdit && (
+                            {canEdit && userRole === 'ADMIN' && (
                               <>
                                 <div className={`w-5 h-5 rounded-full border border-black ${cat.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                                 <select
@@ -1964,7 +2291,7 @@ function App({ forceVisitor = false }) {
                                     const res = await axios.get(themesApiBase);
                                     const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                                     const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
-                                    setSelectedSubTheme(freshSubTheme);
+                                    selectSubTheme(freshSubTheme);
                                     setSavedCharts(freshSubTheme.charts_config || []);
                                     setFormStep(4); 
                                     setShowAll(false);
@@ -2031,7 +2358,7 @@ function App({ forceVisitor = false }) {
                                   const res = await axios.get(themesApiBase);
                           const freshTheme = res.data.find(t => t.id === selectedTheme.id);
                           const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
-                          setSelectedSubTheme(freshSubTheme);
+                          selectSubTheme(freshSubTheme);
                           setSavedCharts(freshSubTheme.charts_config || []);
                           setFormStep(4); 
                           setShowAll(false);
@@ -2076,7 +2403,7 @@ function App({ forceVisitor = false }) {
                           }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
                         </div>
                       )}
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                       )}
                     </div>
@@ -2095,7 +2422,7 @@ function App({ forceVisitor = false }) {
                   Sous thème : {selectedSubTheme.nom}
                 </h3>
                 <div className="flex items-center gap-3">
-                  {canEdit ? (
+                  {canEdit && userRole === 'ADMIN' ? (
                     <>
                       <div className={`w-5 h-5 rounded-full border border-black ${selectedSubTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                       <select
@@ -2139,6 +2466,114 @@ function App({ forceVisitor = false }) {
 
                   <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
                   <button onClick={() => setFormStep(3)} className="bg-orange-400 text-white px-4 py-1 border-2 border-black rounded-lg font-bold shadow-md">Fermer</button>
+                  {/* Saisisseur: Enregistrer / Envoyer au admin */}
+                  {isSaisisseur && (
+                    <>
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          try {
+                            const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+                            if (!userId) return alert('Utilisateur non identifié');
+
+                            const notes = {
+                              tables: editTableRows || [],
+                              charts: savedCharts || [],
+                              meta: subThemeMeta || {},
+                              visitor_defaults: modalVisitorDefaultFilters || {},
+                              advancedConfig: advancedConfig || {}
+                            };
+
+                            // Try to create, otherwise update existing assignment
+                            try {
+                              await axios.post('http://127.0.0.1:8000/api/user-theme-assignments/', {
+                                user: parseInt(userId, 10),
+                                theme: selectedSubTheme.theme,
+                                sous_theme: selectedSubTheme.id,
+                                statut: 'En cours',
+                                notes: JSON.stringify(notes)
+                              });
+                              showToast('Brouillon enregistré', 'success');
+                            } catch (err) {
+                              // unique constraint -> find existing assignment and patch
+                              try {
+                                const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+                                const existing = resp.data.find(a => String(a.user) === String(userId) && a.sous_theme === selectedSubTheme.id);
+                                if (existing) {
+                                  await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(notes), statut: 'En cours' });
+                                  showToast('Brouillon mis à jour', 'success');
+                                } else {
+                                  console.error('Erreur création brouillon', err);
+                                  alert('Erreur lors de l\'enregistrement du brouillon');
+                                }
+                              } catch (err2) {
+                                console.error(err2);
+                                alert('Erreur lors de l\'enregistrement du brouillon');
+                              }
+                            }
+                          } catch (err) {
+                            console.error(err);
+                            alert('Impossible d\'enregistrer le brouillon');
+                          }
+                        }}
+                        className="bg-gray-200 px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-300"
+                      >
+                        💾 Enregistrer (brouillon)
+                      </button>
+
+                      <button
+                        onClick={async (e) => {
+                          e.stopPropagation();
+                          if (!confirm('Envoyer ce sous-thème aux administrateurs pour révision ?')) return;
+                          try {
+                            const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+                            if (!userId) return alert('Utilisateur non identifié');
+
+                            const notes = {
+                              tables: editTableRows || [],
+                              charts: savedCharts || [],
+                              meta: subThemeMeta || {},
+                              visitor_defaults: modalVisitorDefaultFilters || {},
+                              advancedConfig: advancedConfig || {}
+                            };
+
+                            // Try create, otherwise patch existing -> set statut 'En attente'
+                            try {
+                              await axios.post('http://127.0.0.1:8000/api/user-theme-assignments/', {
+                                user: parseInt(userId, 10),
+                                theme: selectedSubTheme.theme,
+                                sous_theme: selectedSubTheme.id,
+                                statut: 'En attente',
+                                notes: JSON.stringify(notes)
+                              });
+                              showToast('Soumis aux administrateurs', 'success');
+                            } catch (err) {
+                              try {
+                                const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+                                const existing = resp.data.find(a => String(a.user) === String(userId) && a.sous_theme === selectedSubTheme.id);
+                                if (existing) {
+                                  await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(notes), statut: 'En attente' });
+                                  showToast('Soumission mise à jour', 'success');
+                                } else {
+                                  console.error('Erreur soumission', err);
+                                  alert('Erreur lors de la soumission');
+                                }
+                              } catch (err2) {
+                                console.error(err2);
+                                alert('Erreur lors de la soumission');
+                              }
+                            }
+                          } catch (err) {
+                            console.error(err);
+                            alert('Impossible de soumettre');
+                          }
+                        }}
+                        className="bg-blue-600 text-white px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-blue-700"
+                      >
+                        📤 Envoyer au admin
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
 
@@ -2268,27 +2703,7 @@ function App({ forceVisitor = false }) {
                       {(() => {
                         const displayedRows = showAll ? filteredData : filteredData.slice(0, 3);
 
-                        // If visitor, keep original behavior (blank repeated cells)
-                        if (isVisitor) {
-                          return displayedRows.map((row, i) => {
-                            const prev = i > 0 ? displayedRows[i - 1] : null;
-                            return (
-                              <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
-                                {visibleColumnsForRender.map((col, idx) => {
-                                  let hide = false;
-                                  if (prev && prev[col] === row[col]) {
-                                    const leftCols = visibleColumnsForRender.slice(0, idx);
-                                    const allLeftEqual = leftCols.every(lc => prev[lc] === row[lc]);
-                                    hide = allLeftEqual;
-                                  }
-                                  return (
-                                    <td key={col} className="border-r border-gray-300 p-2 text-xs">{hide ? '' : row[col]}</td>
-                                  );
-                                })}
-                              </tr>
-                            );
-                          });
-                        }
+                        // Use rowspan merging for consecutive identical cells (same behavior for all roles)
 
                         // Admin view: compute rowSpans for consecutive identical cells in displayedRows
                         const rowCount = displayedRows.length;
@@ -2326,7 +2741,7 @@ function App({ forceVisitor = false }) {
                     {showAll ? "Réduire le tableau" : "Afficher tout le tableau"}
                   </button>
 
-                  {canEdit && (
+                  {canEdit && (userRole === 'ADMIN' || isSaisisseur) && (
                     <button onClick={openEditTable} className="bg-[#ffd56b] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Modifier le tableau</button>
                   )}
 
@@ -2337,8 +2752,14 @@ function App({ forceVisitor = false }) {
               {/* ZONE DES GRAPHIQUES GÉNÉRÉS */}
               <div className="space-y-6">
                 <div className="grid grid-cols-1 gap-6">
-                  {savedCharts.map((chart) => {
-                    const baseChartData = getFilteredChartData(chart);
+                  {(() => {
+                    const chartsToRender = (savedCharts || []).filter(c => (getFilteredChartData(c) || []).length > 0);
+                    if (!chartsToRender || chartsToRender.length === 0) {
+                      return (<div className="text-gray-600 italic">Aucun graphique disponible (pas de données après filtrage)</div>);
+                    }
+
+                    return chartsToRender.map((chart) => {
+                      const baseChartData = getFilteredChartData(chart);
                     // Apply per-chart visitor-only filters (do not affect table)
                     const visitorFiltersList = chart.visible_filters || [];
                     const visitorValues = chartVisitorFilters[chart.id] || {};
@@ -2556,7 +2977,8 @@ function App({ forceVisitor = false }) {
                         )}
                       </div>
                     );
-                  })}
+                    });
+                  })()}
                 </div>
 
                 {/* BOUTON DÉCLENCHEUR POP-UP */}
@@ -2577,361 +2999,16 @@ function App({ forceVisitor = false }) {
         </div>
       </div>
 
-      {/* POP-UP MODALE : CONFIGURATION GRAPHIQUE */}
-      {isModalOpen && (
-        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-          <div className="bg-[#fef9f2] border-4 border-black p-8 rounded-3xl w-full max-w-lg max-h-[85vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black mb-6 text-center uppercase sticky top-0 bg-[#fef9f2]">Paramètres du Graphique</h2>
-            
-            <div className="space-y-4">
-              <div>
-                <label className="block font-bold mb-1">Type :</label>
-                <select 
-                  className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                  value={currentChartConfig.type}
-                  onChange={e => setCurrentChartConfig({...currentChartConfig, type: e.target.value})}
-                >
-                  <option value="Histogramme">Barres (Histogramme)</option>
-                  <option value="Courbes">Lignes (Courbes)</option>
-                  <option value="Nuage de points">Nuage de points (Scatter)</option>
-                  <option value="Secteur">Secteur (Pie)</option>
-                </select>
-              </div>
-
-              <div className="flex gap-4">
-                <div className="flex-1">
-                  <label className="block font-bold mb-1">Axe X :</label>
-                  <select 
-                    className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                    value={currentChartConfig.x}
-                    onChange={e => {
-                      const newX = e.target.value;
-                      setCurrentChartConfig({...currentChartConfig, x: newX, y: (currentChartConfig.y === newX ? '' : currentChartConfig.y)});
-                    }}
-                  >
-                    <option value="">Sélectionner</option>
-                    {selectedSubTheme.columns?.map(c => <option key={c} value={c} disabled={c === currentChartConfig.y}>{c}</option>)}
-                  </select>
-                </div>
-                <div className="flex-1">
-                  <label className="block font-bold mb-1">Axe Y :</label>
-                  <select 
-                    className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                    value={currentChartConfig.y}
-                    onChange={e => {
-                      const newY = e.target.value;
-                      setCurrentChartConfig({...currentChartConfig, y: newY, x: (currentChartConfig.x === newY ? '' : currentChartConfig.x)});
-                    }}
-                  >
-                    <option value="">Sélectionner</option>
-                    {selectedSubTheme.columns?.map(c => c !== currentChartConfig.x ? <option key={c} value={c}>{c}</option> : null)}
-                  </select>
-                </div>
-              </div>
-
-              <div>
-                <label className="block font-bold mb-1">Filtre par colonne (optionnel) :</label>
-                <select
-                  className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                  value={currentChartConfig.filter_column || ''}
-                  onChange={e => setCurrentChartConfig({
-                    ...currentChartConfig,
-                    filter_column: e.target.value,
-                    filter_value: ''
-                  })}
-                >
-                  <option value="">-- Aucun filtre --</option>
-                  {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
-                </select>
-              </div>
-
-              {currentChartConfig.filter_column && (
-                <div className="p-4 bg-blue-50 border-2 border-blue-300 rounded-lg space-y-3">
-                  <label className="block font-bold mb-2 text-blue-900">Sélectionner la valeur '{currentChartConfig.filter_column}' :</label>
-                  <select
-                    className="w-full p-2 border-2 border-blue-400 rounded-lg bg-white font-bold"
-                    value={currentChartConfig.filter_value || ''}
-                    onChange={e => setCurrentChartConfig({
-                      ...currentChartConfig,
-                      filter_value: e.target.value
-                    })}
-                  >
-                    <option value="">-- Choisir une année --</option>
-                    {getUniqueValuesForColumn(currentChartConfig.filter_column).map(v => (
-                      <option key={v} value={v}>{v}</option>
-                    ))}
-                  </select>
-                  
-                  <div className="flex gap-3 pt-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="filter_mode"
-                        value="include"
-                        checked={currentChartConfig.filter_mode === 'include'}
-                        onChange={e => setCurrentChartConfig({...currentChartConfig, filter_mode: e.target.value})}
-                        className="w-4 h-4"
-                      />
-                      <span className="font-bold text-green-700">✓ Inclure</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="filter_mode"
-                        value="exclude"
-                        checked={currentChartConfig.filter_mode === 'exclude'}
-                        onChange={e => setCurrentChartConfig({...currentChartConfig, filter_mode: e.target.value})}
-                        className="w-4 h-4"
-                      />
-                      <span className="font-bold text-red-700">✕ Exclure</span>
-                    </label>
-                  </div>
-                </div>
-              )}
-
-              {/* FILTRES SUPPLÉMENTAIRES (MULTIPLES) */}
-              {currentChartConfig.filters && currentChartConfig.filters.length > 0 && (
-                <div className="p-4 bg-purple-50 border-2 border-purple-300 rounded-lg space-y-3">
-                  <h3 className="font-bold text-purple-900">Filtres supplémentaires :</h3>
-                  {currentChartConfig.filters.map((filter, idx) => (
-                    <div key={idx} className="p-3 bg-white border border-purple-300 rounded space-y-2">
-                      <div className="flex gap-2">
-                        <select
-                          className="flex-1 p-2 border-2 border-purple-300 rounded bg-white font-bold text-sm"
-                          value={filter.column || ''}
-                          onChange={e => {
-                            const newFilters = [...currentChartConfig.filters];
-                            newFilters[idx].column = e.target.value;
-                            newFilters[idx].value = '';
-                            setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                          }}
-                        >
-                          <option value="">-- Colonne --</option>
-                          {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
-                        </select>
-                        
-                        {filter.column && (
-                          <select
-                            className="flex-1 p-2 border-2 border-purple-300 rounded bg-white font-bold text-sm"
-                            value={filter.value || ''}
-                            onChange={e => {
-                              const newFilters = [...currentChartConfig.filters];
-                              newFilters[idx].value = e.target.value;
-                              setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                            }}
-                          >
-                            <option value="">-- Valeur --</option>
-                            {getUniqueValuesForColumn(filter.column).map(v => (
-                              <option key={v} value={v}>{v}</option>
-                            ))}
-                          </select>
-                        )}
-
-                        <button
-                          onClick={() => {
-                            const newFilters = currentChartConfig.filters.filter((_, i) => i !== idx);
-                            setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                          }}
-                          className="px-3 py-2 bg-red-300 border-2 border-black rounded font-bold text-sm hover:bg-red-400"
-                        >
-                          ✕
-                        </button>
-                      </div>
-                      
-                      {filter.value && (
-                        <div className="flex gap-2 pt-1">
-                          <label className="flex items-center gap-2 cursor-pointer text-sm">
-                            <input
-                              type="radio"
-                              checked={(filter.mode || 'include') === 'include'}
-                              onChange={() => {
-                                const newFilters = [...currentChartConfig.filters];
-                                newFilters[idx].mode = 'include';
-                                setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                              }}
-                              className="w-4 h-4"
-                            />
-                            <span className="font-bold text-green-700">✓ Inclure</span>
-                          </label>
-                          <label className="flex items-center gap-2 cursor-pointer text-sm">
-                            <input
-                              type="radio"
-                              checked={(filter.mode || 'include') === 'exclude'}
-                              onChange={() => {
-                                const newFilters = [...currentChartConfig.filters];
-                                newFilters[idx].mode = 'exclude';
-                                setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                              }}
-                              className="w-4 h-4"
-                            />
-                            <span className="font-bold text-red-700">✕ Exclure</span>
-                          </label>
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                  
-                  <button
-                    onClick={() => {
-                      const newFilters = [...currentChartConfig.filters, { column: '', value: '', mode: 'include' }];
-                      setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                    }}
-                    className="w-full py-2 bg-purple-300 border-2 border-purple-700 rounded font-bold hover:bg-purple-400 text-sm"
-                  >
-                    + Ajouter un filtre
-                  </button>
-                </div>
-              )}
-
-              {/* BOUTON POUR AJOUTER LE PREMIER FILTRE SUPPLÉMENTAIRE */}
-              {(!currentChartConfig.filters || currentChartConfig.filters.length === 0) && currentChartConfig.filter_column && (
-                <button
-                  onClick={() => {
-                    const newFilters = [{ column: '', value: '', mode: 'include' }];
-                    setCurrentChartConfig({...currentChartConfig, filters: newFilters});
-                  }}
-                  className="w-full py-2 bg-purple-200 border-2 border-purple-500 rounded font-bold hover:bg-purple-300 text-sm text-purple-900"
-                >
-                  + Ajouter un filtre supplémentaire
-                </button>
-              )}
-
-              {/* Chart-level visible filters for visitors */}
-              <div className="p-4 bg-yellow-50 border-2 border-yellow-300 rounded-lg space-y-3">
-                <h3 className="font-bold text-yellow-900">Filtres visibles pour le visiteur (ce graphique)</h3>
-                {(currentChartConfig.visible_filters || []).map((vf, idx) => {
-                  const col = (typeof vf === 'string') ? vf : (vf && vf.column) || '';
-                  const defVal = (typeof vf === 'object' && vf) ? (vf.default || '') : '';
-                  return (
-                    <div key={idx} className="p-2 bg-white border rounded flex gap-2 items-center">
-                      <select
-                        className="flex-1 p-2 border-2 border-yellow-300 rounded bg-white"
-                        value={col}
-                        onChange={e => {
-                          const newVis = [...(currentChartConfig.visible_filters || [])];
-                          newVis[idx] = { column: e.target.value, default: '' };
-                          setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
-                        }}
-                      >
-                        <option value="">-- Colonne à afficher --</option>
-                        {selectedSubTheme.columns?.map(c => <option key={c} value={c}>{c}</option>)}
-                      </select>
-
-                      {col && (
-                        <select
-                          className="w-48 p-2 border-2 border-yellow-300 rounded bg-white"
-                          value={defVal}
-                          onChange={e => {
-                            const newVis = [...(currentChartConfig.visible_filters || [])];
-                            const item = (typeof newVis[idx] === 'string') ? { column: newVis[idx], default: '' } : (newVis[idx] || {});
-                            item.default = e.target.value;
-                            newVis[idx] = item;
-                            setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
-                          }}
-                        >
-                          <option value="">-- Défaut (aucun) --</option>
-                          {getUniqueValuesForColumn(col).map(v => <option key={v} value={v}>{v}</option>)}
-                        </select>
-                      )}
-
-                      <button
-                        onClick={() => {
-                          const newVis = (currentChartConfig.visible_filters || []).filter((_, i) => i !== idx);
-                          setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
-                        }}
-                        className="px-3 py-2 bg-red-300 border-2 border-black rounded font-bold text-sm hover:bg-red-400"
-                      >
-                        ✕
-                      </button>
-                    </div>
-                  );
-                })}
-
-                <button
-                  onClick={() => {
-                    const newVis = [...(currentChartConfig.visible_filters || []), { column: '', default: '' }];
-                    setCurrentChartConfig({ ...currentChartConfig, visible_filters: newVis });
-                  }}
-                  className="w-full py-2 bg-yellow-200 border-2 border-yellow-700 rounded font-bold hover:bg-yellow-300 text-sm"
-                >
-                  + Ajouter un filtre visible
-                </button>
-              </div>
-
-              <div>
-                <label className="block font-bold mb-1">Ajouter une mesure / note :</label>
-                <textarea 
-                  className="w-full p-2 border-2 border-black rounded-lg h-20 outline-none"
-                  value={currentChartConfig.mesure}
-                  onChange={e => setCurrentChartConfig({...currentChartConfig, mesure: e.target.value})}
-                  placeholder="Expliquez ce graphique..."
-                />
-              </div>
-
-              <div className="grid grid-cols-1 gap-3">
-                <div>
-                  <label className="block font-bold mb-1">Titre du graphique (affiché au-dessus) :</label>
-                  <input
-                    type="text"
-                    className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                    value={currentChartConfig.title || ''}
-                    onChange={e => setCurrentChartConfig({...currentChartConfig, title: e.target.value})}
-                    placeholder="Titre du graphique"
-                  />
-                </div>
-
-              <div className="p-4 bg-green-50 border-2 border-green-300 rounded-lg space-y-3">
-                <label className="block font-bold mb-1">Grouper par colonne (crée plusieurs séries)</label>
-                <select
-                  className="w-full p-2 border-2 border-green-300 rounded bg-white"
-                  value={currentChartConfig.group_by || ''}
-                  onChange={e => setCurrentChartConfig({...currentChartConfig, group_by: e.target.value})}
-                >
-                  <option value="">-- Aucun --</option>
-                  {selectedSubTheme.columns?.map(c => (
-                    <option key={c} value={c} disabled={c === currentChartConfig.x}>{c}{c === currentChartConfig.x ? ' (disable : same as X)' : ''}</option>
-                  ))}
-                </select>
-                {currentChartConfig.group_by === currentChartConfig.x && currentChartConfig.group_by !== '' && (
-                  <div className="text-sm text-red-600 mt-1">Le groupement sur la même colonne que l'axe X produit des séries avec beaucoup de zéros — choisissez une colonne différente (ex: Province).</div>
-                )}
-                <div className="text-xs italic text-gray-600">Sélectionnez une colonne dont les valeurs définiront une courbe/série distincte (ex: Province).</div>
-              </div>
-
-                <div className="flex gap-3">
-                  <div className="flex-1">
-                    <label className="block font-bold mb-1">Label Axe X (optionnel)</label>
-                    <input
-                      type="text"
-                      className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                      value={currentChartConfig.x_label || ''}
-                      onChange={e => setCurrentChartConfig({...currentChartConfig, x_label: e.target.value})}
-                      placeholder="Ex: Année, Catégorie"
-                    />
-                  </div>
-                  <div className="flex-1">
-                    <label className="block font-bold mb-1">Label Axe Y (optionnel)</label>
-                    <input
-                      type="text"
-                      className="w-full p-2 border-2 border-black rounded-lg bg-white"
-                      value={currentChartConfig.y_label || ''}
-                      onChange={e => setCurrentChartConfig({...currentChartConfig, y_label: e.target.value})}
-                      placeholder="Ex: Valeur (%), Effectif"
-                    />
-                  </div>
-                </div>
-              </div>
-            </div>
-
-            <div className="flex gap-4 mt-8 sticky bottom-0 pt-4 bg-[#fef9f2]">
-              <button onClick={() => setIsModalOpen(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
-              <button onClick={handleAddOrUpdateChart} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold shadow-md">
-                {currentChartConfig.id ? "Modifier" : "Générer"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* POP-UP MODALE : CONFIGURATION GRAPHIQUE (moved to ChartModal) */}
+      <ChartModal
+        isOpen={isModalOpen}
+        onClose={() => setIsModalOpen(false)}
+        currentChartConfig={currentChartConfig}
+        setCurrentChartConfig={setCurrentChartConfig}
+        selectedSubTheme={selectedSubTheme}
+        getUniqueValuesForColumn={getUniqueValuesForColumn}
+        handleAddOrUpdateChart={handleAddOrUpdateChart}
+      />
       {showEditTable && (
         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[80vh] overflow-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
@@ -3059,7 +3136,7 @@ function App({ forceVisitor = false }) {
                   const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
                   if (freshTheme) setSelectedTheme(freshTheme);
                   const freshSubTheme = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
-                  if (freshSubTheme) setSelectedSubTheme(freshSubTheme);
+                  if (freshSubTheme) selectSubTheme(freshSubTheme);
                 } catch (err) {
                   console.error(err);
                   showToast('Erreur lors de l\'enregistrement', 'error');
@@ -3322,7 +3399,7 @@ function App({ forceVisitor = false }) {
                   try {
                     const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);
                     const freshSubTheme = freshRes.data;
-                    setSelectedSubTheme(freshSubTheme);
+                    selectSubTheme(freshSubTheme);
                     // also refresh the themes list to keep things in sync
                     const res = await axios.get(themesApiBase);
                     setThemes(res.data);
@@ -3337,7 +3414,7 @@ function App({ forceVisitor = false }) {
                         // try to find the subtheme in public payload and set it
                         for (const t of pub.data || []) {
                           const st = (t.sous_themes || []).find(s => String(s.id) === String(configSubTheme.id));
-                          if (st) { setSelectedSubTheme(st); break; }
+                          if (st) { selectSubTheme(st); break; }
                         }
                       }
                     } catch (pubErr) {
@@ -3376,7 +3453,7 @@ function App({ forceVisitor = false }) {
               }
 
               const filteredData = getFilteredChartData(managedChart);
-              const chartData = selectedSubTheme?.data || [];
+              const chartData = getTableRows(selectedSubTheme);
               const totalRows = chartData.length;
               const excludedCount = (excludedRowIndices[manageRowsModalChartId] || []).length;
               const visibleCount = filteredData.length;
