@@ -19,6 +19,8 @@ class SousThemeSerializer(serializers.ModelSerializer):
     charts_config = serializers.JSONField()
     # Nouveaux champs pour analyse dynamique
     filtres_disponibles = serializers.JSONField(required=False, allow_null=True)
+    visitor_pivot_columns = serializers.JSONField(required=False, allow_null=True)
+    visitor_default_view = serializers.CharField(required=False, allow_blank=True)
 
     class Meta:
         model = SousTheme
@@ -28,7 +30,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
             # Nouveaux champs
             'niveau_geo', 'type_unite', 'est_sommable', 'filtres_disponibles'
-            , 'visitor_visible_columns', 'visitor_filters', 'visitor_default_filters'
+            , 'visitor_visible_columns', 'visitor_filters', 'visitor_default_filters', 'visitor_pivot_columns', 'visitor_default_view'
         ]
 
     def to_representation(self, instance):
@@ -51,6 +53,10 @@ class SousThemeSerializer(serializers.ModelSerializer):
             rep['visitor_pivot_columns'] = instance.visitor_pivot_columns or []
         except Exception:
             rep['visitor_pivot_columns'] = []
+        try:
+            rep['visitor_default_view'] = instance.visitor_default_view or 'horizontal'
+        except Exception:
+            rep['visitor_default_view'] = 'horizontal'
         return rep
 
     def get_data(self, obj):

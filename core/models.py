@@ -130,6 +130,8 @@ class SousTheme(models.Model):
 
     # Colonnes que le visiteur peut pivoter / transposer (ex: pour tableaux croisés)
     visitor_pivot_columns = models.JSONField(default=list, blank=True, help_text="Colonnes que le visiteur peut pivoter/transposer")
+    # Vue par défaut du tableau visiteur (horizontal / vertical)
+    visitor_default_view = models.CharField(max_length=20, default='horizontal', help_text="Vue par défaut du tableau visiteur")
 
     # Pour faciliter la lecture des colonnes dynamiques au Front
     @property

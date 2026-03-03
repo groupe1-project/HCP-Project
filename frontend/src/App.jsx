@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
+import * as XLSX from 'xlsx-js-style';
 import LoginPage from './LoginPage';
 import AdministratorsPage from './AdministratorsPage';
 import ChartModal from './components/ChartModal';
@@ -67,11 +68,15 @@ function App({ forceVisitor = false }) {
   const [modalVisitorFilters, setModalVisitorFilters] = useState([]);
   const [modalVisitorColsText, setModalVisitorColsText] = useState('');
   const [modalVisitorFiltersText, setModalVisitorFiltersText] = useState('');
+  const [modalVisitorHierarchy, setModalVisitorHierarchy] = useState([]);
+  const [modalVisitorHierarchyText, setModalVisitorHierarchyText] = useState('');
+  const [modalVisitorDefaultView, setModalVisitorDefaultView] = useState('horizontal');
   const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
   const [publicThemes, setPublicThemes] = useState([]);
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
   const [showAll, setShowAll] = useState(false);
+  const [visitorTableView, setVisitorTableView] = useState('horizontal');
   const [columnFilters, setColumnFilters] = useState({});
   const [dynamicFilters, setDynamicFilters] = useState({});
   const [openFilter, setOpenFilter] = useState(null);
@@ -372,11 +377,15 @@ function App({ forceVisitor = false }) {
           return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
         };
         const filters = normalizeFilters(rawFilters);
+        const hierarchy = normalizeFilters(found.visitor_pivot_columns || []);
 
         setModalVisitorCols(cols);
         setModalVisitorFilters(filters);
+        setModalVisitorHierarchy(hierarchy);
         setModalVisitorColsText(Array.isArray(cols) ? cols.join(', ') : String(cols || ''));
         setModalVisitorFiltersText(filters.join(', '));
+        setModalVisitorHierarchyText(hierarchy.join(', '));
+        setModalVisitorDefaultView((found.visitor_default_view === 'vertical') ? 'vertical' : 'horizontal');
         setModalVisitorDefaultFilters(parseDefaultsString(found.visitor_default_filters || {}));
         setConfigModalOpen(true);
       } catch (err) {
@@ -402,6 +411,16 @@ function App({ forceVisitor = false }) {
       setExcludedRowIndices({});
     }
   }, [selectedSubTheme]);
+
+  useEffect(() => {
+    if (!isVisitor) return;
+    setColumnFilters({});
+    setDynamicFilters({});
+    setTempFilterSelection({});
+    setOpenFilter(null);
+    setShowAll(false);
+    setVisitorTableView((selectedSubTheme?.visitor_default_view === 'vertical') ? 'vertical' : 'horizontal');
+  }, [selectedSubTheme?.id, isVisitor]);
 
   // Populate chartVisitorFilters with defaults from each chart's visible_filters
   useEffect(() => {
@@ -495,9 +514,59 @@ function App({ forceVisitor = false }) {
       };
 
       const defaults = parseDefaults(raw);
-      if (!defaults || Object.keys(defaults).length === 0) return;
-      // Merge into dynamicFilters (table filter state). Use string values (not arrays) so filteredData matches.
-      setDynamicFilters(prev => ({ ...(prev || {}), ...defaults }));
+
+      const candidateColumns = [
+        ...(selectedSubTheme.visitor_filters || []),
+        ...(selectedSubTheme.filtres_disponibles || []),
+        ...(selectedSubTheme.columns || [])
+      ].map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item))).filter(Boolean);
+
+      const periodCol = candidateColumns.find(c => /(annee|année|period|période|year)/i.test(String(c).toLowerCase()));
+
+      const findLatestPeriodValue = () => {
+        if (!periodCol) return null;
+        const rows = getTableRows(selectedSubTheme) || [];
+        const vals = Array.from(new Set(rows.map(r => String(r?.[periodCol] ?? '')).filter(v => v !== '')));
+        if (vals.length === 0) return null;
+        vals.sort((a, b) => {
+          const na = Number(String(a).replace(/,/g, '.'));
+          const nb = Number(String(b).replace(/,/g, '.'));
+          const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
+          if (bothNumeric) return na - nb;
+          return String(a).localeCompare(String(b), 'fr', { numeric: true, sensitivity: 'base' });
+        });
+        return vals[vals.length - 1];
+      };
+
+      setDynamicFilters(prev => {
+        const previous = prev || {};
+        const next = { ...previous };
+        let changed = false;
+
+        if (defaults && Object.keys(defaults).length > 0) {
+          Object.entries(defaults).forEach(([k, v]) => {
+            if (next[k] !== v) {
+              next[k] = v;
+              changed = true;
+            }
+          });
+          return changed ? next : previous;
+        }
+
+        if (periodCol) {
+          const current = next[periodCol];
+          const hasCurrent = Array.isArray(current) ? current.length > 0 : (current !== undefined && current !== null && current !== '');
+          if (!hasCurrent) {
+            const latest = findLatestPeriodValue();
+            if (latest !== null && latest !== undefined && latest !== '') {
+              next[periodCol] = String(latest);
+              changed = true;
+            }
+          }
+        }
+
+        return changed ? next : previous;
+      });
     } catch (err) {
       console.error('Error applying visitor default filters to table', err);
     }
@@ -1114,23 +1183,345 @@ function App({ forceVisitor = false }) {
     if (e.target) e.target.value = null;
   };
 
-  const exportTableCSV = () => {
-    const rowsArr = getTableRows(selectedSubTheme);
-    if (!selectedSubTheme || !rowsArr || rowsArr.length === 0) return alert('Aucun tableau à exporter');
-    const cols = selectedSubTheme.columns || [];
-    const rows = rowsArr;
-    const header = cols.join(',');
-    const lines = rows.map(r => cols.map(c => `"${String(r[c] ?? '').replace(/"/g, '""')}"`).join(','));
-    const csv = [header, ...lines].join('\n');
-    const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const getExportSnapshot = () => {
+    if (!selectedSubTheme) return null;
+
+    if (isVisitor && visitorMatrix?.canPivot) {
+      if (activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
+        const headers = [
+          ...(visitorVerticalMatrix.rowCols || []),
+          ...((visitorVerticalMatrix.leaves || []).map(leaf => (leaf.values || []).join(' / ')))
+        ];
+        const rows = (visitorVerticalMatrix.rows || []).map(row => {
+          const left = (visitorVerticalMatrix.rowCols || []).map(col => row?.dimensions?.[col] ?? '');
+          const right = (visitorVerticalMatrix.leaves || []).map(leaf => row?.cells?.[leaf.key] ?? '');
+          return [...left, ...right];
+        });
+        return { headers, rows, view: 'vertical' };
+      }
+
+      const headers = [
+        ...(visitorMatrix.displayGroupCols || []),
+        ...(visitorMatrix.periods || [])
+      ];
+      const rows = (visitorMatrix.rows || []).map(row => {
+        const left = (visitorMatrix.displayGroupCols || []).map(col => row?.dimensions?.[col] ?? '');
+        const right = (visitorMatrix.periods || []).map(period => row?.values?.[period] ?? '');
+        return [...left, ...right];
+      });
+      return { headers, rows, view: 'horizontal' };
+    }
+
+    // fallback (non-visitor or non-pivot table): export currently filtered table
+    const headers = visibleColumnsForRender || selectedSubTheme.columns || [];
+    const rows = (filteredData || []).map(r => headers.map(c => r?.[c] ?? ''));
+    return { headers, rows, view: 'flat' };
+  };
+
+  const getExportMetadataEntries = () => {
+    if (!selectedSubTheme) return [];
+    const raw = [
+      ['Définition', selectedSubTheme.definition_text],
+      ['Unité', selectedSubTheme.unite_text],
+      ['Périodicité', selectedSubTheme.periodicite_text],
+      ['Indication', selectedSubTheme.indication_text],
+      ['Source', selectedSubTheme.source_text],
+      ['Couverture', selectedSubTheme.couverture_text],
+    ];
+    return raw.filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '');
+  };
+
+  const downloadBlob = (content, mimeType, fileName) => {
+    const blob = new Blob([content], { type: mimeType });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `${(selectedSubTheme.nom || 'soustheme').replace(/\s+/g, '_')}_tableau.csv`;
+    a.download = fileName;
     document.body.appendChild(a);
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  };
+
+  const escapeCSVCell = (val) => `"${String(val ?? '').replace(/"/g, '""')}"`;
+
+  const exportTableCSV = () => {
+    const snapshot = getExportSnapshot();
+    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert('Aucun tableau à exporter');
+    const header = snapshot.headers.map(escapeCSVCell).join(',');
+    const lines = (snapshot.rows || []).map(r => r.map(escapeCSVCell).join(','));
+    const csv = [header, ...lines].join('\n');
+    const fileName = `${(selectedSubTheme?.nom || 'soustheme').replace(/\s+/g, '_')}_${snapshot.view}.csv`;
+    downloadBlob(csv, 'text/csv;charset=utf-8;', fileName);
+  };
+
+  const exportTableTXT = () => {
+    const snapshot = getExportSnapshot();
+    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert('Aucun tableau à exporter');
+    const lines = [
+      snapshot.headers.join('\t'),
+      ...(snapshot.rows || []).map(r => r.map(v => String(v ?? '')).join('\t')),
+    ];
+    const txt = lines.join('\n');
+    const fileName = `${(selectedSubTheme?.nom || 'soustheme').replace(/\s+/g, '_')}_${snapshot.view}.txt`;
+    downloadBlob(txt, 'text/plain;charset=utf-8;', fileName);
+  };
+
+  const exportTableXLSX = () => {
+    const snapshot = getExportSnapshot();
+    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert('Aucun tableau à exporter');
+
+    const metadata = getExportMetadataEntries();
+    const aoa = [];
+    const merges = [];
+    const title = `Sous-thème: ${selectedSubTheme?.nom || ''} (${snapshot.view})`;
+    aoa.push([title]);
+    if (metadata.length > 0) {
+      aoa.push([]);
+      metadata.forEach(([k, v]) => aoa.push([k, String(v)]));
+    }
+    aoa.push([]);
+
+    const tableStartRow = aoa.length;
+
+    const formatValue = (val) => {
+      if (val === null || val === undefined) return '';
+      return val;
+    };
+
+    const isNumericLike = (val) => {
+      if (typeof val === 'number') return true;
+      const n = Number(String(val ?? '').replace(/,/g, '.'));
+      return !Number.isNaN(n) && String(val ?? '').trim() !== '';
+    };
+
+    const headerFillPrimary = '188FBE';
+    const headerFillSecondary = '167FA8';
+    const headerBorder = '0F6B90';
+    const bodyBorder = 'D1E2EC';
+
+    let finalHeaders = snapshot.headers;
+
+    if (isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
+      const rowCols = visitorVerticalMatrix.rowCols || [];
+      const leaves = visitorVerticalMatrix.leaves || [];
+      const headerRows = visitorVerticalMatrix.headerRows || [];
+      const totalCols = rowCols.length + leaves.length;
+
+      finalHeaders = [
+        ...rowCols,
+        ...leaves.map(leaf => (leaf.values || []).join(' / '))
+      ];
+
+      for (let hr = 0; hr < headerRows.length; hr += 1) {
+        const row = new Array(totalCols).fill('');
+        if (hr === 0) {
+          rowCols.forEach((col, idx) => { row[idx] = String(col || ''); });
+        }
+
+        let cCursor = rowCols.length;
+        (headerRows[hr]?.cells || []).forEach(cell => {
+          row[cCursor] = String(cell?.label || '');
+          if (cell.colSpan > 1) {
+            merges.push({
+              s: { r: tableStartRow + hr, c: cCursor },
+              e: { r: tableStartRow + hr, c: cCursor + cell.colSpan - 1 }
+            });
+          }
+          cCursor += cell.colSpan || 1;
+        });
+
+        aoa.push(row);
+      }
+
+      if (headerRows.length > 1 && rowCols.length > 0) {
+        rowCols.forEach((_, idx) => {
+          merges.push({
+            s: { r: tableStartRow, c: idx },
+            e: { r: tableStartRow + headerRows.length - 1, c: idx }
+          });
+        });
+      }
+
+      const bodyStart = tableStartRow + headerRows.length;
+      const dataRows = visitorVerticalMatrix.rows || [];
+      const spanMaps = {};
+      rowCols.forEach((col, colIndex) => {
+        const spans = new Array(dataRows.length).fill(0);
+        let i = 0;
+        while (i < dataRows.length) {
+          const curVal = String(dataRows[i]?.dimensions?.[col] ?? '—');
+          let j = i + 1;
+          while (j < dataRows.length) {
+            const sameVal = String(dataRows[j]?.dimensions?.[col] ?? '—') === curVal;
+            if (!sameVal) break;
+            let samePrefix = true;
+            for (let p = 0; p < colIndex; p += 1) {
+              const prevCol = rowCols[p];
+              if (String(dataRows[i]?.dimensions?.[prevCol] ?? '—') !== String(dataRows[j]?.dimensions?.[prevCol] ?? '—')) { samePrefix = false; break; }
+            }
+            if (!samePrefix) break;
+            j += 1;
+          }
+          spans[i] = j - i;
+          i = j;
+        }
+        spanMaps[col] = spans;
+      });
+
+      dataRows.forEach((rowObj, ridx) => {
+        const row = [];
+        rowCols.forEach(col => row.push(String(rowObj?.dimensions?.[col] ?? '—')));
+        leaves.forEach(leaf => row.push(formatValue(rowObj?.cells?.[leaf.key])));
+        aoa.push(row);
+
+        rowCols.forEach((col, cidx) => {
+          const span = spanMaps[col]?.[ridx] || 0;
+          if (span > 1) {
+            merges.push({
+              s: { r: bodyStart + ridx, c: cidx },
+              e: { r: bodyStart + ridx + span - 1, c: cidx }
+            });
+          }
+        });
+      });
+    } else if (isVisitor && visitorMatrix?.canPivot) {
+      const groupCols = visitorMatrix.displayGroupCols || [];
+      const periods = visitorMatrix.periods || [];
+      finalHeaders = [...groupCols, ...periods];
+      aoa.push(finalHeaders);
+
+      const dataRows = visitorMatrix.rows || [];
+      const bodyStart = tableStartRow + 1;
+
+      const spanMaps = {};
+      groupCols.forEach((col, colIndex) => {
+        const spans = new Array(dataRows.length).fill(0);
+        let i = 0;
+        while (i < dataRows.length) {
+          const curVal = String(dataRows[i]?.dimensions?.[col] ?? '—');
+          let j = i + 1;
+          while (j < dataRows.length) {
+            const sameVal = String(dataRows[j]?.dimensions?.[col] ?? '—') === curVal;
+            if (!sameVal) break;
+            let samePrefix = true;
+            for (let p = 0; p < colIndex; p += 1) {
+              const prevCol = groupCols[p];
+              if (String(dataRows[i]?.dimensions?.[prevCol] ?? '—') !== String(dataRows[j]?.dimensions?.[prevCol] ?? '—')) { samePrefix = false; break; }
+            }
+            if (!samePrefix) break;
+            j += 1;
+          }
+          spans[i] = j - i;
+          i = j;
+        }
+        spanMaps[col] = spans;
+      });
+
+      dataRows.forEach((rowObj, ridx) => {
+        const left = groupCols.map(col => String(rowObj?.dimensions?.[col] ?? '—'));
+        const right = periods.map(period => formatValue(rowObj?.values?.[period]));
+        aoa.push([...left, ...right]);
+
+        groupCols.forEach((col, cidx) => {
+          const span = spanMaps[col]?.[ridx] || 0;
+          if (span > 1) {
+            merges.push({
+              s: { r: bodyStart + ridx, c: cidx },
+              e: { r: bodyStart + ridx + span - 1, c: cidx }
+            });
+          }
+        });
+      });
+    } else {
+      finalHeaders = snapshot.headers || [];
+      aoa.push(finalHeaders);
+      (snapshot.rows || []).forEach(r => aoa.push((r || []).map(v => formatValue(v))));
+    }
+
+    const ws = XLSX.utils.aoa_to_sheet(aoa);
+    if (merges.length > 0) ws['!merges'] = merges;
+
+    const titleAddr = XLSX.utils.encode_cell({ r: 0, c: 0 });
+    if (ws[titleAddr]) {
+      ws[titleAddr].s = {
+        font: { bold: true, sz: 13, color: { rgb: '0B5E83' } },
+        alignment: { horizontal: 'left', vertical: 'center' },
+      };
+    }
+
+    // style metadata labels/values
+    if (metadata.length > 0) {
+      const metadataStart = 2;
+      for (let i = 0; i < metadata.length; i += 1) {
+        const kAddr = XLSX.utils.encode_cell({ r: metadataStart + i, c: 0 });
+        const vAddr = XLSX.utils.encode_cell({ r: metadataStart + i, c: 1 });
+        if (ws[kAddr]) ws[kAddr].s = { font: { bold: true, color: { rgb: '0C4F6D' } } };
+        if (ws[vAddr]) ws[vAddr].s = { alignment: { wrapText: true, vertical: 'top' } };
+      }
+    }
+
+    const headerStart = tableStartRow;
+    const bodyStart = (() => {
+      if (isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
+        return tableStartRow + (visitorVerticalMatrix.headerRows || []).length;
+      }
+      return tableStartRow + 1;
+    })();
+    const bodyEnd = aoa.length - 1;
+
+    // header styles
+    for (let r = headerStart; r < bodyStart; r += 1) {
+      for (let c = 0; c < finalHeaders.length; c += 1) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        if (!ws[addr]) continue;
+        ws[addr].s = {
+          fill: { fgColor: { rgb: r === headerStart ? headerFillPrimary : headerFillSecondary } },
+          font: { color: { rgb: 'FFFFFF' }, bold: true, sz: r === headerStart ? 12 : 11 },
+          alignment: { horizontal: 'center', vertical: 'center', wrapText: true },
+          border: {
+            top: { style: 'thin', color: { rgb: headerBorder } },
+            bottom: { style: 'thin', color: { rgb: headerBorder } },
+            left: { style: 'thin', color: { rgb: headerBorder } },
+            right: { style: 'thin', color: { rgb: headerBorder } },
+          },
+        };
+      }
+    }
+
+    // body styles
+    for (let r = bodyStart; r <= bodyEnd; r += 1) {
+      const isEven = (r - bodyStart) % 2 === 0;
+      for (let c = 0; c < finalHeaders.length; c += 1) {
+        const addr = XLSX.utils.encode_cell({ r, c });
+        if (!ws[addr]) continue;
+        const raw = ws[addr].v;
+        ws[addr].s = {
+          fill: { fgColor: { rgb: isEven ? 'F7FBFE' : 'FFFFFF' } },
+          font: { color: { rgb: '0C4F6D' }, sz: 11 },
+          alignment: {
+            horizontal: isNumericLike(raw) ? 'right' : 'left',
+            vertical: 'center',
+          },
+          border: {
+            top: { style: 'thin', color: { rgb: bodyBorder } },
+            bottom: { style: 'thin', color: { rgb: bodyBorder } },
+            left: { style: 'thin', color: { rgb: bodyBorder } },
+            right: { style: 'thin', color: { rgb: bodyBorder } },
+          },
+        };
+      }
+    }
+
+    // autosize columns
+    ws['!cols'] = finalHeaders.map((h, idx) => ({
+      wch: Math.max(14, String(h || '').length + (idx < 3 ? 7 : 3))
+    }));
+
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, ws, 'Tableau');
+    const fileName = `${(selectedSubTheme?.nom || 'soustheme').replace(/\s+/g, '_')}_${snapshot.view}.xlsx`;
+    XLSX.writeFile(wb, fileName);
   };
 
   const fetchThemes = async () => {
@@ -1258,6 +1649,226 @@ function App({ forceVisitor = false }) {
     }
     return selectedSubTheme.filtres_disponibles || [];
   }, [selectedSubTheme, isVisitor]);
+
+  const visitorMatrix = React.useMemo(() => {
+    if (!isVisitor || !selectedSubTheme) return null;
+
+    const cols = (visibleColumnsForRender || []).filter(Boolean);
+    const normalizedCols = cols.map(c => ({ original: c, lower: String(c).toLowerCase() }));
+
+    const periodEntry = normalizedCols.find(c => /(annee|année|period|période|year)/i.test(c.lower));
+    const valueEntry = normalizedCols.find(c => /(valeur|value|taux|%|ratio|montant|nombre|effectif)/i.test(c.lower));
+    const periodCol = periodEntry?.original || null;
+    const valueCol = valueEntry?.original || null;
+
+    const groupCols = cols.filter(c => c !== periodCol && c !== valueCol);
+    const canPivot = Boolean(periodCol && valueCol && groupCols.length > 0);
+    if (!canPivot) return { canPivot: false };
+
+    const rows = filteredData || [];
+    const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble)/i.test(String(val ?? '').toLowerCase());
+
+    const displayGroupCols = groupCols;
+
+    const uniquePeriods = Array.from(new Set(rows.map(r => String(r?.[periodCol] ?? '')).filter(v => v !== '')));
+    const sortedPeriods = uniquePeriods.sort((a, b) => {
+      const na = Number(String(a).replace(/,/g, '.'));
+      const nb = Number(String(b).replace(/,/g, '.'));
+      const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
+      if (bothNumeric) return na - nb;
+      return String(a).localeCompare(String(b), 'fr', { numeric: true, sensitivity: 'base' });
+    });
+
+    const valueLooksRate = /(%|taux|ratio|pourcentage)/i.test(String(valueCol).toLowerCase());
+    const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
+
+    const byGroup = {};
+    rows.forEach(row => {
+      const dimensions = {};
+      displayGroupCols.forEach(col => {
+        dimensions[col] = String(row?.[col] ?? '—');
+      });
+      const groupKey = displayGroupCols.map(col => dimensions[col]).join('||');
+      const periodVal = String(row?.[periodCol] ?? '');
+      if (!periodVal) return;
+
+      if (!byGroup[groupKey]) {
+        const isTotal = displayGroupCols.some(col => isTotalToken(dimensions[col]));
+        byGroup[groupKey] = { key: groupKey, dimensions, values: {}, stats: {}, isTotal };
+      }
+
+      const rawVal = row?.[valueCol];
+      const num = Number(String(rawVal ?? '').replace(/,/g, '.'));
+      if (!Number.isNaN(num)) {
+        const prev = byGroup[groupKey].stats[periodVal] || { sum: 0, count: 0 };
+        prev.sum += num;
+        prev.count += 1;
+        byGroup[groupKey].stats[periodVal] = prev;
+      } else if (byGroup[groupKey].values[periodVal] === undefined) {
+        byGroup[groupKey].values[periodVal] = rawVal ?? '';
+      }
+    });
+
+    const rowsOut = Object.values(byGroup).map(item => {
+      const values = { ...(item.values || {}) };
+      Object.entries(item.stats || {}).forEach(([period, st]) => {
+        const sum = Number(st?.sum || 0);
+        const count = Number(st?.count || 0);
+        values[period] = shouldSum ? sum : (count > 0 ? (sum / count) : '');
+      });
+      return { ...item, values };
+    }).sort((a, b) => {
+      for (const col of displayGroupCols) {
+        const av = String(a?.dimensions?.[col] ?? '');
+        const bv = String(b?.dimensions?.[col] ?? '');
+        const ai = isTotalToken(av);
+        const bi = isTotalToken(bv);
+        if (ai && !bi) return -1;
+        if (!ai && bi) return 1;
+        const cmp = av.localeCompare(bv, 'fr', { sensitivity: 'base' });
+        if (cmp !== 0) return cmp;
+      }
+      return 0;
+    });
+
+    return {
+      canPivot: true,
+      periodCol,
+      valueCol,
+      groupCols,
+      displayGroupCols,
+      periods: sortedPeriods,
+      rows: rowsOut
+    };
+  }, [isVisitor, selectedSubTheme, visibleColumnsForRender, filteredData]);
+
+  const visitorVerticalMatrix = React.useMemo(() => {
+    if (!isVisitor || !selectedSubTheme || !visitorMatrix?.canPivot) return { canVertical: false };
+
+    const cols = (visibleColumnsForRender || []).filter(Boolean);
+    const valueCol = visitorMatrix.valueCol;
+    if (!valueCol) return { canVertical: false };
+
+    const hierarchyRaw = Array.isArray(selectedSubTheme?.visitor_pivot_columns) ? selectedSubTheme.visitor_pivot_columns : [];
+    const hierarchyCols = hierarchyRaw.filter(c => cols.includes(c) && c !== valueCol);
+    if (!hierarchyCols || hierarchyCols.length === 0) return { canVertical: false };
+
+    const rowCols = cols.filter(c => c !== valueCol && !hierarchyCols.includes(c));
+    const rows = filteredData || [];
+
+    const valueLooksRate = /(%|taux|ratio|pourcentage)/i.test(String(valueCol).toLowerCase());
+    const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
+    const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble)/i.test(String(val ?? '').toLowerCase());
+
+    const compareSmart = (a, b) => {
+      const sa = String(a ?? '');
+      const sb = String(b ?? '');
+      const na = Number(sa.replace(/,/g, '.'));
+      const nb = Number(sb.replace(/,/g, '.'));
+      const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
+      if (bothNumeric) return na - nb;
+      return sa.localeCompare(sb, 'fr', { numeric: true, sensitivity: 'base' });
+    };
+
+    const leavesMap = new Map();
+    const rowMap = new Map();
+    const statsMap = new Map();
+
+    rows.forEach((row) => {
+      const hierVals = hierarchyCols.map(col => String(row?.[col] ?? '—'));
+      const leafKey = hierVals.join('||');
+      if (!leavesMap.has(leafKey)) {
+        leavesMap.set(leafKey, { key: leafKey, values: hierVals });
+      }
+
+      const rowVals = rowCols.map(col => String(row?.[col] ?? '—'));
+      const rowKey = rowCols.length > 0 ? rowVals.join('||') : '__all__';
+      if (!rowMap.has(rowKey)) {
+        rowMap.set(rowKey, {
+          key: rowKey,
+          dimensions: rowCols.reduce((acc, col, idx) => { acc[col] = rowVals[idx]; return acc; }, {}),
+          isTotal: rowCols.some((col, idx) => isTotalToken(rowVals[idx]))
+        });
+      }
+
+      const raw = row?.[valueCol];
+      const num = Number(String(raw ?? '').replace(/,/g, '.'));
+      const cellKey = `${rowKey}::${leafKey}`;
+      const prev = statsMap.get(cellKey) || { sum: 0, count: 0, raw: '' };
+      if (!Number.isNaN(num)) {
+        prev.sum += num;
+        prev.count += 1;
+      } else if (prev.raw === '' || prev.raw === undefined || prev.raw === null) {
+        prev.raw = raw ?? '';
+      }
+      statsMap.set(cellKey, prev);
+    });
+
+    const leaves = Array.from(leavesMap.values()).sort((a, b) => {
+      for (let i = 0; i < hierarchyCols.length; i++) {
+        const cmp = compareSmart(a.values[i], b.values[i]);
+        if (cmp !== 0) return cmp;
+      }
+      return 0;
+    });
+
+    const rowsOut = Array.from(rowMap.values()).map(r => {
+      const cells = {};
+      leaves.forEach(leaf => {
+        const st = statsMap.get(`${r.key}::${leaf.key}`);
+        if (!st) {
+          cells[leaf.key] = '';
+        } else if (st.count > 0) {
+          cells[leaf.key] = shouldSum ? st.sum : (st.sum / st.count);
+        } else {
+          cells[leaf.key] = st.raw ?? '';
+        }
+      });
+      return { ...r, cells };
+    }).sort((a, b) => {
+      if (a.isTotal && !b.isTotal) return -1;
+      if (!a.isTotal && b.isTotal) return 1;
+      for (const col of rowCols) {
+        const cmp = compareSmart(a?.dimensions?.[col], b?.dimensions?.[col]);
+        if (cmp !== 0) return cmp;
+      }
+      return 0;
+    });
+
+    const headerRows = hierarchyCols.map((col, level) => {
+      const cells = [];
+      let i = 0;
+      while (i < leaves.length) {
+        const label = leaves[i].values[level];
+        let j = i + 1;
+        while (j < leaves.length) {
+          let samePrefix = true;
+          for (let p = 0; p < level; p++) {
+            if (leaves[j].values[p] !== leaves[i].values[p]) { samePrefix = false; break; }
+          }
+          if (!samePrefix) break;
+          if (leaves[j].values[level] !== label) break;
+          j += 1;
+        }
+        cells.push({ key: `${col}-${i}`, label, colSpan: j - i });
+        i = j;
+      }
+      return { col, cells };
+    });
+
+    return {
+      canVertical: leaves.length > 0,
+      hierarchyCols,
+      rowCols,
+      leaves,
+      headerRows,
+      rows: rowsOut,
+      valueCol
+    };
+  }, [isVisitor, selectedSubTheme, visitorMatrix, visibleColumnsForRender, filteredData]);
+
+  const canVisitorVerticalView = Boolean(isVisitor && visitorVerticalMatrix?.canVertical);
+  const activeVisitorView = (canVisitorVerticalView && visitorTableView === 'vertical') ? 'vertical' : 'horizontal';
 
   // Gestion des graphiques
   const handleAddOrUpdateChart = async () => {
@@ -2682,70 +3293,296 @@ function App({ forceVisitor = false }) {
 
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
               <div className="space-y-4">
-                <div className="border-2 border-black rounded-lg overflow-auto max-h-80 bg-white shadow-inner">
-                  <table className="w-full text-center border-collapse">
-                    <thead className="bg-gray-100 border-b-2 border-black font-bold sticky top-0 z-10">
-                      <tr>
-                        {visibleColumnsForRender.map(col => (
-                          <th key={col} className="p-2 border-r border-black min-w-[150px]">
-                            <div className="text-blue-800 italic mb-2 uppercase text-[10px]">{col}</div>
-                            <input 
-                              type="text" 
-                              placeholder="Filtrer..."
-                              className="w-full p-1 text-xs border border-gray-300 rounded font-normal outline-none focus:border-blue-500"
-                              onChange={(e) => setColumnFilters({...columnFilters, [col]: e.target.value})}
-                            />
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {(() => {
-                        const displayedRows = showAll ? filteredData : filteredData.slice(0, 3);
+                {isVisitor && visitorMatrix?.canPivot && (
+                  <div className="flex gap-2 items-center">
+                    <button
+                      onClick={() => setVisitorTableView('horizontal')}
+                      className={`px-4 py-2 border rounded-lg font-bold text-sm ${activeVisitorView === 'horizontal' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5]'}`}
+                    >Vue horizontale</button>
+                    <button
+                      onClick={() => canVisitorVerticalView && setVisitorTableView('vertical')}
+                      disabled={!canVisitorVerticalView}
+                      className={`px-4 py-2 border rounded-lg font-bold text-sm ${activeVisitorView === 'vertical' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5]'} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
+                    >Vue verticale</button>
+                  </div>
+                )}
 
-                        // Use rowspan merging for consecutive identical cells (same behavior for all roles)
+                <div className={`${isVisitor ? 'border-2 border-[#0b80b1] rounded-xl bg-white shadow-[0_2px_12px_rgba(0,70,120,0.12)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} overflow-auto max-h-[28rem]`}>
+                  {isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' ? (
+                    <>
+                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-3 py-2 text-xs text-[#0b5e83] font-medium">
+                        <span>{(visitorVerticalMatrix.rows || []).length} ligne(s)</span>
+                        <span className="mx-2">•</span>
+                        <span>{(visitorVerticalMatrix.hierarchyCols || []).length} niveau(x) hiérarchique(s)</span>
+                      </div>
+                      <table className="w-full border-collapse text-sm">
+                        <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]">
+                          {(() => {
+                            const headerRows = visitorVerticalMatrix.headerRows || [];
+                            const rowCols = visitorVerticalMatrix.rowCols || [];
+                            if (headerRows.length === 0) return null;
+                            return (
+                              <>
+                                <tr>
+                                  {rowCols.map(col => (
+                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-3 border-r border-[#0f6b90] min-w-[150px] text-left uppercase tracking-wide font-bold text-[12px]">{col}</th>
+                                  ))}
+                                  {(headerRows[0].cells || []).map(cell => (
+                                    <th key={cell.key} colSpan={cell.colSpan} className="p-3 border-r border-[#0f6b90] text-center font-bold text-[13px]">{cell.label}</th>
+                                  ))}
+                                </tr>
+                                {headerRows.slice(1).map((row, ridx) => (
+                                  <tr key={`hrow-${ridx + 1}`}>
+                                    {(row.cells || []).map(cell => (
+                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#0f6b90] text-center font-semibold text-[12px] bg-[#167fa8]">{cell.label}</th>
+                                    ))}
+                                  </tr>
+                                ))}
+                              </>
+                            );
+                          })()}
+                        </thead>
+                        <tbody>
+                          {(() => {
+                            const displayedRows = showAll ? (visitorVerticalMatrix.rows || []) : (visitorVerticalMatrix.rows || []).slice(0, 8);
+                            const rowCols = visitorVerticalMatrix.rowCols || [];
+                            const leaves = visitorVerticalMatrix.leaves || [];
 
-                        // Admin view: compute rowSpans for consecutive identical cells in displayedRows
-                        const rowCount = displayedRows.length;
-                        const spans = {};
-                        visibleColumnsForRender.forEach(col => {
-                          spans[col] = new Array(rowCount).fill(0);
-                          let i = 0;
-                          while (i < rowCount) {
-                            const val = String((displayedRows[i] && displayedRows[i][col]) ?? '');
-                            let j = i + 1;
-                            while (j < rowCount && String((displayedRows[j] && displayedRows[j][col]) ?? '') === val) j++;
-                            const span = j - i;
-                            spans[col][i] = span; // first occurance gets span
-                            i = j;
-                          }
-                        });
+                            const formatValue = (val) => {
+                              if (val === null || val === undefined || val === '') return '—';
+                              if (typeof val === 'number') {
+                                return Number.isInteger(val)
+                                  ? val.toLocaleString('fr-FR')
+                                  : val.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                              }
+                              const n = Number(String(val).replace(/,/g, '.'));
+                              if (!Number.isNaN(n)) {
+                                return Number.isInteger(n)
+                                  ? n.toLocaleString('fr-FR')
+                                  : n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                              }
+                              return String(val);
+                            };
 
-                        return displayedRows.map((row, i) => (
-                          <tr key={i} className="border-b border-gray-300 h-10 hover:bg-gray-50">
-                            {visibleColumnsForRender.map((col) => {
-                              const span = spans[col][i] || 0;
-                              if (span === 0) return null;
-                              return (
-                                <td key={col} rowSpan={span} className="border-r border-gray-300 p-2 text-xs align-top">{row[col]}</td>
-                              );
-                            })}
-                          </tr>
-                        ));
-                      })()}
-                    </tbody>
-                  </table>
+                            const rowCount = displayedRows.length;
+                            const spans = {};
+                            rowCols.forEach((col, colIndex) => {
+                              spans[col] = new Array(rowCount).fill(0);
+                              let i = 0;
+                              while (i < rowCount) {
+                                const curVal = String(displayedRows[i]?.dimensions?.[col] ?? '—');
+                                let j = i + 1;
+                                while (j < rowCount) {
+                                  const sameVal = String(displayedRows[j]?.dimensions?.[col] ?? '—') === curVal;
+                                  if (!sameVal) break;
+                                  let samePrefix = true;
+                                  for (let p = 0; p < colIndex; p++) {
+                                    const prevCol = rowCols[p];
+                                    const leftAtI = String(displayedRows[i]?.dimensions?.[prevCol] ?? '—');
+                                    const leftAtJ = String(displayedRows[j]?.dimensions?.[prevCol] ?? '—');
+                                    if (leftAtI !== leftAtJ) { samePrefix = false; break; }
+                                  }
+                                  if (!samePrefix) break;
+                                  j += 1;
+                                }
+                                spans[col][i] = j - i;
+                                i = j;
+                              }
+                            });
+
+                            return displayedRows.map((row, i) => (
+                              <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#e8f5fb] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f7fbfe]')} border-b border-[#c9dbe6]`}>
+                                {rowCols.map(col => {
+                                  const span = spans[col][i] || 0;
+                                  if (span === 0) return null;
+                                  const isYearCol = /(annee|année|period|période|year)/i.test(String(col).toLowerCase());
+                                  return (
+                                    <td
+                                      key={`${row.key}-${col}`}
+                                      rowSpan={span}
+                                      className={`p-3 border-r border-[#d1e2ec] text-[#0c4f6d] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
+                                    >
+                                      <span className={`font-semibold ${isYearCol ? 'text-3xl leading-none' : ''}`}>{String(row?.dimensions?.[col] ?? '—')}</span>
+                                    </td>
+                                  );
+                                })}
+                                {leaves.map((leaf, idx) => (
+                                  <td key={`${row.key}-${leaf.key}`} className={`p-3 border-r border-[#e2edf3] text-right text-[#0f6fa0] tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f1f9fd] font-semibold' : ''}`}>
+                                    {formatValue(row?.cells?.[leaf.key])}
+                                  </td>
+                                ))}
+                              </tr>
+                            ));
+                          })()}
+                        </tbody>
+                      </table>
+                    </>
+                  ) : isVisitor && visitorMatrix?.canPivot ? (
+                    <>
+                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-3 py-2 text-xs text-[#0b5e83] font-medium">
+                        <span>{(visitorMatrix.rows || []).length} ligne(s)</span>
+                        <span className="mx-2">•</span>
+                        <span>{(visitorMatrix.periods || []).length} période(s)</span>
+                        {visitorMatrix.periods?.length > 0 && (
+                          <>
+                            <span className="mx-2">•</span>
+                            <span>Dernière période: <strong>{visitorMatrix.periods[visitorMatrix.periods.length - 1]}</strong></span>
+                          </>
+                        )}
+                      </div>
+                      <table className="w-full border-collapse text-sm">
+                      <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]">
+                        <tr>
+                          {(visitorMatrix.displayGroupCols || []).map(col => (
+                            <th key={col} className="p-3 border-r border-[#0f6b90] min-w-[170px] text-left uppercase tracking-wide font-bold text-[12px]">{col}</th>
+                          ))}
+                          {visitorMatrix.periods.map((period, idx) => (
+                            <th key={period} className={`p-3 border-r border-[#0f6b90] min-w-[110px] text-center font-bold text-[13px] ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#167fa8]' : ''}`}>{period}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const displayedRows = showAll ? (visitorMatrix.rows || []) : (visitorMatrix.rows || []).slice(0, 8);
+                          const groupCols = visitorMatrix.displayGroupCols || [];
+                          const formatValue = (val) => {
+                            if (val === null || val === undefined || val === '') return '—';
+                            if (typeof val === 'number') {
+                              return Number.isInteger(val)
+                                ? val.toLocaleString('fr-FR')
+                                : val.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                            }
+                            const n = Number(String(val).replace(/,/g, '.'));
+                            if (!Number.isNaN(n)) {
+                              return Number.isInteger(n)
+                                ? n.toLocaleString('fr-FR')
+                                : n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                            }
+                            return String(val);
+                          };
+
+                          const rowCount = displayedRows.length;
+                          const spans = {};
+                          groupCols.forEach((col, colIndex) => {
+                            spans[col] = new Array(rowCount).fill(0);
+                            let i = 0;
+                            while (i < rowCount) {
+                              const curVal = String(displayedRows[i]?.dimensions?.[col] ?? '—');
+                              let j = i + 1;
+                              while (j < rowCount) {
+                                const sameVal = String(displayedRows[j]?.dimensions?.[col] ?? '—') === curVal;
+                                if (!sameVal) break;
+                                let samePrefix = true;
+                                for (let p = 0; p < colIndex; p++) {
+                                  const prevCol = groupCols[p];
+                                  const leftAtI = String(displayedRows[i]?.dimensions?.[prevCol] ?? '—');
+                                  const leftAtJ = String(displayedRows[j]?.dimensions?.[prevCol] ?? '—');
+                                  if (leftAtI !== leftAtJ) {
+                                    samePrefix = false;
+                                    break;
+                                  }
+                                }
+                                if (!samePrefix) break;
+                                j += 1;
+                              }
+                              spans[col][i] = j - i;
+                              i = j;
+                            }
+                          });
+
+                          const latestPeriod = visitorMatrix.periods[visitorMatrix.periods.length - 1];
+                          return displayedRows.map((row, i) => (
+                            <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#e8f5fb] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f7fbfe]')} border-b border-[#c9dbe6]`}>
+                              {groupCols.map((col, colIndex) => {
+                                const span = spans[col][i] || 0;
+                                if (span === 0) return null;
+                                const value = String(row?.dimensions?.[col] ?? '—');
+                                const isTotalCell = /(total|totale|tous|toutes|tout|ensemble)/i.test(value.toLowerCase());
+                                const isMergedCell = span > 1;
+                                const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
+                                return (
+                                  <td key={`${row.key}-${col}`} rowSpan={span} className={`p-3 border-r border-[#d1e2ec] text-[#0c4f6d] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
+                                    <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{value}</span>
+                                    {isTotalCell && colIndex === groupCols.length - 1 && (
+                                      <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#188fbe] text-white uppercase tracking-wide">Total</span>
+                                    )}
+                                  </td>
+                                );
+                              })}
+                              {visitorMatrix.periods.map(period => (
+                                <td key={`${row.key}-${period}`} className={`p-3 border-r border-[#e2edf3] text-right text-[#0f6fa0] tabular-nums ${period === latestPeriod ? 'bg-[#f1f9fd] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
+                              ))}
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                    </>
+                  ) : (
+                    <table className="w-full text-center border-collapse">
+                      <thead className={`${isVisitor ? 'bg-[#dceff8] border-b border-[#8abed5]' : 'bg-gray-100 border-b-2 border-black'} font-bold sticky top-0 z-10`}>
+                        <tr>
+                          {visibleColumnsForRender.map(col => (
+                            <th key={col} className={`p-2 ${isVisitor ? 'border-r border-[#8abed5]' : 'border-r border-black'} min-w-[150px]`}>
+                              <div className={`${isVisitor ? 'text-[#0f5f84] font-semibold' : 'text-blue-800 italic'} mb-2 uppercase text-[10px]`}>{col}</div>
+                              <input 
+                                type="text" 
+                                placeholder="Filtrer..."
+                                className="w-full p-1 text-xs border border-gray-300 rounded font-normal outline-none focus:border-blue-500"
+                                onChange={(e) => setColumnFilters({...columnFilters, [col]: e.target.value})}
+                              />
+                            </th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {(() => {
+                          const displayedRows = showAll ? filteredData : filteredData.slice(0, isVisitor ? 8 : 3);
+                          const rowCount = displayedRows.length;
+                          const spans = {};
+                          visibleColumnsForRender.forEach(col => {
+                            spans[col] = new Array(rowCount).fill(0);
+                            let i = 0;
+                            while (i < rowCount) {
+                              const val = String((displayedRows[i] && displayedRows[i][col]) ?? '');
+                              let j = i + 1;
+                              while (j < rowCount && String((displayedRows[j] && displayedRows[j][col]) ?? '') === val) j++;
+                              spans[col][i] = j - i;
+                              i = j;
+                            }
+                          });
+
+                          return displayedRows.map((row, i) => (
+                            <tr key={i} className={`${isVisitor ? (i % 2 === 0 ? 'bg-white' : 'bg-[#f8fcff]') : ''} border-b border-gray-300 h-10 hover:bg-gray-50`}>
+                              {visibleColumnsForRender.map((col) => {
+                                const span = spans[col][i] || 0;
+                                if (span === 0) return null;
+                                const isNumericCol = /(valeur|value|%|taux|montant|effectif)/i.test(String(col).toLowerCase());
+                                return (
+                                  <td key={col} rowSpan={span} className={`border-r border-gray-300 p-2 text-xs align-top ${isNumericCol ? 'text-right tabular-nums text-[#0f6fa0] font-medium' : ''}`}>{row[col]}</td>
+                                );
+                              })}
+                            </tr>
+                          ));
+                        })()}
+                      </tbody>
+                    </table>
+                  )}
                 </div>
                 <div className="flex gap-4 items-center">
                   <button onClick={() => setShowAll(!showAll)} className="bg-[#8ec278] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
-                    {showAll ? "Réduire le tableau" : "Afficher tout le tableau"}
+                    {showAll ? "Réduire le tableau" : (isVisitor ? "Afficher plus de lignes" : "Afficher tout le tableau")}
                   </button>
 
                   {canEdit && (userRole === 'ADMIN' || isSaisisseur) && (
                     <button onClick={openEditTable} className="bg-[#ffd56b] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Modifier le tableau</button>
                   )}
 
-                  <button onClick={exportTableCSV} className="bg-[#62a3ff] text-white px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Exporter le tableau</button>
+                  <div className="flex gap-2">
+                    <button onClick={exportTableXLSX} className="bg-[#36424f] text-white px-4 py-2 border-2 border-black rounded font-bold shadow-md">Exporter XLSX</button>
+                    <button onClick={exportTableCSV} className="bg-[#36424f] text-white px-4 py-2 border-2 border-black rounded font-bold shadow-md">Exporter CSV</button>
+                    <button onClick={exportTableTXT} className="bg-[#36424f] text-white px-4 py-2 border-2 border-black rounded font-bold shadow-md">Exporter TXT</button>
+                  </div>
                 </div>
               </div>
 
@@ -3313,6 +4150,25 @@ function App({ forceVisitor = false }) {
               </div>
 
               <div>
+                <label className="block font-bold mb-2">Hiérarchie des colonnes (optionnel)</label>
+                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorHierarchyText} onChange={e => setModalVisitorHierarchyText(e.target.value)} />
+                <div className="text-sm italic text-gray-600">Ordre hiérarchique pour l'entête vertical/multi-niveaux (ex: Année, Sexe, Milieu). Les colonnes non listées restent en affichage normal.</div>
+              </div>
+
+              <div>
+                <label className="block font-bold mb-2">Vue par défaut du visiteur</label>
+                <select
+                  className="w-full p-2 border-2 border-black rounded bg-white"
+                  value={modalVisitorDefaultView}
+                  onChange={e => setModalVisitorDefaultView(e.target.value === 'vertical' ? 'vertical' : 'horizontal')}
+                >
+                  <option value="horizontal">Horizontale</option>
+                  <option value="vertical">Verticale</option>
+                </select>
+                <div className="text-sm italic text-gray-600">Le visiteur peut toujours basculer entre les deux vues.</div>
+              </div>
+
+              <div>
                 <label className="block font-bold mb-2">Filtres par défaut</label>
                 {/* show a human-friendly string while keeping state as an object */}
                 {(() => {
@@ -3382,19 +4238,25 @@ function App({ forceVisitor = false }) {
                   // parse the text fields into arrays (only on save)
                   const parsedCols = String(modalVisitorColsText || '').split(',').map(s => s.trim()).filter(s => s !== '');
                   const parsedFilters = String(modalVisitorFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== '');
+                  const parsedHierarchy = String(modalVisitorHierarchyText || '').split(',').map(s => s.trim()).filter(s => s !== '');
 
                   const payload = {
                     visitor_visible_columns: parsedCols,
                     visitor_filters: parsedFilters,
-                    visitor_default_filters: parsedDefaults
+                    visitor_default_filters: parsedDefaults,
+                    visitor_pivot_columns: parsedHierarchy,
+                    visitor_default_view: modalVisitorDefaultView === 'vertical' ? 'vertical' : 'horizontal'
                   };
                   await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`, payload);
                   showToast('Configuration visiteur enregistrée', 'success');
                   // update local text/array states to reflect saved values
                   setModalVisitorCols(parsedCols);
                   setModalVisitorFilters(parsedFilters);
+                  setModalVisitorHierarchy(parsedHierarchy);
                   setModalVisitorColsText(parsedCols.join(', '));
                   setModalVisitorFiltersText(parsedFilters.join(', '));
+                  setModalVisitorHierarchyText(parsedHierarchy.join(', '));
+                  setVisitorTableView(modalVisitorDefaultView === 'vertical' ? 'vertical' : 'horizontal');
                   // fetch the updated sous-thème and update local state so the view refreshes immediately
                   try {
                     const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);

@@ -82,9 +82,9 @@ WSGI_APPLICATION = 'backend.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.postgresql',
-        'NAME': 'hcp_db', # Le nom que vous avez mis dans pgAdmin
+        'NAME': 'hcp_db', 
         'USER': 'postgres',
-        'PASSWORD': 'salmita456', # Votre mot de passe pgAdmin
+        'PASSWORD': 'salmita456', 
         'HOST': 'localhost',
         'PORT': '5432',
     }
