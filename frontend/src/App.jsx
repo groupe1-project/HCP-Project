@@ -244,6 +244,18 @@ function App({ forceVisitor = false }) {
 
   // Enforce and persist role-based active menu so saisisseur reste sur son espace après refresh
   useEffect(() => {
+    // Visitor mode must never open admin/saisisseur workspace even if localStorage has old value
+    if (isVisitor) {
+      const visitorAllowedMenus = ['Themes', 'Indicateurs'];
+      if (!visitorAllowedMenus.includes(activeMenu)) {
+        setActiveMenu('Themes');
+        try { localStorage.setItem('activeMenu', 'Themes'); } catch (e) {}
+        return;
+      }
+      try { localStorage.setItem('activeMenu', activeMenu); } catch (e) {}
+      return;
+    }
+
     // If the user is a saisisseur, ensure they don't land on Admin
     if (isSaisisseur && activeMenu === 'Admin') {
       setActiveMenu('Saisisseur');
@@ -260,7 +272,7 @@ function App({ forceVisitor = false }) {
 
     // Persist any change to activeMenu
     try { localStorage.setItem('activeMenu', activeMenu); } catch (e) {}
-  }, [isSaisisseur, activeMenu]);
+  }, [isVisitor, isSaisisseur, activeMenu]);
 
   useEffect(() => { 
     if (isAuthenticated || isVisitor) fetchThemes(); 
@@ -2169,6 +2181,27 @@ function App({ forceVisitor = false }) {
   const isAdminView = String(activeMenu || '').toLowerCase().includes('admin');
   // Tant que l'interface visiteurs n'est pas développée, l'admin voit tout même dans l'onglet "Thèmes"
   const visibleThemes = isAuthenticated ? themes : themes.filter(t => !t.archived);
+  const indicatorsSubThemes = themes.flatMap(theme => {
+    const directSubThemes = (theme.sous_themes || []).map(st => ({
+      ...st,
+      theme_titre: theme.titre,
+      theme_id: theme.id
+    }));
+    const categorySubThemes = (theme.categories || []).flatMap(cat =>
+      (cat.sous_themes || []).map(st => ({
+        ...st,
+        theme_titre: theme.titre,
+        theme_id: theme.id,
+        categorie_nom: cat.nom
+      }))
+    );
+
+    const byId = new Map();
+    [...directSubThemes, ...categorySubThemes].forEach(st => {
+      if (!byId.has(st.id)) byId.set(st.id, st);
+    });
+    return Array.from(byId.values());
+  });
 
   // Affiche le loading ou la page de login/admin
   if (authLoading) {
@@ -2233,39 +2266,41 @@ function App({ forceVisitor = false }) {
 
       {/* 2. CONTENU PRINCIPAL */}
       <div className="flex-1 flex flex-col">
-        <div className="bg-[#a2e3f7] p-4 border-b-2 border-black flex justify-center shadow-md relative">
-          <h1 className="text-[#1a5d85] text-xl font-bold italic text-center">
+        <div className="bg-[#98d4e8] px-6 py-4 border-b border-[#2f5f7a] flex justify-center shadow-[0_2px_8px_rgba(10,59,84,0.15)] relative">
+          <h1 className="text-[#155678] text-[32px] md:text-[36px] font-bold italic text-center tracking-wide leading-tight">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
-          isAdminView 
         </div>
 
-        <div className="p-6 flex justify-center">
-          <div className="relative w-1/2">
-            <input 
-              type="text" 
-              placeholder={
-                activeMenu === 'Themes' && formStep === 0 ? 'Rechercher un thème...' : 
-                activeMenu === 'Indicateurs' ? 'Rechercher un indicateur...' :
-                formStep === 3 ? 'Rechercher un sous-thème...' : 
-                'Barre de recherche'
-              } 
-              className="w-full p-2 border-2 border-black rounded shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] bg-white italic outline-none"
-              value={
-                activeMenu === 'Indicateurs' ? searchIndicateur :
-                formStep === 0 ? searchTheme : 
-                formStep === 3 ? searchSubTheme : 
-                ''
-              }
-              onChange={(e) => {
-                if (activeMenu === 'Indicateurs') setSearchIndicateur(e.target.value);
-                else if (formStep === 0) setSearchTheme(e.target.value);
-                else if (formStep === 3) setSearchSubTheme(e.target.value);
-              }}
-            />
-            <span className="absolute right-3 top-2">🔍</span>
+        {formStep !== 4 && (
+          <div className="px-6 pt-6 pb-4 flex justify-center">
+            <div className="relative w-full max-w-2xl">
+              <input 
+                type="text" 
+                placeholder={
+                  activeMenu === 'Themes' && formStep === 0 ? 'Rechercher un thème...' : 
+                  activeMenu === 'Indicateurs' ? 'Rechercher un indicateur...' :
+                  formStep === 3 ? 'Rechercher un sous-thème...' : 
+                  'Barre de recherche'
+                } 
+                className="w-full px-4 py-2.5 border-2 border-[#1f3e56] rounded-lg shadow-[0_3px_8px_rgba(0,0,0,0.12)] bg-white italic outline-none focus:border-[#188fbe]"
+                value={
+                  activeMenu === 'Indicateurs' ? searchIndicateur :
+                  formStep === 0 ? searchTheme : 
+                  formStep === 3 ? searchSubTheme : 
+                  ''
+                }
+                onChange={(e) => {
+                  if (activeMenu === 'Indicateurs') setSearchIndicateur(e.target.value);
+                  else if (formStep === 0) setSearchTheme(e.target.value);
+                  else if (formStep === 3) setSearchSubTheme(e.target.value);
+                }}
+              />
+              <span className="absolute right-3 top-2.5">🔍</span>
+            </div>
           </div>
-        </div>
+        )}
+        {formStep === 4 && <div className="h-5" />}
 
         <div className="px-8 pb-10 flex-1">
           
@@ -2273,9 +2308,7 @@ function App({ forceVisitor = false }) {
           {activeMenu === 'Indicateurs' && (
             <div className="relative min-h-[400px]">
               <div className="grid grid-cols-4 gap-6">
-                {themes.flatMap(theme => 
-                  (theme.sous_themes || []).map(st => ({...st, theme_titre: theme.titre, theme_id: theme.id}))
-                ).filter(st => 
+                {indicatorsSubThemes.filter(st => 
                   st.nom.toLowerCase().includes(searchIndicateur.toLowerCase()) ||
                   st.theme_titre.toLowerCase().includes(searchIndicateur.toLowerCase())
                 ).map((st, i) => (
@@ -2285,7 +2318,10 @@ function App({ forceVisitor = false }) {
                       try {
                         const res = await axios.get(themesApiBase);
                         const freshTheme = res.data.find(t => t.id === st.theme_id);
-                        const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                        const freshSubTheme =
+                          (freshTheme?.sous_themes || []).find(sub => sub.id === st.id) ||
+                          (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(sub => sub.id === st.id);
+                        if (!freshTheme || !freshSubTheme) return;
                         setSelectedTheme(freshTheme);
                         selectSubTheme(freshSubTheme);
                         setSavedCharts(freshSubTheme.charts_config || []);
@@ -2311,7 +2347,7 @@ function App({ forceVisitor = false }) {
           )}
 
           {/* PAGE ADMINISTRATEURS / SAISISSEUR */}
-          {(activeMenu === 'Admin' || activeMenu === 'Saisisseur') && (
+          {!isVisitor && (activeMenu === 'Admin' || activeMenu === 'Saisisseur') && (
             <AdministratorsPage isSaisisseur={isSaisisseur} />
           )}
 
@@ -3026,13 +3062,13 @@ function App({ forceVisitor = false }) {
 
           {/* ÉTAPE 4 : DÉTAILS SOUS-THÈME DÉVELOPPÉ */}
           {activeMenu === 'Themes' && formStep === 4 && selectedSubTheme && (
-            <div className="bg-white border-2 border-black p-6 rounded-xl shadow-2xl space-y-6">
+            <div className="bg-white border border-[#b8d4e3] p-6 rounded-2xl shadow-[0_8px_24px_rgba(16,78,116,0.12)] space-y-6">
               
-              <div className="flex justify-between items-start">
-                <h3 className="bg-[#c2d9ff] px-6 py-2 border-2 border-black rounded-xl font-bold text-lg shadow-sm">
+              <div className="flex flex-wrap justify-between items-start gap-4">
+                <h3 className="bg-[#e6f2fb] text-[#134f70] px-6 py-2 border border-[#9fc7dc] rounded-xl font-bold text-base shadow-sm">
                   Sous thème : {selectedSubTheme.nom}
                 </h3>
-                <div className="flex items-center gap-3">
+                <div className="flex flex-wrap items-center gap-2">
                   {canEdit && userRole === 'ADMIN' ? (
                     <>
                       <div className={`w-5 h-5 rounded-full border border-black ${selectedSubTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
@@ -3044,7 +3080,7 @@ function App({ forceVisitor = false }) {
                           if (!confirm('Changer le statut du sous-thème ?')) return;
                           await toggleSubThemePublication(selectedSubTheme.id, newVis);
                         }}
-                        className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none"
+                        className="flex-1 border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none"
                       >
                         <option value="Public">Public</option>
                         <option value="Privé">Privé</option>
@@ -3069,14 +3105,14 @@ function App({ forceVisitor = false }) {
                         }
                         showToast('Ouverture configuration visiteur', 'info');
                       }}
-                      className="bg-red-600 text-white px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-red-700"
+                      className="bg-[#df4a4a] text-white px-4 py-2 rounded-xl border border-[#9a2d2d] font-bold shadow-sm hover:bg-[#c93b3b]"
                     >
                       ⚙️ Visiteur
                     </button>
                   )}
 
-                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
-                  <button onClick={() => setFormStep(3)} className="bg-orange-400 text-white px-4 py-1 border-2 border-black rounded-lg font-bold shadow-md">Fermer</button>
+                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white text-[#134f70] px-4 py-2 rounded-xl border border-[#9fc7dc] font-bold shadow-sm hover:bg-[#f4fbff]">Métadonnées</button>
+                  <button onClick={() => setFormStep(3)} className="bg-[#f39a3d] text-white px-4 py-2 border border-[#aa6420] rounded-xl font-bold shadow-sm hover:bg-[#e6892a]">Fermer</button>
                   {/* Saisisseur: Enregistrer / Envoyer au admin */}
                   {isSaisisseur && (
                     <>
@@ -3190,15 +3226,15 @@ function App({ forceVisitor = false }) {
 
               {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
               {filtersForRender && filtersForRender.length > 0 && (
-                <div className="bg-blue-50 border-2 border-blue-300 rounded-lg p-4 space-y-3 w-fit">
+                <div className="bg-[#eef7fd] border border-[#9fc7dc] rounded-xl p-4 space-y-4 w-fit shadow-sm">
                   <h3 className="font-bold text-blue-900">🔍 Filtres Disponibles</h3>
-                  <div className="flex gap-3">
+                  <div className="flex flex-wrap gap-4">
                     {filtersForRender.map(filterCol => (
                       <div key={filterCol} className="relative">
-                        <label className="text-sm font-bold text-gray-700 block mb-1">{filterCol}</label>
+                        <label className="text-sm font-bold text-gray-700 block mb-2">{filterCol}</label>
                         <button
                           type="button"
-                          className="w-40 text-left p-2 border-2 border-blue-300 rounded bg-white outline-none text-sm"
+                          className="w-44 text-left px-3 py-2 border border-[#9fc7dc] rounded-lg bg-white outline-none text-sm font-medium"
                           onClick={(e) => {
                             e.stopPropagation();
                             // open popover and init temp selection from dynamicFilters
@@ -3219,8 +3255,8 @@ function App({ forceVisitor = false }) {
                         </button>
 
                         {openFilter === filterCol && (
-                          <div className="absolute z-50 left-0 top-full mt-1 bg-white border-2 border-blue-300 rounded-lg shadow-lg p-3 w-64 max-h-56 overflow-auto">
-                            <div className="flex flex-col gap-1">
+                          <div className="absolute z-50 left-0 top-full mt-2 bg-white border border-[#9fc7dc] rounded-lg shadow-[0_8px_22px_rgba(15,86,120,0.2)] p-4 w-64 max-h-56 overflow-auto">
+                            <div className="flex flex-col gap-2">
                               {getUniqueValuesForColumn(filterCol).map(val => {
                                 const set = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
                                 const checked = set.has(String(val));
@@ -3245,12 +3281,12 @@ function App({ forceVisitor = false }) {
                                 );
                               })}
                             </div>
-                            <div className="flex justify-between items-center gap-2 mt-3">
+                            <div className="flex justify-between items-center gap-2 mt-4">
                               <div className="text-xs text-gray-600">{getUniqueValuesForColumn(filterCol).length} option(s)</div>
                               <div className="flex gap-2">
                                 <button
                                   type="button"
-                                  className="px-3 py-1 bg-[#4a77b4] text-white rounded font-semibold"
+                                  className="px-4 py-2 bg-[#188fbe] text-white rounded-md font-semibold"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     const s = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
@@ -3258,10 +3294,10 @@ function App({ forceVisitor = false }) {
                                     setOpenFilter(null);
                                   }}
                                 >Appliquer</button>
-                                <button type="button" className="px-3 py-1 bg-gray-100 rounded" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>Fermer</button>
+                                <button type="button" className="px-4 py-2 bg-gray-100 rounded-md" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>Fermer</button>
                                 <button
                                   type="button"
-                                  className="px-3 py-1 bg-red-500 text-white rounded"
+                                  className="px-4 py-2 bg-red-500 text-white rounded-md"
                                   onClick={(e) => {
                                     e.stopPropagation();
                                     setTempFilterSelection(prev => ({ ...(prev || {}), [filterCol]: new Set() }));
@@ -3288,7 +3324,7 @@ function App({ forceVisitor = false }) {
                     setAdvancedConfig(init); 
                     setAdvancedConfigFiltersText(Array.isArray(init.filtres_disponibles) ? init.filtres_disponibles.join(', ') : String(init.filtres_disponibles || ''));
                     setShowAdvancedConfig(true); 
-                  }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
+                  }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold text-sm shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
               )}
 
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
@@ -3297,12 +3333,12 @@ function App({ forceVisitor = false }) {
                   <div className="flex gap-2 items-center">
                     <button
                       onClick={() => setVisitorTableView('horizontal')}
-                      className={`px-4 py-2 border rounded-lg font-bold text-sm ${activeVisitorView === 'horizontal' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5]'}`}
+                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'horizontal' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5] hover:bg-[#f2f9fd]'}`}
                     >Vue horizontale</button>
                     <button
                       onClick={() => canVisitorVerticalView && setVisitorTableView('vertical')}
                       disabled={!canVisitorVerticalView}
-                      className={`px-4 py-2 border rounded-lg font-bold text-sm ${activeVisitorView === 'vertical' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5]'} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'vertical' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5] hover:bg-[#f2f9fd]'} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >Vue verticale</button>
                   </div>
                 )}
@@ -3310,7 +3346,7 @@ function App({ forceVisitor = false }) {
                 <div className={`${isVisitor ? 'border-2 border-[#0b80b1] rounded-xl bg-white shadow-[0_2px_12px_rgba(0,70,120,0.12)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} overflow-auto max-h-[28rem]`}>
                   {isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' ? (
                     <>
-                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-3 py-2 text-xs text-[#0b5e83] font-medium">
+                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-4 py-2 text-xs text-[#0b5e83] font-medium">
                         <span>{(visitorVerticalMatrix.rows || []).length} ligne(s)</span>
                         <span className="mx-2">•</span>
                         <span>{(visitorVerticalMatrix.hierarchyCols || []).length} niveau(x) hiérarchique(s)</span>
@@ -3325,16 +3361,16 @@ function App({ forceVisitor = false }) {
                               <>
                                 <tr>
                                   {rowCols.map(col => (
-                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-3 border-r border-[#0f6b90] min-w-[150px] text-left uppercase tracking-wide font-bold text-[12px]">{col}</th>
+                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#0f6b90] min-w-[150px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
                                   ))}
                                   {(headerRows[0].cells || []).map(cell => (
-                                    <th key={cell.key} colSpan={cell.colSpan} className="p-3 border-r border-[#0f6b90] text-center font-bold text-[13px]">{cell.label}</th>
+                                    <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#0f6b90] text-center font-bold text-sm">{cell.label}</th>
                                   ))}
                                 </tr>
                                 {headerRows.slice(1).map((row, ridx) => (
                                   <tr key={`hrow-${ridx + 1}`}>
                                     {(row.cells || []).map(cell => (
-                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#0f6b90] text-center font-semibold text-[12px] bg-[#167fa8]">{cell.label}</th>
+                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#0f6b90] text-center font-semibold text-xs bg-[#167fa8]">{cell.label}</th>
                                     ))}
                                   </tr>
                                 ))}
@@ -3400,14 +3436,14 @@ function App({ forceVisitor = false }) {
                                     <td
                                       key={`${row.key}-${col}`}
                                       rowSpan={span}
-                                      className={`p-3 border-r border-[#d1e2ec] text-[#0c4f6d] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
+                                      className={`p-4 border-r border-[#d1e2ec] text-[#0c4f6d] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
                                     >
                                       <span className={`font-semibold ${isYearCol ? 'text-3xl leading-none' : ''}`}>{String(row?.dimensions?.[col] ?? '—')}</span>
                                     </td>
                                   );
                                 })}
                                 {leaves.map((leaf, idx) => (
-                                  <td key={`${row.key}-${leaf.key}`} className={`p-3 border-r border-[#e2edf3] text-right text-[#0f6fa0] tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f1f9fd] font-semibold' : ''}`}>
+                                  <td key={`${row.key}-${leaf.key}`} className={`p-4 border-r border-[#e2edf3] text-right text-[#0f6fa0] text-sm tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f1f9fd] font-semibold' : ''}`}>
                                     {formatValue(row?.cells?.[leaf.key])}
                                   </td>
                                 ))}
@@ -3419,7 +3455,7 @@ function App({ forceVisitor = false }) {
                     </>
                   ) : isVisitor && visitorMatrix?.canPivot ? (
                     <>
-                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-3 py-2 text-xs text-[#0b5e83] font-medium">
+                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-4 py-2 text-xs text-[#0b5e83] font-medium">
                         <span>{(visitorMatrix.rows || []).length} ligne(s)</span>
                         <span className="mx-2">•</span>
                         <span>{(visitorMatrix.periods || []).length} période(s)</span>
@@ -3434,10 +3470,10 @@ function App({ forceVisitor = false }) {
                       <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]">
                         <tr>
                           {(visitorMatrix.displayGroupCols || []).map(col => (
-                            <th key={col} className="p-3 border-r border-[#0f6b90] min-w-[170px] text-left uppercase tracking-wide font-bold text-[12px]">{col}</th>
+                            <th key={col} className="p-4 border-r border-[#0f6b90] min-w-[170px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
                           ))}
                           {visitorMatrix.periods.map((period, idx) => (
-                            <th key={period} className={`p-3 border-r border-[#0f6b90] min-w-[110px] text-center font-bold text-[13px] ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#167fa8]' : ''}`}>{period}</th>
+                            <th key={period} className={`p-4 border-r border-[#0f6b90] min-w-[110px] text-center font-bold text-sm ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#167fa8]' : ''}`}>{period}</th>
                           ))}
                         </tr>
                       </thead>
@@ -3501,7 +3537,7 @@ function App({ forceVisitor = false }) {
                                 const isMergedCell = span > 1;
                                 const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
-                                  <td key={`${row.key}-${col}`} rowSpan={span} className={`p-3 border-r border-[#d1e2ec] text-[#0c4f6d] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
+                                  <td key={`${row.key}-${col}`} rowSpan={span} className={`p-4 border-r border-[#d1e2ec] text-[#0c4f6d] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
                                     <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{value}</span>
                                     {isTotalCell && colIndex === groupCols.length - 1 && (
                                       <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#188fbe] text-white uppercase tracking-wide">Total</span>
@@ -3510,7 +3546,7 @@ function App({ forceVisitor = false }) {
                                 );
                               })}
                               {visitorMatrix.periods.map(period => (
-                                <td key={`${row.key}-${period}`} className={`p-3 border-r border-[#e2edf3] text-right text-[#0f6fa0] tabular-nums ${period === latestPeriod ? 'bg-[#f1f9fd] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
+                                  <td key={`${row.key}-${period}`} className={`p-4 border-r border-[#e2edf3] text-right text-[#0f6fa0] text-sm tabular-nums ${period === latestPeriod ? 'bg-[#f1f9fd] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
                               ))}
                             </tr>
                           ));
@@ -3519,7 +3555,7 @@ function App({ forceVisitor = false }) {
                     </table>
                     </>
                   ) : (
-                    <table className="w-full text-center border-collapse">
+                    <table className="w-full text-center border-collapse text-sm">
                       <thead className={`${isVisitor ? 'bg-[#dceff8] border-b border-[#8abed5]' : 'bg-gray-100 border-b-2 border-black'} font-bold sticky top-0 z-10`}>
                         <tr>
                           {visibleColumnsForRender.map(col => (
@@ -3569,7 +3605,7 @@ function App({ forceVisitor = false }) {
                     </table>
                   )}
                 </div>
-                <div className="flex gap-4 items-center">
+                <div className="flex flex-wrap gap-4 items-center justify-between">
                   <button onClick={() => setShowAll(!showAll)} className="bg-[#8ec278] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
                     {showAll ? "Réduire le tableau" : (isVisitor ? "Afficher plus de lignes" : "Afficher tout le tableau")}
                   </button>
@@ -3579,9 +3615,9 @@ function App({ forceVisitor = false }) {
                   )}
 
                   <div className="flex gap-2">
-                    <button onClick={exportTableXLSX} className="bg-[#36424f] text-white px-4 py-2 border-2 border-black rounded font-bold shadow-md">Exporter XLSX</button>
-                    <button onClick={exportTableCSV} className="bg-[#36424f] text-white px-4 py-2 border-2 border-black rounded font-bold shadow-md">Exporter CSV</button>
-                    <button onClick={exportTableTXT} className="bg-[#36424f] text-white px-4 py-2 border-2 border-black rounded font-bold shadow-md">Exporter TXT</button>
+                    <button onClick={exportTableXLSX} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">Exporter XLSX</button>
+                    <button onClick={exportTableCSV} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">Exporter CSV</button>
+                    <button onClick={exportTableTXT} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">Exporter TXT</button>
                   </div>
                 </div>
               </div>
