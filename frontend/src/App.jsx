@@ -3555,18 +3555,12 @@ function App({ forceVisitor = false }) {
                     </table>
                     </>
                   ) : (
-                    <table className="w-full text-center border-collapse text-sm">
-                      <thead className={`${isVisitor ? 'bg-[#dceff8] border-b border-[#8abed5]' : 'bg-gray-100 border-b-2 border-black'} font-bold sticky top-0 z-10`}>
+                    <table className="w-full border-collapse text-sm">
+                      <thead className="sticky top-0 z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)] font-bold">
                         <tr>
                           {visibleColumnsForRender.map(col => (
-                            <th key={col} className={`p-2 ${isVisitor ? 'border-r border-[#8abed5]' : 'border-r border-black'} min-w-[150px]`}>
-                              <div className={`${isVisitor ? 'text-[#0f5f84] font-semibold' : 'text-blue-800 italic'} mb-2 uppercase text-[10px]`}>{col}</div>
-                              <input 
-                                type="text" 
-                                placeholder="Filtrer..."
-                                className="w-full p-1 text-xs border border-gray-300 rounded font-normal outline-none focus:border-blue-500"
-                                onChange={(e) => setColumnFilters({...columnFilters, [col]: e.target.value})}
-                              />
+                            <th key={col} className="p-4 border-r border-[#0f6b90] min-w-[160px] text-left uppercase tracking-wide font-bold text-xs">
+                              <div className="uppercase text-[11px] tracking-wide font-bold text-white">{col}</div>
                             </th>
                           ))}
                         </tr>
@@ -3589,13 +3583,17 @@ function App({ forceVisitor = false }) {
                           });
 
                           return displayedRows.map((row, i) => (
-                            <tr key={i} className={`${isVisitor ? (i % 2 === 0 ? 'bg-white' : 'bg-[#f8fcff]') : ''} border-b border-gray-300 h-10 hover:bg-gray-50`}>
+                            <tr key={i} className={`${i % 2 === 0 ? 'bg-white' : 'bg-[#f8fcff]'} border-b border-[#c9dbe6] min-h-10 hover:bg-[#f2f9fd]`}>
                               {visibleColumnsForRender.map((col) => {
                                 const span = spans[col][i] || 0;
                                 if (span === 0) return null;
                                 const isNumericCol = /(valeur|value|%|taux|montant|effectif)/i.test(String(col).toLowerCase());
+                                const isMergedCell = span > 1;
+                                const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
-                                  <td key={col} rowSpan={span} className={`border-r border-gray-300 p-2 text-xs align-top ${isNumericCol ? 'text-right tabular-nums text-[#0f6fa0] font-medium' : ''}`}>{row[col]}</td>
+                                  <td key={col} rowSpan={span} className={`border-r border-[#d1e2ec] p-3 text-xs ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'} ${isNumericCol ? 'tabular-nums text-[#0f6fa0] font-medium' : 'text-[#0c4f6d]'}`}>
+                                    <span className={`${isMergedCell ? mergedSizeClass : ''} ${isNumericCol ? 'text-right inline-block w-full' : 'font-semibold'}`}>{row[col]}</span>
+                                  </td>
                                 );
                               })}
                             </tr>
