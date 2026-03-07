@@ -10,8 +10,8 @@ import ChartModal from './components/ChartModal';
 const SidebarButton = ({ label, onClick, active }) => (
   <button 
     onClick={onClick}
-    className={`w-full py-3 px-4 text-left font-bold border-b border-black transition-colors ${
-      active ? 'bg-[#4a77b4] text-white shadow-inner' : 'bg-[#6d92c7] text-white hover:bg-[#5a81b5]'
+    className={`w-full py-3 px-5 text-left font-bold border-b border-[#8f3368] transition-colors uppercase tracking-wide ${
+      active ? 'bg-[#6a1f52] text-white shadow-inner' : 'bg-[#b3367b] text-white hover:bg-[#9f2e6e]'
     }`}
   >
     {label}
@@ -38,6 +38,8 @@ function App({ forceVisitor = false }) {
   const [selectedSubTheme, setSelectedSubTheme] = useState(null);
   const [selectedCategorie, setSelectedCategorie] = useState(null);
   const [themeData, setThemeData] = useState({ titre: '', nbSousThemes: 1, statut: 'Public' });
+  const [themeImageFile, setThemeImageFile] = useState(null);
+  const [themeImagePreview, setThemeImagePreview] = useState('');
   const [openThemeMenu, setOpenThemeMenu] = useState(null);
   const [themeMenuPos, setThemeMenuPos] = useState({ left: 0, top: 0 });
   const [openActionMenu, setOpenActionMenu] = useState(null);
@@ -111,6 +113,8 @@ function App({ forceVisitor = false }) {
   const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
   const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
   const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
+  const [expandedCategories, setExpandedCategories] = useState({});
+  const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   const pathname = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
@@ -2052,6 +2056,120 @@ function App({ forceVisitor = false }) {
     }
   };
 
+  const fileToDataUrl = (file) => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+
+  const makeThemeImageBackgroundTransparent = async (inputFile) => {
+    if (!inputFile) return inputFile;
+
+    const dataUrl = await fileToDataUrl(inputFile);
+    const processedBlob = await new Promise((resolve, reject) => {
+      const img = new Image();
+      img.onload = () => {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.width;
+        canvas.height = img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          reject(new Error('Canvas non disponible'));
+          return;
+        }
+
+        ctx.drawImage(img, 0, 0);
+        const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        const pixels = imageData.data;
+
+        // Convert white and near-white pixels to transparent.
+        for (let i = 0; i < pixels.length; i += 4) {
+          const r = pixels[i];
+          const g = pixels[i + 1];
+          const b = pixels[i + 2];
+          const a = pixels[i + 3];
+          if (a === 0) continue;
+          const maxRGB = Math.max(r, g, b);
+          const minRGB = Math.min(r, g, b);
+          const isNearWhite = maxRGB >= 245 && minRGB >= 225;
+          const lowSaturation = (maxRGB - minRGB) <= 22;
+          if (isNearWhite && lowSaturation) {
+            pixels[i + 3] = 0;
+          }
+        }
+
+        ctx.putImageData(imageData, 0, 0);
+        canvas.toBlob((blob) => {
+          if (!blob) {
+            reject(new Error('Erreur génération image'));
+            return;
+          }
+          resolve(blob);
+        }, 'image/png');
+      };
+      img.onerror = reject;
+      img.src = dataUrl;
+    });
+
+    return new File(
+      [processedBlob],
+      (inputFile.name || 'theme-image').replace(/\.[^.]+$/, '') + '-clean.png',
+      { type: 'image/png' }
+    );
+  };
+
+  const updateThemeImage = async (themeId, imageFile) => {
+    if (!themeId || !imageFile) return;
+    try {
+      const cleanedImage = await makeThemeImageBackgroundTransparent(imageFile);
+      const dataUrl = await fileToDataUrl(cleanedImage);
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { theme_image: dataUrl });
+
+      const res = await axios.get(themesApiBase);
+      setThemes(res.data);
+      if (selectedTheme && selectedTheme.id === themeId) {
+        const freshTheme = res.data.find(t => t.id === themeId);
+        if (freshTheme) setSelectedTheme(freshTheme);
+      }
+      showToast('Image du thème mise à jour', 'success');
+    } catch (err) {
+      console.error('Erreur mise à jour image thème', err);
+      alert('Erreur lors de la mise à jour de l\'image du thème');
+    }
+  };
+
+  const pickAndUpdateThemeImage = (themeId) => {
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'image/*';
+    input.onchange = async (e) => {
+      const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+      if (!f) return;
+      await updateThemeImage(themeId, f);
+    };
+    input.click();
+  };
+
+  const removeThemeImage = async (themeId) => {
+    if (!themeId) return;
+    if (!confirm('Supprimer l\'image de ce thème ?')) return;
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { theme_image: null });
+
+      const res = await axios.get(themesApiBase);
+      setThemes(res.data);
+      if (selectedTheme && selectedTheme.id === themeId) {
+        const freshTheme = res.data.find(t => t.id === themeId);
+        if (freshTheme) setSelectedTheme(freshTheme);
+      }
+      showToast('Image du thème supprimée', 'success');
+    } catch (err) {
+      console.error('Erreur suppression image thème', err);
+      alert('Erreur lors de la suppression de l\'image du thème');
+    }
+  };
+
   const goToTable = () => {
     let initialRows = [];
     
@@ -2095,6 +2213,7 @@ function App({ forceVisitor = false }) {
     const formData = new FormData();
     formData.append('titre', themeData.titre);
     formData.append('statut', themeData.statut);
+    if (themeImageFile) formData.append('theme_image', themeImageFile);
     
     // Si on utilise des catégories, envoyer leur configuration
     if (useCategories) {
@@ -2131,6 +2250,8 @@ function App({ forceVisitor = false }) {
       setFormStep(0);
       setUseCategories(false);
       setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
+      setThemeImageFile(null);
+      setThemeImagePreview('');
     } catch (err) { console.error(err.response?.data || err); alert("Erreur : " + (err.response?.data?.error || err.message)); }
   };
 
@@ -2181,6 +2302,14 @@ function App({ forceVisitor = false }) {
   const isAdminView = String(activeMenu || '').toLowerCase().includes('admin');
   // Tant que l'interface visiteurs n'est pas développée, l'admin voit tout même dans l'onglet "Thèmes"
   const visibleThemes = isAuthenticated ? themes : themes.filter(t => !t.archived);
+  const findSubThemeInTheme = (theme, subThemeId) => {
+    if (!theme) return null;
+    return (
+      (theme.sous_themes || []).find(sub => sub.id === subThemeId) ||
+      (theme.categories || []).flatMap(cat => cat.sous_themes || []).find(sub => sub.id === subThemeId) ||
+      null
+    );
+  };
   const indicatorsSubThemes = themes.flatMap(theme => {
     const directSubThemes = (theme.sous_themes || []).map(st => ({
       ...st,
@@ -2235,14 +2364,14 @@ function App({ forceVisitor = false }) {
 
   // --- RENDU PRINCIPAL (Admin) ---
   return (
-    <div className="flex min-h-screen bg-[#f4f1e1] font-sans">
+    <div className="flex min-h-screen bg-[#6a1f52] font-sans">
       
       {/* 1. MENU LATÉRAL */}
-      <div className="w-64 bg-white border-r-2 border-black flex flex-col">
-        <div className="p-4 border-b-2 border-black flex flex-col items-center">
+      <div className="w-64 bg-[#b3367b] border-r border-[#7d2458] flex flex-col">
+        <div className="p-4 bg-white border-b border-[#d7d7d7] flex flex-col items-center min-h-[210px]">
           <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
-        <div className="bg-[#1a5d85] text-white py-2 px-4 font-bold text-center border-b border-black">Menu</div>
+        <div className="bg-[#8a2a64] text-white py-2 px-4 font-bold text-center border-b border-[#8f3368]">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
         {canEdit && (
@@ -2252,29 +2381,57 @@ function App({ forceVisitor = false }) {
               active={activeMenu === (isSaisisseur ? 'Saisisseur' : 'Admin')}
               onClick={() => { setActiveMenu(isSaisisseur ? 'Saisisseur' : 'Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null); }}
             />
-            <div className="mt-auto p-4 border-t-2 border-black bg-white space-y-2">
-              <button onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }} className="w-full bg-gray-600 hover:bg-gray-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md flex items-center justify-center gap-2">
-                ⚙️ Paramètres
-              </button>
-              <button onClick={handleLogout} className="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-3 rounded border-2 border-black shadow-md">
-                Déconnexion
-              </button>
-            </div>
           </>
         )}
       </div>
 
       {/* 2. CONTENU PRINCIPAL */}
       <div className="flex-1 flex flex-col">
-        <div className="bg-[#98d4e8] px-6 py-4 border-b border-[#2f5f7a] flex justify-center shadow-[0_2px_8px_rgba(10,59,84,0.15)] relative">
-          <h1 className="text-[#155678] text-[32px] md:text-[36px] font-bold italic text-center tracking-wide leading-tight">
+        <div className="bg-[#7a235a] px-6 py-3 border-b border-[#8f3368] flex items-center gap-4 shadow-[0_2px_8px_rgba(0,0,0,0.18)] relative">
+          <h1 className="text-white text-[28px] md:text-[34px] font-bold text-center tracking-wide leading-tight flex-1">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
+          {canEdit && (
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }}
+                className="bg-[#8a2a64] hover:bg-[#7a2459] text-white font-bold py-2 px-3 rounded border border-[#b84c83]"
+              >
+                Parametres
+              </button>
+              <button
+                onClick={handleLogout}
+                className="bg-[#5f173f] hover:bg-[#4f1235] text-white font-bold py-2 px-3 rounded border border-[#8a2a64]"
+              >
+                Deconnexion
+              </button>
+            </div>
+          )}
+        </div>
+
+        <div className="bg-[#6a1f52] px-6 py-2 border-b border-[#8f3368] flex items-center gap-3">
+          <span className="bg-[#d24387] text-white px-4 py-1 font-bold rounded-sm">INFOS</span>
+          <div className="bg-white text-[#7a235a] px-4 py-1.5 flex-1 rounded-sm font-medium">L'ICP du mois de Janvier 2026 est disponible</div>
         </div>
 
         {formStep !== 4 && (
-          <div className="px-6 pt-6 pb-4 flex justify-center">
-            <div className="relative w-full max-w-2xl">
+          <div className={`px-6 ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
+            {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => { setFormStep(0); setSelectedCategorie(null); setSelectedVisitorCategoryId('all'); }}
+                  className="bg-[#98004f] text-white w-14 h-11 rounded-xl border border-[#c3488f] font-black hover:bg-[#850046] shadow-md flex items-center justify-center text-[32px] leading-none"
+                  aria-label="Retour"
+                  title="Retour"
+                >
+                  ‹
+                </button>
+                <h2 className="bg-[#98004f] text-white px-7 py-2 rounded-xl border border-[#c3488f] font-bold shadow-md uppercase tracking-wide text-[28px] md:text-[30px] leading-tight">
+                  {selectedCategorie ? `${selectedTheme.titre} - ${selectedCategorie.nom}` : `${selectedTheme.titre}`}
+                </h2>
+              </div>
+            )}
+            <div className="relative w-full">
               <input 
                 type="text" 
                 placeholder={
@@ -2283,7 +2440,7 @@ function App({ forceVisitor = false }) {
                   formStep === 3 ? 'Rechercher un sous-thème...' : 
                   'Barre de recherche'
                 } 
-                className="w-full px-4 py-2.5 border-2 border-[#1f3e56] rounded-lg shadow-[0_3px_8px_rgba(0,0,0,0.12)] bg-white italic outline-none focus:border-[#188fbe]"
+                className="w-full pl-12 pr-4 py-3 border border-[#9d9d9d] rounded-none bg-[#f2f2f2] text-[#545454] outline-none focus:border-[#b3367b]"
                 value={
                   activeMenu === 'Indicateurs' ? searchIndicateur :
                   formStep === 0 ? searchTheme : 
@@ -2296,18 +2453,18 @@ function App({ forceVisitor = false }) {
                   else if (formStep === 3) setSearchSubTheme(e.target.value);
                 }}
               />
-              <span className="absolute right-3 top-2.5">🔍</span>
+              <span className="absolute left-3 top-1/2 -translate-y-1/2 text-2xl text-gray-500">⌕</span>
             </div>
           </div>
         )}
         {formStep === 4 && <div className="h-5" />}
 
-        <div className="px-8 pb-10 flex-1">
+        <div className="px-8 pb-10 flex-1 bg-[#6a1f52]">
           
           {/* GRILLE DES INDICATEURS (TOUS LES SOUS-THÈMES) */}
           {activeMenu === 'Indicateurs' && (
             <div className="relative min-h-[400px]">
-              <div className="grid grid-cols-4 gap-6">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {indicatorsSubThemes.filter(st => 
                   st.nom.toLowerCase().includes(searchIndicateur.toLowerCase()) ||
                   st.theme_titre.toLowerCase().includes(searchIndicateur.toLowerCase())
@@ -2330,13 +2487,13 @@ function App({ forceVisitor = false }) {
                         setShowAll(false);
                       } catch (err) { console.error(err); }
                     }}
-                    className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                    className={`relative cursor-pointer p-4 rounded-sm border border-[#9b2e69] shadow-md text-white font-bold hover:scale-[1.01] transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
                   >
                     {st.archived && (
                       <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                     )}
-                    <div className="text-sm opacity-75 mb-2">{st.theme_titre}</div>
-                    <div className="text-lg">{st.nom}</div>
+                    <div className="text-xs opacity-80 mb-1 uppercase tracking-wide">{st.theme_titre}</div>
+                    <div className="text-[20px] leading-tight mt-1">{st.nom}</div>
                     {canEdit && (
                       <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                     )}
@@ -2354,7 +2511,7 @@ function App({ forceVisitor = false }) {
           {/* ÉTAPE 0 : GRILLE DES THÈMES */}
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
-              <div className="grid grid-cols-3 gap-6">
+              <div className="grid grid-cols-3 gap-2">
                 {visibleThemes.filter(t => t.titre.toLowerCase().includes(searchTheme.toLowerCase())).map((t, i) => (
                   <div 
                     key={t.id} 
@@ -2362,16 +2519,34 @@ function App({ forceVisitor = false }) {
                       if (!t.categories || t.categories.length === 0) {
                         setSelectedTheme(t);
                         setSelectedCategorie(null);
+                        setSelectedVisitorCategoryId('all');
+                        setExpandedCategories({});
                         setFormStep(3);
+                        return;
                       }
+
+                      setSelectedTheme(t);
+                      setSelectedCategorie(null);
+                      setSelectedVisitorCategoryId('all');
+                      setExpandedCategories({});
+                      setFormStep(3);
                     }}
-                    className={`cursor-pointer p-5 rounded-xl border-2 border-black shadow-lg relative text-white font-bold transition-transform hover:scale-105 ${t.archived ? 'bg-gray-600 line-through opacity-80' : (t.id === maxId ? 'bg-[#ffb366]' : 'bg-[#41699d]')}`}
+                    className={`cursor-pointer p-4 rounded-sm border border-[#9b2e69] shadow-md relative text-white transition-transform hover:scale-[1.01] min-h-[132px] ${t.archived ? 'bg-gray-600 line-through opacity-80' : (t.id === maxId ? 'bg-[#b3367b]' : 'bg-[#8a004f]')}`}
                   >
                     {t.archived && (
                       <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                     )}
-                    <div className="flex items-center justify-between">
-                      <span>Thème {i + 1} : {t.titre}</span>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {isVisitor && t.theme_image && (
+                          <img
+                            src={t.theme_image}
+                            alt={t.titre}
+                            className="w-16 h-16 object-contain shrink-0 mix-blend-multiply"
+                          />
+                        )}
+                        <span className="uppercase tracking-wide text-[18px] md:text-[20px] leading-snug font-semibold">{`${String(i + 1).padStart(2, '0')}-${t.titre}`}</span>
+                      </div>
                       {t.categories && t.categories.length > 0 && (
                         <button 
                           onClick={(e) => { 
@@ -2386,9 +2561,10 @@ function App({ forceVisitor = false }) {
                             setCategorieMenuPos({ left, top });
                             setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
                           }}
-                          className="bg-white text-black px-3 py-1 rounded-lg border-2 border-black hover:bg-gray-100 text-xl font-bold"
+                          className="text-white/90 hover:text-white text-lg leading-none px-1 py-0.5"
+                          aria-label="Choisir une catégorie"
                         >
-                          ▼
+                          ▾
                         </button>
                       )}
                     </div>
@@ -2397,12 +2573,14 @@ function App({ forceVisitor = false }) {
                         <button onClick={(e) => { 
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
-                          const menuHeight = 200; // hauteur estimée du menu
+                          const menuHeight = 320; // hauteur estimée réaliste (plus d'options)
                           const menuWidth = 224; // w-56
                           const spaceBelow = window.innerHeight - rect.bottom;
                           const spaceRight = window.innerWidth - rect.left;
-                          const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                          const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          const desiredTop = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                          const desiredLeft = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                          const top = Math.max(8, Math.min(desiredTop, window.innerHeight - menuHeight - 8));
+                          const left = Math.max(8, Math.min(desiredLeft, window.innerWidth - menuWidth - 8));
                           setActionMenuPos({ left, top }); 
                           setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
                           setOpenThemeMenu(null); 
@@ -2435,7 +2613,7 @@ function App({ forceVisitor = false }) {
               {canEdit && userRole === 'ADMIN' && (
                 <button 
                   onClick={() => setFormStep(1)}
-                  className="fixed bottom-10 right-10 bg-[#ffb366] hover:bg-[#ffa347] text-white font-bold py-4 px-8 rounded-xl border-2 border-black shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]"
+                  className="fixed bottom-10 right-10 bg-[#b3367b] hover:bg-[#9f2e6e] text-white font-bold py-4 px-8 rounded-sm border border-[#d5649b] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.35)]"
                 >
                   Ajouter un thème
                 </button>
@@ -2487,6 +2665,7 @@ function App({ forceVisitor = false }) {
                               e.stopPropagation();
                               setSelectedTheme(currentTheme);
                               setSelectedCategorie(cat);
+                              setSelectedVisitorCategoryId(String(cat.id));
                               setOpenCategorieMenu(null);
                               setFormStep(3);
                             }}
@@ -2530,6 +2709,18 @@ function App({ forceVisitor = false }) {
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Renommer
                     </button>
+                    {canEdit && userRole === 'ADMIN' && (
+                      <button onClick={(e) => { e.stopPropagation(); const themeId = openActionMenu; setOpenActionMenu(null); pickAndUpdateThemeImage(themeId); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M4 7h16v10H4z" stroke="#7C3AED" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M8 11l2 2 4-4 2 2" stroke="#7C3AED" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
+                        Ajouter / Modifier image du thème
+                      </button>
+                    )}
+                    {canEdit && userRole === 'ADMIN' && (
+                      <button onClick={(e) => { e.stopPropagation(); const themeId = openActionMenu; setOpenActionMenu(null); removeThemeImage(themeId); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-red-600">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 6h18" stroke="#B91C1C" strokeWidth="1.5" strokeLinecap="round"/><path d="M8 6v12a1 1 0 001 1h6a1 1 0 001-1V6" stroke="#B91C1C" strokeWidth="1.5"/><path d="M10 11v6M14 11v6" stroke="#B91C1C" strokeWidth="1.5"/></svg>
+                        Supprimer l'image du thème
+                      </button>
+                    )}
                     <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Ajouter un sous-thème
@@ -2583,6 +2774,58 @@ function App({ forceVisitor = false }) {
                  <label className="text-xl w-64 font-bold">Titre du thème*</label>
                  <input type="text" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none" 
                    onChange={e => setThemeData({...themeData, titre: e.target.value})} />
+               </div>
+
+               <div className="flex items-center gap-6">
+                 <label className="text-xl w-64 font-bold">Image du thème (optionnelle)</label>
+                 <div className="flex-1 space-y-2">
+                   <input
+                     type="file"
+                     accept="image/*"
+                     className="w-full border-2 border-blue-300 rounded-md p-2 text-sm bg-white"
+                     onChange={async (e) => {
+                       const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
+                       if (!f) {
+                         setThemeImageFile(null);
+                         setThemeImagePreview('');
+                         return;
+                       }
+
+                       try {
+                         const cleanedFile = await makeThemeImageBackgroundTransparent(f);
+                         setThemeImageFile(cleanedFile);
+                         const url = URL.createObjectURL(cleanedFile);
+                         setThemeImagePreview(url);
+                       } catch (err) {
+                         console.error('Erreur import image thème', err);
+                         setThemeImageFile(f);
+                         try {
+                           const fallbackUrl = URL.createObjectURL(f);
+                           setThemeImagePreview(fallbackUrl);
+                         } catch (previewErr) {
+                           setThemeImagePreview('');
+                         }
+                       }
+                     }}
+                   />
+                   <div className="text-xs text-gray-600">
+                     Conseil: prefere une image PNG transparente. Les fonds clairs sont estompes automatiquement sur les tickets visiteurs.
+                   </div>
+                   {themeImagePreview && (
+                     <div className="flex items-center gap-3">
+                       <div className="w-12 h-12 border border-gray-300 rounded-sm bg-[#8a004f] flex items-center justify-center overflow-hidden">
+                         <img src={themeImagePreview} alt="Aperçu" className="w-10 h-10 object-contain mix-blend-multiply" />
+                       </div>
+                       <button
+                         type="button"
+                         onClick={() => { setThemeImageFile(null); setThemeImagePreview(''); }}
+                         className="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded-sm text-sm font-semibold"
+                       >
+                         Retirer
+                       </button>
+                     </div>
+                   )}
+                 </div>
                </div>
                
                <div className="flex items-center gap-6">
@@ -2671,7 +2914,7 @@ function App({ forceVisitor = false }) {
                  </select>
                </div>
                <div className="flex justify-end gap-4 mt-10">
-                 <button onClick={() => setFormStep(0)} className="bg-[#f28a8a] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Annuler</button>
+                 <button onClick={() => { setFormStep(0); setThemeImageFile(null); setThemeImagePreview(''); }} className="bg-[#f28a8a] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Annuler</button>
                  <button onClick={goToTable} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Suivant ➡</button>
                </div>
              </div>
@@ -2766,59 +3009,55 @@ function App({ forceVisitor = false }) {
 
           {/* ÉTAPE 3 : LISTE DES SOUS-THÈMES */}
           {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
-            <div className="space-y-8">
-              <div className="flex justify-between items-center gap-4">
-                <button onClick={() => { setFormStep(0); setSelectedCategorie(null); }} className="bg-white px-4 py-2 border-2 border-black rounded-xl font-bold hover:bg-gray-100 shadow-md">⬅ Retour</button>
-                <div className="flex items-center gap-3 flex-1 justify-center">
-                  <h2 className="bg-[#c2d9ff] px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md">
-                    {selectedCategorie ? `${selectedTheme.titre} - ${selectedCategorie.nom}` : `Titre du thème : ${selectedTheme.titre}`}
-                  </h2>
-                  {selectedCategorie ? (
-                    <div className="flex items-center gap-2">
-                      {canEdit && (
-                        <div className={`w-5 h-5 rounded-full border border-black ${selectedCategorie.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                      )}
-                      {canEdit && userRole === 'ADMIN' && (
-                        <select
-                          value={selectedCategorie.is_visible ? 'Public' : 'Privé'}
-                          onChange={async (e) => {
-                            const val = e.target.value;
-                            const newVis = val === 'Public';
-                            if (!confirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`)) return;
-                            await toggleCategoriePublication(selectedCategorie.id, newVis);
-                          }}
-                          className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
-                        >
-                          <option value="Public">Public 📢</option>
-                          <option value="Privé">Privé 🔒</option>
-                        </select>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="flex items-center gap-2">
-                      {canEdit && (
-                        <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                      )}
-                      {canEdit && userRole === 'ADMIN' && (
-                        <select
-                          value={selectedTheme.is_visible ? 'Public' : 'Privé'}
-                          onChange={async (e) => {
-                            const val = e.target.value;
-                            const newVis = val === 'Public';
-                            if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
-                            await toggleThemePublication(selectedTheme.id, newVis);
-                          }}
-                          className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
-                        >
-                          <option value="Public">Public 📢</option>
-                          <option value="Privé">Privé 🔒</option>
-                        </select>
-                      )}
-                    </div>
-                  )}
-                </div>
-                <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setThemeMeta({ definition_text: selectedTheme.definition_text || '', unite_text: selectedTheme.unite_text || '', indication_text: selectedTheme.indication_text || '', source_text: selectedTheme.source_text || '', periodicite_text: selectedTheme.periodicite_text || '', couverture_text: selectedTheme.couverture_text || '' }); setShowThemeMeta(true); }} className="bg-white px-6 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-100">Métadonnées</button>
+            <div className="space-y-2">
+              {canEdit && userRole === 'ADMIN' && (
+              <div className="flex flex-wrap items-center justify-end gap-3">
+
+                {selectedCategorie ? (
+                  <div className="flex items-center gap-2">
+                    {canEdit && (
+                      <div className={`w-5 h-5 rounded-full border border-black ${selectedCategorie.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    )}
+                    {canEdit && userRole === 'ADMIN' && (
+                      <select
+                        value={selectedCategorie.is_visible ? 'Public' : 'Privé'}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          const newVis = val === 'Public';
+                          if (!confirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`)) return;
+                          await toggleCategoriePublication(selectedCategorie.id, newVis);
+                        }}
+                        className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                      >
+                        <option value="Public">Public 📢</option>
+                        <option value="Privé">Privé 🔒</option>
+                      </select>
+                    )}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-2">
+                    {canEdit && (
+                      <div className={`w-5 h-5 rounded-full border border-black ${selectedTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                    )}
+                    {canEdit && userRole === 'ADMIN' && (
+                      <select
+                        value={selectedTheme.is_visible ? 'Public' : 'Privé'}
+                        onChange={async (e) => {
+                          const val = e.target.value;
+                          const newVis = val === 'Public';
+                          if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
+                          await toggleThemePublication(selectedTheme.id, newVis);
+                        }}
+                        className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
+                      >
+                        <option value="Public">Public 📢</option>
+                        <option value="Privé">Privé 🔒</option>
+                      </select>
+                    )}
+                  </div>
+                )}
               </div>
+              )}
               
               {/* Affichage avec catégories ou sans */}
               {selectedCategorie ? (
@@ -2831,19 +3070,23 @@ function App({ forceVisitor = false }) {
                         try {
                           const res = await axios.get(themesApiBase);
                           const freshTheme = res.data.find(t => t.id === selectedTheme.id);
-                          const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                          const freshSubTheme = findSubThemeInTheme(freshTheme, st.id);
+                          if (!freshSubTheme) return;
                           selectSubTheme(freshSubTheme);
                           setSavedCharts(freshSubTheme.charts_config || []);
                           setFormStep(4); 
                           setShowAll(false);
                         } catch (err) { console.error(err); }
                       }}
-                      className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                      className={`relative cursor-pointer p-4 rounded-sm border border-[#7d2458] shadow-lg text-white font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
                     >
                       {st.archived && (
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
-                      {st.nom}
+                      <div className="text-[20px] leading-tight flex items-start gap-2">
+                        <span className="text-white/90">📈</span>
+                        <span>{st.nom}</span>
+                      </div>
                       {canEdit && (
                         <div className="flex justify-center gap-2 mt-4 text-black">
                           <button onClick={(e) => { 
@@ -2887,113 +3130,121 @@ function App({ forceVisitor = false }) {
                   ))}
                 </div>
               ) : selectedTheme.categories && selectedTheme.categories.length > 0 ? (
-                // Affichage de toutes les catégories (mode dropdown)
-                <div className="space-y-4">
-                  {selectedTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => {
-                    const filteredSousThemes = cat.sous_themes?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())) || [];
-                    if (filteredSousThemes.length === 0 && searchSubTheme) return null;
-                    
-                    return (
-                      <div key={cat.id} className="bg-gray-50 border-2 border-black rounded-xl overflow-hidden">
-                        <div 
-                          className="bg-[#6d92c7] px-6 py-3 hover:bg-[#5a81b5] transition-colors flex justify-between items-center"
-                        >
-                          <div className="flex items-center gap-3 flex-1 cursor-pointer" onClick={() => setExpandedCategories(prev => ({...prev, [cat.id]: !prev[cat.id]}))}>
-                            <h3 className="font-bold text-white text-lg">{cat.nom}</h3>
-                            <span className="text-white font-bold text-xl">
-                              {expandedCategories[cat.id] ? '▼' : '▶'}
+                  <div className="space-y-2">
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
+                      <button
+                        onClick={() => setSelectedVisitorCategoryId('all')}
+                        className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center gap-2 ${selectedVisitorCategoryId === 'all' ? 'bg-[#8a004f] text-white border-[#b64586]' : 'bg-[#7a2a5e] text-white/90 border-[#a2477e] hover:bg-[#8a316a]'}`}
+                      >
+                        <span className="text-[12px]">⏷</span>
+                        <span>Tous</span>
+                      </button>
+                      {selectedTheme.categories
+                        .slice()
+                        .sort((a, b) => a.ordre - b.ordre)
+                        .map(cat => (
+                          <button
+                            key={cat.id}
+                            onClick={() => setSelectedVisitorCategoryId(String(cat.id))}
+                            className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center justify-between gap-2 ${String(selectedVisitorCategoryId) === String(cat.id) ? 'bg-[#8a004f] text-white border-[#b64586]' : 'bg-[#7a2a5e] text-white/90 border-[#a2477e] hover:bg-[#8a316a]'}`}
+                          >
+                            <span className="flex items-center gap-2 min-w-0">
+                              <span className="text-[12px] shrink-0">⏷</span>
+                              <span className="truncate">{cat.nom}</span>
                             </span>
-                          </div>
-                          <div className="flex items-center gap-2" onClick={(e) => e.stopPropagation()}>
-                            {canEdit && userRole === 'ADMIN' && (
-                              <>
-                                <div className={`w-5 h-5 rounded-full border border-black ${cat.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                                <select
-                                  value={cat.is_visible ? 'Public' : 'Privé'}
-                                  onChange={async (e) => {
-                                    const val = e.target.value;
-                                    const newVis = val === 'Public';
-                                    if (!confirm(`Changer la visibilité de la catégorie "${cat.nom}" et de tous ses sous-thèmes ?`)) return;
-                                    await toggleCategoriePublication(cat.id, newVis);
-                                  }}
-                                >
-                                  <option value="Public">Public</option>
-                                  <option value="Privé">Privé</option>
-                                </select>
-                              </>
-                            )}
-                            {!canEdit && (
-                              <div className="w-5 h-5 opacity-0" />
-                            )}
-                          </div>
-                        </div>
-                        
-                        {expandedCategories[cat.id] && (
-                          <div className="p-4 grid grid-cols-4 gap-6">
-                            {filteredSousThemes.map((st, i) => (
-                              <div 
-                                key={st.id || i} 
-                                onClick={async () => { 
-                                  try {
-                                    const res = await axios.get(themesApiBase);
-                                    const freshTheme = res.data.find(t => t.id === selectedTheme.id);
-                                    const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
-                                    selectSubTheme(freshSubTheme);
-                                    setSavedCharts(freshSubTheme.charts_config || []);
-                                    setFormStep(4); 
-                                    setShowAll(false);
-                                  } catch (err) { console.error(err); }
-                                }}
-                                className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
-                              >
-                                {st.archived && (
-                                  <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
-                                )}
-                                {st.nom}
-                                {canEdit && (
-                                  <div className="flex justify-center gap-2 mt-4 text-black">
-                                    <button onClick={(e) => { 
-                                      e.stopPropagation(); 
-                                      const rect = e.currentTarget.getBoundingClientRect(); 
-                                      const menuHeight = 200;
-                                      const menuWidth = 192; // w-48
-                                      const spaceBelow = window.innerHeight - rect.bottom;
-                                      const spaceRight = window.innerWidth - rect.left;
-                                      const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                                      const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                                      setSubActionMenuPos({ left, top }); 
-                                      setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
-                                      setOpenActionMenu(null); 
-                                      setOpenThemeMenu(null); 
-                                    }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
-                                    <button onClick={(e) => { 
-                                      e.stopPropagation(); 
-                                      const rect = e.currentTarget.getBoundingClientRect(); 
-                                      const menuHeight = 150;
-                                      const menuWidth = 192; // w-48
-                                      const spaceBelow = window.innerHeight - rect.bottom;
-                                      const spaceRight = window.innerWidth - rect.left;
-                                      const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                                      const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
-                                      setSubThemeMenuPos({ left, top }); 
-                                      setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id); 
-                                      setOpenSubActionMenu(null); 
-                                      setOpenActionMenu(null); 
-                                      setOpenThemeMenu(null); 
-                                    }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
-                                  </div>
-                                )}
-                                {canEdit && (
-                                  <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
-                                )}
+                            <span className="text-[12px] opacity-90">↗</span>
+                          </button>
+                        ))}
+                    </div>
+
+                    <div className="border-t border-[#8f3368] opacity-70" />
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                      {(() => {
+                        const sortedCats = (selectedTheme.categories || []).slice().sort((a, b) => a.ordre - b.ordre);
+                        const allSubThemes = sortedCats.flatMap(cat =>
+                          (cat.sous_themes || []).map(st => ({ ...st, category_id: cat.id, category_name: cat.nom }))
+                        );
+                        const scopedSubThemes = String(selectedVisitorCategoryId) === 'all'
+                          ? allSubThemes
+                          : allSubThemes.filter(st => String(st.category_id) === String(selectedVisitorCategoryId));
+
+                        const byId = new Map();
+                        scopedSubThemes.forEach(st => {
+                          if (!byId.has(st.id)) byId.set(st.id, st);
+                        });
+
+                        return Array.from(byId.values())
+                          .filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                          .map((st, i) => (
+                            <div
+                              key={st.id || i}
+                              onClick={async () => {
+                                try {
+                                  const res = await axios.get(themesApiBase);
+                                  const freshTheme = res.data.find(t => t.id === selectedTheme.id);
+                                  const freshSubTheme = findSubThemeInTheme(freshTheme, st.id);
+                                  if (!freshSubTheme) return;
+                                  selectSubTheme(freshSubTheme);
+                                  setSavedCharts(freshSubTheme.charts_config || []);
+                                  setFormStep(4);
+                                  setShowAll(false);
+                                } catch (err) { console.error(err); }
+                              }}
+                              className={`relative cursor-pointer p-4 rounded-sm border border-[#7d2458] shadow-lg text-white font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
+                            >
+                              {st.archived && (
+                                <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                              )}
+                              <div className="text-sm opacity-80 mb-2">{st.category_name}</div>
+                              <div className="text-[20px] leading-tight flex items-start gap-2">
+                                <span className="text-white/90">📈</span>
+                                <span>{st.nom}</span>
                               </div>
-                            ))}
-                          </div>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
+                              {canEdit && (
+                                <div className="flex justify-center gap-2 mt-4 text-black">
+                                  <button onClick={(e) => {
+                                    e.stopPropagation();
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const menuHeight = 200;
+                                    const menuWidth = 192;
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    const spaceRight = window.innerWidth - rect.left;
+                                    const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                                    const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                                    setSubActionMenuPos({ left, top });
+                                    setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id);
+                                    setOpenActionMenu(null);
+                                    setOpenThemeMenu(null);
+                                    setOpenSubThemeMenu(null);
+                                    setOpenCategorieMenu(null);
+                                  }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                                  <button onClick={(e) => {
+                                    e.stopPropagation();
+                                    const rect = e.currentTarget.getBoundingClientRect();
+                                    const menuHeight = 150;
+                                    const menuWidth = 192;
+                                    const spaceBelow = window.innerHeight - rect.bottom;
+                                    const spaceRight = window.innerWidth - rect.left;
+                                    const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                                    const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                                    setSubThemeMenuPos({ left, top });
+                                    setOpenSubThemeMenu(openSubThemeMenu === st.id ? null : st.id);
+                                    setOpenSubActionMenu(null);
+                                    setOpenActionMenu(null);
+                                    setOpenThemeMenu(null);
+                                    setOpenCategorieMenu(null);
+                                  }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                                </div>
+                              )}
+                              {canEdit && userRole === 'ADMIN' && (
+                                <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
+                              )}
+                            </div>
+                          ));
+                      })()}
+                    </div>
+                  </div>
               ) : (
                 // Affichage sans catégories (thèmes classiques)
                 <div className="grid grid-cols-4 gap-6">
@@ -3004,19 +3255,23 @@ function App({ forceVisitor = false }) {
                         try {
                                   const res = await axios.get(themesApiBase);
                           const freshTheme = res.data.find(t => t.id === selectedTheme.id);
-                          const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === st.id);
+                          const freshSubTheme = findSubThemeInTheme(freshTheme, st.id);
+                          if (!freshSubTheme) return;
                           selectSubTheme(freshSubTheme);
                           setSavedCharts(freshSubTheme.charts_config || []);
                           setFormStep(4); 
                           setShowAll(false);
                         } catch (err) { console.error(err); }
                       }}
-                      className={`relative cursor-pointer p-6 rounded-xl border-2 border-black shadow-lg text-white font-bold text-center hover:scale-105 transition-transform ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#4a77b4]'}`}
+                      className={`relative cursor-pointer p-4 rounded-sm border border-[#7d2458] shadow-lg text-white font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
                     >
                       {st.archived && (
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
-                      {st.nom}
+                      <div className="text-[20px] leading-tight flex items-start gap-2">
+                        <span className="text-white/90">📈</span>
+                        <span>{st.nom}</span>
+                      </div>
                       {canEdit && (
                         <div className="flex justify-center gap-2 mt-4 text-black">
                           <button onClick={(e) => { 

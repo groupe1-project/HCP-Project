@@ -90,6 +90,7 @@ class ThemeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 
             'titre', 
+            'theme_image',
             'ordre', 
             'is_visible', 
             'archived',

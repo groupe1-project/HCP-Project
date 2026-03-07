@@ -1,5 +1,6 @@
 import logging
 import uuid
+import base64
 import pandas as pd
 import string
 import random
@@ -190,6 +191,18 @@ class ThemeViewSet(viewsets.ModelViewSet):
         try:
             # 1. Récupération et création du Thème
             titre = request.data.get('titre')
+            theme_image_value = request.data.get('theme_image', '')
+            theme_image_file = request.FILES.get('theme_image')
+
+            if theme_image_file:
+                raw = theme_image_file.read()
+                mime = getattr(theme_image_file, 'content_type', None) or 'image/png'
+                b64 = base64.b64encode(raw).decode('utf-8')
+                theme_image_value = f"data:{mime};base64,{b64}"
+
+            if theme_image_value in [None, '', 'null', 'undefined']:
+                theme_image_value = None
+
             # Acceptation tolérante du statut (insensible à la casse et aux espaces)
             statut_raw = request.data.get('statut', '')
             statut_clean = str(statut_raw).strip().lower()
@@ -197,6 +210,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             
             nouveau_theme = Theme.objects.create(
                 titre=titre,
+                theme_image=theme_image_value,
                 is_visible=is_visible
             )
 

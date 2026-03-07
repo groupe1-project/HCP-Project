@@ -48,6 +48,8 @@ CustomUser.add_to_class('objects', CustomUserManager())
 # 2. STRUCTURE DES THÉMATIQUES
 class Theme(models.Model):
     titre = models.CharField(max_length=200)
+    # Image optionnelle du thème (affichée côté visiteur)
+    theme_image = models.TextField(null=True, blank=True)
     ordre = models.IntegerField(default=0)
     is_visible = models.BooleanField(default=True)
     # Marque d'archivage (archive vs actif)
