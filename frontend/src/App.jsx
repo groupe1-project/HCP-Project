@@ -10,8 +10,8 @@ import ChartModal from './components/ChartModal';
 const SidebarButton = ({ label, onClick, active }) => (
   <button 
     onClick={onClick}
-    className={`w-full py-3 px-5 text-left font-bold border-b border-[#8f3368] transition-colors uppercase tracking-wide ${
-      active ? 'bg-[#6a1f52] text-white shadow-inner' : 'bg-[#b3367b] text-white hover:bg-[#9f2e6e]'
+    className={`w-full py-3 px-5 text-left font-bold border-b border-[#d0ceca] transition-colors uppercase tracking-wide ${
+      active ? 'bg-[#d2d0cc] text-[#8A0A45] shadow-inner' : 'bg-[#dcdad6] text-[#8A0A45] hover:bg-[#d2d0cc]'
     }`}
   >
     {label}
@@ -78,6 +78,7 @@ function App({ forceVisitor = false }) {
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
   const [showAll, setShowAll] = useState(false);
+  const [activeDataTab, setActiveDataTab] = useState('tableau');
   const [visitorTableView, setVisitorTableView] = useState('horizontal');
   const [columnFilters, setColumnFilters] = useState({});
   const [dynamicFilters, setDynamicFilters] = useState({});
@@ -204,6 +205,13 @@ function App({ forceVisitor = false }) {
       setAuthLoading(false);
     }
   }, []);
+
+  useEffect(() => {
+    // Always reopen step-4 on the table tab when a subtheme is opened.
+    if (formStep === 4 && selectedSubTheme) {
+      setActiveDataTab('tableau');
+    }
+  }, [formStep, selectedSubTheme?.id]);
 
   // Keep axios Authorization header in sync with the current auth_context
   useEffect(() => {
@@ -2082,21 +2090,61 @@ function App({ forceVisitor = false }) {
         ctx.drawImage(img, 0, 0);
         const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
         const pixels = imageData.data;
+        const width = canvas.width;
+        const height = canvas.height;
 
-        // Convert white and near-white pixels to transparent.
-        for (let i = 0; i < pixels.length; i += 4) {
-          const r = pixels[i];
-          const g = pixels[i + 1];
-          const b = pixels[i + 2];
-          const a = pixels[i + 3];
-          if (a === 0) continue;
+        const isNearWhitePixel = (pixelIndex) => {
+          const r = pixels[pixelIndex];
+          const g = pixels[pixelIndex + 1];
+          const b = pixels[pixelIndex + 2];
+          const a = pixels[pixelIndex + 3];
+          if (a === 0) return false;
           const maxRGB = Math.max(r, g, b);
           const minRGB = Math.min(r, g, b);
           const isNearWhite = maxRGB >= 245 && minRGB >= 225;
           const lowSaturation = (maxRGB - minRGB) <= 22;
-          if (isNearWhite && lowSaturation) {
-            pixels[i + 3] = 0;
-          }
+          return isNearWhite && lowSaturation;
+        };
+
+        // Only remove background-like white linked to image borders.
+        // This preserves light details/colors inside the icon itself.
+        const visited = new Uint8Array(width * height);
+        const queueX = [];
+        const queueY = [];
+        let head = 0;
+
+        const tryEnqueue = (x, y) => {
+          if (x < 0 || y < 0 || x >= width || y >= height) return;
+          const pos = y * width + x;
+          if (visited[pos]) return;
+          const pixelIndex = pos * 4;
+          if (!isNearWhitePixel(pixelIndex)) return;
+          visited[pos] = 1;
+          queueX.push(x);
+          queueY.push(y);
+        };
+
+        for (let x = 0; x < width; x += 1) {
+          tryEnqueue(x, 0);
+          tryEnqueue(x, height - 1);
+        }
+        for (let y = 0; y < height; y += 1) {
+          tryEnqueue(0, y);
+          tryEnqueue(width - 1, y);
+        }
+
+        while (head < queueX.length) {
+          const x = queueX[head];
+          const y = queueY[head];
+          head += 1;
+
+          const pixelIndex = (y * width + x) * 4;
+          pixels[pixelIndex + 3] = 0;
+
+          tryEnqueue(x + 1, y);
+          tryEnqueue(x - 1, y);
+          tryEnqueue(x, y + 1);
+          tryEnqueue(x, y - 1);
         }
 
         ctx.putImageData(imageData, 0, 0);
@@ -2364,14 +2412,14 @@ function App({ forceVisitor = false }) {
 
   // --- RENDU PRINCIPAL (Admin) ---
   return (
-    <div className="flex min-h-screen bg-[#6a1f52] font-sans">
+    <div className="flex min-h-screen bg-[#5E0738] font-sans">
       
       {/* 1. MENU LATÉRAL */}
-      <div className="w-64 bg-[#b3367b] border-r border-[#7d2458] flex flex-col">
+      <div className="w-64 bg-[#dcdad6] border-r border-[#d0ceca] flex flex-col">
         <div className="p-4 bg-white border-b border-[#d7d7d7] flex flex-col items-center min-h-[210px]">
           <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
-        <div className="bg-[#8a2a64] text-white py-2 px-4 font-bold text-center border-b border-[#8f3368]">Menu</div>
+        <div className="bg-[#c9c9c9] text-[#111111] py-2 px-4 font-bold text-center border-b border-[#d0ceca]">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
         {canEdit && (
@@ -2387,7 +2435,7 @@ function App({ forceVisitor = false }) {
 
       {/* 2. CONTENU PRINCIPAL */}
       <div className="flex-1 flex flex-col">
-        <div className="bg-[#7a235a] px-6 py-3 border-b border-[#8f3368] flex items-center gap-4 shadow-[0_2px_8px_rgba(0,0,0,0.18)] relative">
+        <div className="bg-[#7A0A4A] px-6 py-3 border-b border-[#B03372] flex items-center gap-4 shadow-[0_2px_8px_rgba(0,0,0,0.18)] relative">
           <h1 className="text-white text-[28px] md:text-[34px] font-bold text-center tracking-wide leading-tight flex-1">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
@@ -2395,13 +2443,13 @@ function App({ forceVisitor = false }) {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }}
-                className="bg-[#8a2a64] hover:bg-[#7a2459] text-white font-bold py-2 px-3 rounded border border-[#b84c83]"
+                className="bg-[#7A0A4A] hover:bg-[#5E0738] text-white font-bold py-2 px-3 rounded border border-[#b84c83]"
               >
                 Parametres
               </button>
               <button
                 onClick={handleLogout}
-                className="bg-[#5f173f] hover:bg-[#4f1235] text-white font-bold py-2 px-3 rounded border border-[#8a2a64]"
+                className="bg-[#5E0738] hover:bg-[#4A062E] text-white font-bold py-2 px-3 rounded border border-[#7A0A4A]"
               >
                 Deconnexion
               </button>
@@ -2409,24 +2457,24 @@ function App({ forceVisitor = false }) {
           )}
         </div>
 
-        <div className="bg-[#6a1f52] px-6 py-2 border-b border-[#8f3368] flex items-center gap-3">
-          <span className="bg-[#d24387] text-white px-4 py-1 font-bold rounded-sm">INFOS</span>
-          <div className="bg-white text-[#7a235a] px-4 py-1.5 flex-1 rounded-sm font-medium">L'ICP du mois de Janvier 2026 est disponible</div>
+        <div className="bg-[#7A0A4A] px-6 py-2 border-b border-[#B03372] flex items-center gap-3">
+          <span className="bg-[#B03372] text-white px-4 py-1 font-bold rounded-sm">INFOS</span>
+          <div className="bg-white text-[#7A0A4A] px-4 py-1.5 flex-1 rounded-sm font-medium">L'ICP du mois de Janvier 2026 est disponible</div>
         </div>
 
         {formStep !== 4 && (
-          <div className={`px-6 ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
+          <div className={`px-6 bg-[#E8DFC0] border-b border-[#CCB47F] ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
             {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
               <div className="flex items-center gap-2">
                 <button
                   onClick={() => { setFormStep(0); setSelectedCategorie(null); setSelectedVisitorCategoryId('all'); }}
-                  className="bg-[#98004f] text-white w-14 h-11 rounded-xl border border-[#c3488f] font-black hover:bg-[#850046] shadow-md flex items-center justify-center text-[32px] leading-none"
+                  className="bg-[#7A0A4A] text-white w-14 h-11 rounded-xl border border-[#B03372] font-black hover:bg-[#5E0738] shadow-md flex items-center justify-center text-[32px] leading-none"
                   aria-label="Retour"
                   title="Retour"
                 >
                   ‹
                 </button>
-                <h2 className="bg-[#98004f] text-white px-7 py-2 rounded-xl border border-[#c3488f] font-bold shadow-md uppercase tracking-wide text-[28px] md:text-[30px] leading-tight">
+                <h2 className="bg-[#7A0A4A] text-white px-7 py-2 rounded-xl border border-[#B03372] font-bold shadow-md uppercase tracking-wide text-[28px] md:text-[30px] leading-tight">
                   {selectedCategorie ? `${selectedTheme.titre} - ${selectedCategorie.nom}` : `${selectedTheme.titre}`}
                 </h2>
               </div>
@@ -2440,7 +2488,7 @@ function App({ forceVisitor = false }) {
                   formStep === 3 ? 'Rechercher un sous-thème...' : 
                   'Barre de recherche'
                 } 
-                className="w-full pl-12 pr-4 py-3 border border-[#9d9d9d] rounded-none bg-[#f2f2f2] text-[#545454] outline-none focus:border-[#b3367b]"
+                className="w-full pl-12 pr-4 py-3 border border-[#9d9d9d] rounded-none bg-[#f2f2f2] text-[#545454] outline-none focus:border-[#B03372]"
                 value={
                   activeMenu === 'Indicateurs' ? searchIndicateur :
                   formStep === 0 ? searchTheme : 
@@ -2459,7 +2507,7 @@ function App({ forceVisitor = false }) {
         )}
         {formStep === 4 && <div className="h-5" />}
 
-        <div className="px-8 pb-10 flex-1 bg-[#6a1f52]">
+        <div className="px-8 pt-3 pb-10 flex-1 bg-white">
           
           {/* GRILLE DES INDICATEURS (TOUS LES SOUS-THÈMES) */}
           {activeMenu === 'Indicateurs' && (
@@ -2487,7 +2535,7 @@ function App({ forceVisitor = false }) {
                         setShowAll(false);
                       } catch (err) { console.error(err); }
                     }}
-                    className={`relative cursor-pointer p-4 rounded-sm border border-[#9b2e69] shadow-md text-white font-bold hover:scale-[1.01] transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
+                    className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md text-[#6E001F] font-bold hover:scale-[1.01] transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                   >
                     {st.archived && (
                       <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
@@ -2531,7 +2579,7 @@ function App({ forceVisitor = false }) {
                       setExpandedCategories({});
                       setFormStep(3);
                     }}
-                    className={`cursor-pointer p-4 rounded-sm border border-[#9b2e69] shadow-md relative text-white transition-transform hover:scale-[1.01] min-h-[132px] ${t.archived ? 'bg-gray-600 line-through opacity-80' : (t.id === maxId ? 'bg-[#b3367b]' : 'bg-[#8a004f]')}`}
+                    className={`cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md relative text-[#6E001F] transition-transform hover:scale-[1.01] min-h-[132px] ${t.archived ? 'bg-gray-600 line-through opacity-80 text-white' : (t.id === maxId ? 'bg-[#D89253]' : 'bg-[#E6A76A]')}`}
                   >
                     {t.archived && (
                       <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
@@ -2542,7 +2590,7 @@ function App({ forceVisitor = false }) {
                           <img
                             src={t.theme_image}
                             alt={t.titre}
-                            className="w-16 h-16 object-contain shrink-0 mix-blend-multiply"
+                            className="w-16 h-16 object-contain shrink-0"
                           />
                         )}
                         <span className="uppercase tracking-wide text-[18px] md:text-[20px] leading-snug font-semibold">{`${String(i + 1).padStart(2, '0')}-${t.titre}`}</span>
@@ -2561,7 +2609,7 @@ function App({ forceVisitor = false }) {
                             setCategorieMenuPos({ left, top });
                             setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
                           }}
-                          className="text-white/90 hover:text-white text-lg leading-none px-1 py-0.5"
+                          className="text-[#7A0A4A] hover:text-[#5E0738] text-lg leading-none px-1 py-0.5"
                           aria-label="Choisir une catégorie"
                         >
                           ▾
@@ -2584,7 +2632,7 @@ function App({ forceVisitor = false }) {
                           setActionMenuPos({ left, top }); 
                           setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
                           setOpenThemeMenu(null); 
-                        }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                        }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
                       )}
 
                       <div>
@@ -2613,7 +2661,7 @@ function App({ forceVisitor = false }) {
               {canEdit && userRole === 'ADMIN' && (
                 <button 
                   onClick={() => setFormStep(1)}
-                  className="fixed bottom-10 right-10 bg-[#b3367b] hover:bg-[#9f2e6e] text-white font-bold py-4 px-8 rounded-sm border border-[#d5649b] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.35)]"
+                  className="fixed bottom-10 right-10 bg-[#B03372] hover:bg-[#7A0A4A] text-white font-bold py-4 px-8 rounded-sm border border-[#B03372] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.35)]"
                 >
                   Ajouter un thème
                 </button>
@@ -2672,10 +2720,10 @@ function App({ forceVisitor = false }) {
                             className="flex-1 text-left flex items-center gap-2"
                           >
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                              <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#4a77b4" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                             </svg>
                             <span className="font-semibold">{cat.nom}</span>
                             <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
@@ -2813,8 +2861,8 @@ function App({ forceVisitor = false }) {
                    </div>
                    {themeImagePreview && (
                      <div className="flex items-center gap-3">
-                       <div className="w-12 h-12 border border-gray-300 rounded-sm bg-[#8a004f] flex items-center justify-center overflow-hidden">
-                         <img src={themeImagePreview} alt="Aperçu" className="w-10 h-10 object-contain mix-blend-multiply" />
+                       <div className="w-12 h-12 border border-gray-300 rounded-sm bg-[#7A0A4A] flex items-center justify-center overflow-hidden">
+                         <img src={themeImagePreview} alt="Aperçu" className="w-10 h-10 object-contain" />
                        </div>
                        <button
                          type="button"
@@ -2930,7 +2978,7 @@ function App({ forceVisitor = false }) {
                    
                    return (
                      <div key={catIndex} className="bg-white border-2 border-black rounded-lg shadow-xl overflow-hidden">
-                       <div className="bg-[#6d92c7] px-4 py-3 border-b-2 border-black">
+                       <div className="bg-[#7A0A4A] px-4 py-3 border-b-2 border-black">
                          <h3 className="text-white font-bold text-lg">Catégorie {catIndex + 1}: {cat.nom}</h3>
                        </div>
                        <table className="w-full border-collapse">
@@ -3078,13 +3126,12 @@ function App({ forceVisitor = false }) {
                           setShowAll(false);
                         } catch (err) { console.error(err); }
                       }}
-                      className={`relative cursor-pointer p-4 rounded-sm border border-[#7d2458] shadow-lg text-white font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
+                      className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-lg text-[#6E001F] font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                     >
                       {st.archived && (
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
-                      <div className="text-[20px] leading-tight flex items-start gap-2">
-                        <span className="text-white/90">📈</span>
+                      <div className="text-[20px] leading-tight">
                         <span>{st.nom}</span>
                       </div>
                       {canEdit && (
@@ -3104,7 +3151,7 @@ function App({ forceVisitor = false }) {
                             setOpenThemeMenu(null);
                             setOpenSubThemeMenu(null);
                             setOpenCategorieMenu(null); 
-                          }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                          }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
                           <button onClick={(e) => { 
                             e.stopPropagation(); 
                             const rect = e.currentTarget.getBoundingClientRect(); 
@@ -3134,7 +3181,7 @@ function App({ forceVisitor = false }) {
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-3">
                       <button
                         onClick={() => setSelectedVisitorCategoryId('all')}
-                        className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center gap-2 ${selectedVisitorCategoryId === 'all' ? 'bg-[#8a004f] text-white border-[#b64586]' : 'bg-[#7a2a5e] text-white/90 border-[#a2477e] hover:bg-[#8a316a]'}`}
+                        className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center gap-2 ${selectedVisitorCategoryId === 'all' ? 'bg-[#7A0A4A] text-white border-[#B03372]' : 'bg-[#7A0A4A] text-white/90 border-[#A85A84] hover:bg-[#5E0738]'}`}
                       >
                         <span className="text-[12px]">⏷</span>
                         <span>Tous</span>
@@ -3146,7 +3193,7 @@ function App({ forceVisitor = false }) {
                           <button
                             key={cat.id}
                             onClick={() => setSelectedVisitorCategoryId(String(cat.id))}
-                            className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center justify-between gap-2 ${String(selectedVisitorCategoryId) === String(cat.id) ? 'bg-[#8a004f] text-white border-[#b64586]' : 'bg-[#7a2a5e] text-white/90 border-[#a2477e] hover:bg-[#8a316a]'}`}
+                            className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center justify-between gap-2 ${String(selectedVisitorCategoryId) === String(cat.id) ? 'bg-[#7A0A4A] text-white border-[#B03372]' : 'bg-[#7A0A4A] text-white/90 border-[#A85A84] hover:bg-[#5E0738]'}`}
                           >
                             <span className="flex items-center gap-2 min-w-0">
                               <span className="text-[12px] shrink-0">⏷</span>
@@ -3157,7 +3204,7 @@ function App({ forceVisitor = false }) {
                         ))}
                     </div>
 
-                    <div className="border-t border-[#8f3368] opacity-70" />
+                    <div className="border-t border-[#B03372] opacity-70" />
 
                     <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
                       {(() => {
@@ -3191,14 +3238,13 @@ function App({ forceVisitor = false }) {
                                   setShowAll(false);
                                 } catch (err) { console.error(err); }
                               }}
-                              className={`relative cursor-pointer p-4 rounded-sm border border-[#7d2458] shadow-lg text-white font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
+                              className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-lg text-[#6E001F] font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                             >
                               {st.archived && (
                                 <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                               )}
                               <div className="text-sm opacity-80 mb-2">{st.category_name}</div>
-                              <div className="text-[20px] leading-tight flex items-start gap-2">
-                                <span className="text-white/90">📈</span>
+                              <div className="text-[20px] leading-tight">
                                 <span>{st.nom}</span>
                               </div>
                               {canEdit && (
@@ -3218,7 +3264,7 @@ function App({ forceVisitor = false }) {
                                     setOpenThemeMenu(null);
                                     setOpenSubThemeMenu(null);
                                     setOpenCategorieMenu(null);
-                                  }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                                  }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
                                   <button onClick={(e) => {
                                     e.stopPropagation();
                                     const rect = e.currentTarget.getBoundingClientRect();
@@ -3263,13 +3309,12 @@ function App({ forceVisitor = false }) {
                           setShowAll(false);
                         } catch (err) { console.error(err); }
                       }}
-                      className={`relative cursor-pointer p-4 rounded-sm border border-[#7d2458] shadow-lg text-white font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80' : 'bg-[#8a004f]'}`}
+                      className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-lg text-[#6E001F] font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                     >
                       {st.archived && (
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
-                      <div className="text-[20px] leading-tight flex items-start gap-2">
-                        <span className="text-white/90">📈</span>
+                      <div className="text-[20px] leading-tight">
                         <span>{st.nom}</span>
                       </div>
                       {canEdit && (
@@ -3287,7 +3332,7 @@ function App({ forceVisitor = false }) {
                             setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
                             setOpenActionMenu(null); 
                             setOpenThemeMenu(null); 
-                          }} className="bg-[#99c199] p-1 border border-black rounded shadow">📝</button>
+                          }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
                           <button onClick={(e) => { 
                             e.stopPropagation(); 
                             const rect = e.currentTarget.getBoundingClientRect(); 
@@ -3317,12 +3362,22 @@ function App({ forceVisitor = false }) {
 
           {/* ÉTAPE 4 : DÉTAILS SOUS-THÈME DÉVELOPPÉ */}
           {activeMenu === 'Themes' && formStep === 4 && selectedSubTheme && (
-            <div className="bg-white border border-[#b8d4e3] p-6 rounded-2xl shadow-[0_8px_24px_rgba(16,78,116,0.12)] space-y-6">
+            <div className={`${isVisitor ? 'bg-white border border-[#b56695] shadow-[0_8px_24px_rgba(106,31,82,0.18)]' : 'bg-white border border-[#b8d4e3] shadow-[0_8px_24px_rgba(16,78,116,0.12)]'} p-6 rounded-2xl space-y-6`}>
               
               <div className="flex flex-wrap justify-between items-start gap-4">
-                <h3 className="bg-[#e6f2fb] text-[#134f70] px-6 py-2 border border-[#9fc7dc] rounded-xl font-bold text-base shadow-sm">
-                  Sous thème : {selectedSubTheme.nom}
-                </h3>
+                <div className="flex items-center gap-3">
+                  <button
+                    onClick={() => setFormStep(3)}
+                    className={`${isVisitor ? 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]' : 'bg-[#7A0A4A] text-white border-[#5E0738] hover:bg-[#5E0738]'} w-12 h-12 rounded-xl border font-black text-2xl leading-none shadow-sm flex items-center justify-center`}
+                    aria-label="Retour vers les sous-thèmes"
+                    title="Retour"
+                  >
+                    &#8249;
+                  </button>
+                  <h3 className={`${isVisitor ? 'bg-[#7A0A4A] text-white border border-[#B03372]' : 'bg-[#F2E9D2] text-[#134f70] border border-[#CCB47F]'} px-6 py-2 rounded-xl font-bold text-base shadow-sm`}>
+                    {selectedSubTheme.nom}
+                  </h3>
+                </div>
                 <div className="flex flex-wrap items-center gap-2">
                   {canEdit && userRole === 'ADMIN' ? (
                     <>
@@ -3366,8 +3421,7 @@ function App({ forceVisitor = false }) {
                     </button>
                   )}
 
-                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className="bg-white text-[#134f70] px-4 py-2 rounded-xl border border-[#9fc7dc] font-bold shadow-sm hover:bg-[#f4fbff]">Métadonnées</button>
-                  <button onClick={() => setFormStep(3)} className="bg-[#f39a3d] text-white px-4 py-2 border border-[#aa6420] rounded-xl font-bold shadow-sm hover:bg-[#e6892a]">Fermer</button>
+                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className={`${isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#134f70] border-[#CCB47F] hover:bg-[#f3f3f3]'} px-4 py-2 rounded-xl border font-bold shadow-sm`}>Métadonnées</button>
                   {/* Saisisseur: Enregistrer / Envoyer au admin */}
                   {isSaisisseur && (
                     <>
@@ -3479,97 +3533,6 @@ function App({ forceVisitor = false }) {
                 </div>
               </div>
 
-              {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
-              {filtersForRender && filtersForRender.length > 0 && (
-                <div className="bg-[#eef7fd] border border-[#9fc7dc] rounded-xl p-4 space-y-4 w-fit shadow-sm">
-                  <h3 className="font-bold text-blue-900">🔍 Filtres Disponibles</h3>
-                  <div className="flex flex-wrap gap-4">
-                    {filtersForRender.map(filterCol => (
-                      <div key={filterCol} className="relative">
-                        <label className="text-sm font-bold text-gray-700 block mb-2">{filterCol}</label>
-                        <button
-                          type="button"
-                          className="w-44 text-left px-3 py-2 border border-[#9fc7dc] rounded-lg bg-white outline-none text-sm font-medium"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            // open popover and init temp selection from dynamicFilters
-                            setOpenFilter(filterCol);
-                            setTempFilterSelection(prev => {
-                              const raw = dynamicFilters[filterCol];
-                              const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
-                              return { ...(prev || {}), [filterCol]: new Set(arr.map(String)) };
-                            });
-                          }}
-                        >
-                          {(() => {
-                            const cur = dynamicFilters[filterCol];
-                            if (Array.isArray(cur) && cur.length > 0) return `${cur.length} sélectionné(s)`;
-                            if (cur && !Array.isArray(cur)) return String(cur);
-                            return '-- Tous --';
-                          })()}
-                        </button>
-
-                        {openFilter === filterCol && (
-                          <div className="absolute z-50 left-0 top-full mt-2 bg-white border border-[#9fc7dc] rounded-lg shadow-[0_8px_22px_rgba(15,86,120,0.2)] p-4 w-64 max-h-56 overflow-auto">
-                            <div className="flex flex-col gap-2">
-                              {getUniqueValuesForColumn(filterCol).map(val => {
-                                const set = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
-                                const checked = set.has(String(val));
-                                return (
-                                  <label key={val} className="flex items-center gap-2 text-sm">
-                                    <input
-                                      type="checkbox"
-                                      checked={checked}
-                                      onChange={(ev) => {
-                                        ev.stopPropagation();
-                                        setTempFilterSelection(prev => {
-                                          const copy = { ...(prev || {}) };
-                                          const s = new Set(copy[filterCol] || []);
-                                          if (s.has(String(val))) s.delete(String(val)); else s.add(String(val));
-                                          copy[filterCol] = s;
-                                          return copy;
-                                        });
-                                      }}
-                                    />
-                                    <span>{val}</span>
-                                  </label>
-                                );
-                              })}
-                            </div>
-                            <div className="flex justify-between items-center gap-2 mt-4">
-                              <div className="text-xs text-gray-600">{getUniqueValuesForColumn(filterCol).length} option(s)</div>
-                              <div className="flex gap-2">
-                                <button
-                                  type="button"
-                                  className="px-4 py-2 bg-[#188fbe] text-white rounded-md font-semibold"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    const s = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
-                                    setDynamicFilters(prev => ({ ...prev, [filterCol]: Array.from(s) }));
-                                    setOpenFilter(null);
-                                  }}
-                                >Appliquer</button>
-                                <button type="button" className="px-4 py-2 bg-gray-100 rounded-md" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>Fermer</button>
-                                <button
-                                  type="button"
-                                  className="px-4 py-2 bg-red-500 text-white rounded-md"
-                                  onClick={(e) => {
-                                    e.stopPropagation();
-                                    setTempFilterSelection(prev => ({ ...(prev || {}), [filterCol]: new Set() }));
-                                    setDynamicFilters(prev => ({ ...prev, [filterCol]: [] }));
-                                    setOpenFilter(null);
-                                  }}
-                                >Effacer</button>
-                              </div>
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-
               {/* BOUTON CONFIGURATION AVANCÉE */}
               {canEdit && (
                 <button onClick={(e) => { 
@@ -3582,32 +3545,143 @@ function App({ forceVisitor = false }) {
                   }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold text-sm shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
               )}
 
+              <div className="flex justify-center">
+                <div className={`${isVisitor ? 'bg-white border-[#B88FA4]' : 'bg-white border-[#CCB47F]'} inline-flex rounded-xl border p-1 shadow-sm`}>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDataTab('tableau')}
+                    className={`px-6 py-2 rounded-lg font-bold text-sm tracking-wide transition-colors ${activeDataTab === 'tableau' ? (isVisitor ? 'bg-[#7A0A4A] text-white border border-[#b74a86]' : 'bg-[#7A0A4A] text-white border border-[#5E0738]') : (isVisitor ? 'text-[#5E0738] hover:bg-[#f3f3f3]' : 'text-[#5E0738] hover:bg-[#f3f3f3]')}`}
+                  >
+                    TABLEAU
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setActiveDataTab('graphes')}
+                    className={`px-6 py-2 rounded-lg font-bold text-sm tracking-wide transition-colors ${activeDataTab === 'graphes' ? (isVisitor ? 'bg-[#7A0A4A] text-white border border-[#b74a86]' : 'bg-[#7A0A4A] text-white border border-[#5E0738]') : (isVisitor ? 'text-[#5E0738] hover:bg-[#f3f3f3]' : 'text-[#5E0738] hover:bg-[#f3f3f3]')}`}
+                  >
+                    GRAPHES
+                  </button>
+                </div>
+              </div>
+
               {/* TABLEAU AVEC FILTRES PAR COLONNE */}
+              {activeDataTab === 'tableau' && (
               <div className="space-y-4">
+                {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
+                {filtersForRender && filtersForRender.length > 0 && (
+                  <div className={`${isVisitor ? 'bg-white border-[#B88FA4]' : 'bg-white border-[#CCB47F]'} border rounded-lg p-3 space-y-3 w-fit shadow-sm`}>
+                    <h3 className={`font-bold text-sm ${isVisitor ? 'text-[#5E0738]' : 'text-blue-900'}`}>🔍 Filtres Disponibles</h3>
+                    <div className="flex flex-wrap gap-3">
+                      {filtersForRender.map(filterCol => (
+                        <div key={filterCol} className="relative">
+                          <label className={`text-xs font-bold block mb-1 ${isVisitor ? 'text-[#5E0738]' : 'text-gray-700'}`}>{filterCol}</label>
+                          <button
+                            type="button"
+                            className={`w-40 text-left px-3 py-1.5 border rounded-md bg-white outline-none text-xs font-medium ${isVisitor ? 'border-[#B88FA4] text-[#5E0738]' : 'border-[#CCB47F]'}`}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              // open popover and init temp selection from dynamicFilters
+                              setOpenFilter(filterCol);
+                              setTempFilterSelection(prev => {
+                                const raw = dynamicFilters[filterCol];
+                                const arr = Array.isArray(raw) ? raw : (raw ? [raw] : []);
+                                return { ...(prev || {}), [filterCol]: new Set(arr.map(String)) };
+                              });
+                            }}
+                          >
+                            {(() => {
+                              const cur = dynamicFilters[filterCol];
+                              if (Array.isArray(cur) && cur.length > 0) return `${cur.length} sélectionné(s)`;
+                              if (cur && !Array.isArray(cur)) return String(cur);
+                              return '-- Tous --';
+                            })()}
+                          </button>
+
+                          {openFilter === filterCol && (
+                            <div className={`absolute z-50 left-0 top-full mt-2 bg-white border rounded-lg p-3 w-60 max-h-56 overflow-auto ${isVisitor ? 'border-[#B88FA4] shadow-[0_8px_22px_rgba(106,31,82,0.2)]' : 'border-[#CCB47F] shadow-[0_8px_22px_rgba(15,86,120,0.2)]'}`}>
+                              <div className="flex flex-col gap-2">
+                                {getUniqueValuesForColumn(filterCol).map(val => {
+                                  const set = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
+                                  const checked = set.has(String(val));
+                                  return (
+                                    <label key={val} className="flex items-center gap-2 text-sm">
+                                      <input
+                                        type="checkbox"
+                                        checked={checked}
+                                        onChange={(ev) => {
+                                          ev.stopPropagation();
+                                          setTempFilterSelection(prev => {
+                                            const copy = { ...(prev || {}) };
+                                            const s = new Set(copy[filterCol] || []);
+                                            if (s.has(String(val))) s.delete(String(val)); else s.add(String(val));
+                                            copy[filterCol] = s;
+                                            return copy;
+                                          });
+                                        }}
+                                      />
+                                      <span>{val}</span>
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                              <div className="flex justify-between items-center gap-2 mt-3">
+                                <div className="text-xs text-gray-600">{getUniqueValuesForColumn(filterCol).length} option(s)</div>
+                                <div className="flex gap-2">
+                                  <button
+                                    type="button"
+                                    className={`px-3 py-1.5 text-white rounded-md text-xs font-semibold ${isVisitor ? 'bg-[#7A0A4A] hover:bg-[#5E0738]' : 'bg-[#7A0A4A]'}`}
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      const s = (tempFilterSelection && tempFilterSelection[filterCol]) || new Set();
+                                      setDynamicFilters(prev => ({ ...prev, [filterCol]: Array.from(s) }));
+                                      setOpenFilter(null);
+                                    }}
+                                  >Appliquer</button>
+                                  <button type="button" className="px-3 py-1.5 bg-gray-100 rounded-md text-xs" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>Fermer</button>
+                                  <button
+                                    type="button"
+                                    className="px-3 py-1.5 bg-red-500 text-white rounded-md text-xs"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      setTempFilterSelection(prev => ({ ...(prev || {}), [filterCol]: new Set() }));
+                                      setDynamicFilters(prev => ({ ...prev, [filterCol]: [] }));
+                                      setOpenFilter(null);
+                                    }}
+                                  >Effacer</button>
+                                </div>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
                 {isVisitor && visitorMatrix?.canPivot && (
                   <div className="flex gap-2 items-center">
                     <button
                       onClick={() => setVisitorTableView('horizontal')}
-                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'horizontal' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5] hover:bg-[#f2f9fd]'}`}
+                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'horizontal' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')}`}
                     >Vue horizontale</button>
                     <button
                       onClick={() => canVisitorVerticalView && setVisitorTableView('vertical')}
                       disabled={!canVisitorVerticalView}
-                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'vertical' ? 'bg-[#188fbe] text-white border-[#0f6b90]' : 'bg-white text-[#0f5f84] border-[#8abed5] hover:bg-[#f2f9fd]'} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'vertical' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
                     >Vue verticale</button>
                   </div>
                 )}
 
-                <div className={`${isVisitor ? 'border-2 border-[#0b80b1] rounded-xl bg-white shadow-[0_2px_12px_rgba(0,70,120,0.12)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} overflow-auto max-h-[28rem]`}>
+                <div className={`${isVisitor ? 'border-2 border-[#A85A84] rounded-xl bg-white shadow-[0_2px_12px_rgba(106,31,82,0.14)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} overflow-auto max-h-[28rem]`}>
                   {isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' ? (
                     <>
-                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-4 py-2 text-xs text-[#0b5e83] font-medium">
+                      <div className="sticky top-0 z-20 bg-white border-b border-[#CCB47F] px-4 py-2 text-xs text-[#3F2A1F] font-medium">
                         <span>{(visitorVerticalMatrix.rows || []).length} ligne(s)</span>
                         <span className="mx-2">•</span>
                         <span>{(visitorVerticalMatrix.hierarchyCols || []).length} niveau(x) hiérarchique(s)</span>
                       </div>
                       <table className="w-full border-collapse text-sm">
-                        <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]">
+                        <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
                           {(() => {
                             const headerRows = visitorVerticalMatrix.headerRows || [];
                             const rowCols = visitorVerticalMatrix.rowCols || [];
@@ -3616,16 +3690,16 @@ function App({ forceVisitor = false }) {
                               <>
                                 <tr>
                                   {rowCols.map(col => (
-                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#0f6b90] min-w-[150px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
+                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
                                   ))}
                                   {(headerRows[0].cells || []).map(cell => (
-                                    <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#0f6b90] text-center font-bold text-sm">{cell.label}</th>
+                                    <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#7b1e5a] text-center font-bold text-sm">{cell.label}</th>
                                   ))}
                                 </tr>
                                 {headerRows.slice(1).map((row, ridx) => (
                                   <tr key={`hrow-${ridx + 1}`}>
                                     {(row.cells || []).map(cell => (
-                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#0f6b90] text-center font-semibold text-xs bg-[#167fa8]">{cell.label}</th>
+                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#7b1e5a] text-center font-semibold text-xs bg-[#8a2f67]">{cell.label}</th>
                                     ))}
                                   </tr>
                                 ))}
@@ -3682,7 +3756,7 @@ function App({ forceVisitor = false }) {
                             });
 
                             return displayedRows.map((row, i) => (
-                              <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#e8f5fb] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f7fbfe]')} border-b border-[#c9dbe6]`}>
+                              <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#f5f5f5] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]')} border-b border-[#CCB47F]`}>
                                 {rowCols.map(col => {
                                   const span = spans[col][i] || 0;
                                   if (span === 0) return null;
@@ -3691,14 +3765,14 @@ function App({ forceVisitor = false }) {
                                     <td
                                       key={`${row.key}-${col}`}
                                       rowSpan={span}
-                                      className={`p-4 border-r border-[#d1e2ec] text-[#0c4f6d] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
+                                      className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
                                     >
                                       <span className={`font-semibold ${isYearCol ? 'text-3xl leading-none' : ''}`}>{String(row?.dimensions?.[col] ?? '—')}</span>
                                     </td>
                                   );
                                 })}
                                 {leaves.map((leaf, idx) => (
-                                  <td key={`${row.key}-${leaf.key}`} className={`p-4 border-r border-[#e2edf3] text-right text-[#0f6fa0] text-sm tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f1f9fd] font-semibold' : ''}`}>
+                                  <td key={`${row.key}-${leaf.key}`} className={`p-4 border-r border-[#DCC897] text-right text-[#4A062E] text-sm tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f7f7f7] font-semibold' : ''}`}>
                                     {formatValue(row?.cells?.[leaf.key])}
                                   </td>
                                 ))}
@@ -3710,7 +3784,7 @@ function App({ forceVisitor = false }) {
                     </>
                   ) : isVisitor && visitorMatrix?.canPivot ? (
                     <>
-                      <div className="sticky top-0 z-20 bg-[#e7f4fb] border-b border-[#b6dced] px-4 py-2 text-xs text-[#0b5e83] font-medium">
+                      <div className="sticky top-0 z-20 bg-white border-b border-[#CCB47F] px-4 py-2 text-xs text-[#3F2A1F] font-medium">
                         <span>{(visitorMatrix.rows || []).length} ligne(s)</span>
                         <span className="mx-2">•</span>
                         <span>{(visitorMatrix.periods || []).length} période(s)</span>
@@ -3722,13 +3796,13 @@ function App({ forceVisitor = false }) {
                         )}
                       </div>
                       <table className="w-full border-collapse text-sm">
-                      <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]">
+                      <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
                         <tr>
                           {(visitorMatrix.displayGroupCols || []).map(col => (
-                            <th key={col} className="p-4 border-r border-[#0f6b90] min-w-[170px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
+                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
                           ))}
                           {visitorMatrix.periods.map((period, idx) => (
-                            <th key={period} className={`p-4 border-r border-[#0f6b90] min-w-[110px] text-center font-bold text-sm ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#167fa8]' : ''}`}>{period}</th>
+                            <th key={period} className={`p-4 border-r border-[#7b1e5a] min-w-[110px] text-center font-bold text-sm ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
                           ))}
                         </tr>
                       </thead>
@@ -3783,7 +3857,7 @@ function App({ forceVisitor = false }) {
 
                           const latestPeriod = visitorMatrix.periods[visitorMatrix.periods.length - 1];
                           return displayedRows.map((row, i) => (
-                            <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#e8f5fb] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#f7fbfe]')} border-b border-[#c9dbe6]`}>
+                            <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#f5f5f5] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]')} border-b border-[#CCB47F]`}>
                               {groupCols.map((col, colIndex) => {
                                 const span = spans[col][i] || 0;
                                 if (span === 0) return null;
@@ -3792,16 +3866,16 @@ function App({ forceVisitor = false }) {
                                 const isMergedCell = span > 1;
                                 const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
-                                  <td key={`${row.key}-${col}`} rowSpan={span} className={`p-4 border-r border-[#d1e2ec] text-[#0c4f6d] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
+                                  <td key={`${row.key}-${col}`} rowSpan={span} className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
                                     <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{value}</span>
                                     {isTotalCell && colIndex === groupCols.length - 1 && (
-                                      <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#188fbe] text-white uppercase tracking-wide">Total</span>
+                                      <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#7A0A4A] text-white uppercase tracking-wide">Total</span>
                                     )}
                                   </td>
                                 );
                               })}
                               {visitorMatrix.periods.map(period => (
-                                  <td key={`${row.key}-${period}`} className={`p-4 border-r border-[#e2edf3] text-right text-[#0f6fa0] text-sm tabular-nums ${period === latestPeriod ? 'bg-[#f1f9fd] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
+                                  <td key={`${row.key}-${period}`} className={`p-4 border-r border-[#DCC897] text-right text-[#4A062E] text-sm tabular-nums ${period === latestPeriod ? 'bg-[#f7f7f7] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
                               ))}
                             </tr>
                           ));
@@ -3811,10 +3885,10 @@ function App({ forceVisitor = false }) {
                     </>
                   ) : (
                     <table className="w-full border-collapse text-sm">
-                      <thead className="sticky top-0 z-10 bg-gradient-to-r from-[#188fbe] to-[#2c9bc6] text-white border-b border-[#0f6b90] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)] font-bold">
+                      <thead className={`sticky top-0 z-10 ${isVisitor ? 'bg-gradient-to-r from-[#7A0A4A] to-[#B03372] border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]' : 'bg-gradient-to-r from-[#7A0A4A] to-[#B03372] border-[#5E0738] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]'} text-white border-b font-bold`}>
                         <tr>
                           {visibleColumnsForRender.map(col => (
-                            <th key={col} className="p-4 border-r border-[#0f6b90] min-w-[160px] text-left uppercase tracking-wide font-bold text-xs">
+                            <th key={col} className={`p-4 border-r ${isVisitor ? 'border-[#7b1e5a]' : 'border-[#5E0738]'} min-w-[160px] text-left uppercase tracking-wide font-bold text-xs`}>
                               <div className="uppercase text-[11px] tracking-wide font-bold text-white">{col}</div>
                             </th>
                           ))}
@@ -3838,7 +3912,7 @@ function App({ forceVisitor = false }) {
                           });
 
                           return displayedRows.map((row, i) => (
-                            <tr key={i} className={`${i % 2 === 0 ? 'bg-white' : 'bg-[#f8fcff]'} border-b border-[#c9dbe6] min-h-10 hover:bg-[#f2f9fd]`}>
+                            <tr key={i} className={`${i % 2 === 0 ? 'bg-white' : (isVisitor ? 'bg-[#fafafa]' : 'bg-[#f8fcff]')} border-b ${isVisitor ? 'border-[#CCB47F] hover:bg-[#f3f3f3]' : 'border-[#D8C49A] hover:bg-[#F7F1E3]'} min-h-10`}>
                               {visibleColumnsForRender.map((col) => {
                                 const span = spans[col][i] || 0;
                                 if (span === 0) return null;
@@ -3846,7 +3920,7 @@ function App({ forceVisitor = false }) {
                                 const isMergedCell = span > 1;
                                 const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
-                                  <td key={col} rowSpan={span} className={`border-r border-[#d1e2ec] p-3 text-xs ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'} ${isNumericCol ? 'tabular-nums text-[#0f6fa0] font-medium' : 'text-[#0c4f6d]'}`}>
+                                  <td key={col} rowSpan={span} className={`border-r ${isVisitor ? 'border-[#D6BE8C]' : 'border-[#D8C49A]'} p-3 text-xs ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'} ${isNumericCol ? (isVisitor ? 'tabular-nums text-[#4A062E] font-medium' : 'tabular-nums text-[#5E0738] font-medium') : (isVisitor ? 'text-[#3F2A1F]' : 'text-[#3F2A1F]')}`}>
                                     <span className={`${isMergedCell ? mergedSizeClass : ''} ${isNumericCol ? 'text-right inline-block w-full' : 'font-semibold'}`}>{row[col]}</span>
                                   </td>
                                 );
@@ -3859,7 +3933,7 @@ function App({ forceVisitor = false }) {
                   )}
                 </div>
                 <div className="flex flex-wrap gap-4 items-center justify-between">
-                  <button onClick={() => setShowAll(!showAll)} className="bg-[#8ec278] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
+                  <button onClick={() => setShowAll(!showAll)} className="bg-[#9E6F2F] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
                     {showAll ? "Réduire le tableau" : (isVisitor ? "Afficher plus de lignes" : "Afficher tout le tableau")}
                   </button>
 
@@ -3874,8 +3948,10 @@ function App({ forceVisitor = false }) {
                   </div>
                 </div>
               </div>
+              )}
 
               {/* ZONE DES GRAPHIQUES GÉNÉRÉS */}
+              {activeDataTab === 'graphes' && (
               <div className="space-y-6">
                 <div className="grid grid-cols-1 gap-6">
                   {(() => {
@@ -3999,7 +4075,7 @@ function App({ forceVisitor = false }) {
                                   <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
                                   <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
-                                  <Bar dataKey={chart.y} fill="#4a77b4" />
+                                  <Bar dataKey={chart.y} fill="#7A0A4A" />
                                 </BarChart>
                               )
                             ) : chart.type === 'Courbes' ? (
@@ -4025,7 +4101,7 @@ function App({ forceVisitor = false }) {
                                   <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
                                   <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
-                                  <Line type="monotone" dataKey={chart.y} stroke="#4a77b4" strokeWidth={3} />
+                                  <Line type="monotone" dataKey={chart.y} stroke="#7A0A4A" strokeWidth={3} />
                                 </LineChart>
                               )
                             ) : chart.type === 'Nuage de points' ? (
@@ -4051,7 +4127,7 @@ function App({ forceVisitor = false }) {
                                   <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
                                   <YAxis dataKey={chart.y} label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
-                                  <Scatter data={chartData} fill="#4a77b4" />
+                                  <Scatter data={chartData} fill="#7A0A4A" />
                                 </ScatterChart>
                               )
                             ) : chart.type === 'Secteur' ? (
@@ -4120,6 +4196,7 @@ function App({ forceVisitor = false }) {
                   </button>
                 )}
               </div>
+              )}
             </div>
           )}
         </div>
@@ -4141,7 +4218,7 @@ function App({ forceVisitor = false }) {
             <h2 className="text-xl font-black mb-4 text-center">Édition du tableau</h2>
 
             <div className="mb-4 flex gap-4 items-center">
-              <label className="bg-[#99c199] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer">
+              <label className="bg-[#B89C5A] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer">
                 Remplacer par un fichier
                 <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFileChange} />
               </label>
@@ -4276,7 +4353,7 @@ function App({ forceVisitor = false }) {
       {showSubThemeMeta && (
          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
            <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
-             <div className="bg-[#4a77b4] text-white rounded-t-lg px-4 py-3">
+             <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
                <h2 className="text-lg font-bold text-center">Métadonnées</h2>
              </div>
              <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
@@ -4339,7 +4416,7 @@ function App({ forceVisitor = false }) {
               
              </div>
              <div className="flex gap-4 mt-4 px-4 pb-4">
-               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-[#4a77b4] text-white py-2 rounded-lg font-bold">Fermer</button>
+               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-[#7A0A4A] text-white py-2 rounded-lg font-bold">Fermer</button>
                {!isVisitor && <button onClick={saveSubThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">Enregistrer</button>}
              </div>
            </div>
@@ -4348,7 +4425,7 @@ function App({ forceVisitor = false }) {
       {showThemeMeta && (
          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
            <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
-             <div className="bg-[#4a77b4] text-white rounded-t-lg px-4 py-3">
+             <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
                <h2 className="text-lg font-bold text-center">Métadonnées</h2>
              </div>
              <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
@@ -4409,7 +4486,7 @@ function App({ forceVisitor = false }) {
                )}
              </div>
              <div className="flex gap-4 mt-4 px-4 pb-4">
-               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-[#4a77b4] text-white py-2 rounded-lg font-bold">Fermer</button>
+               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-[#7A0A4A] text-white py-2 rounded-lg font-bold">Fermer</button>
                {!isVisitor && <button onClick={saveThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">Enregistrer</button>}
              </div>
            </div>
