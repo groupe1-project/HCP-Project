@@ -22,6 +22,10 @@ from .serializers import (
 logger = logging.getLogger(__name__)
 
 
+def _normalize_name(value):
+    return ' '.join(str(value or '').strip().split()).lower()
+
+
 class InfoBannerView(APIView):
     """Message global INFOS: lecture publique, écriture réservée aux admins."""
 
@@ -220,7 +224,16 @@ class ThemeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Accès refusé : seulement les administrateurs peuvent créer des thèmes.'}, status=status.HTTP_403_FORBIDDEN)
         try:
             # 1. Récupération et création du Thème
-            titre = request.data.get('titre')
+            titre = ' '.join(str(request.data.get('titre') or '').strip().split())
+            if not titre:
+                return Response({'error': 'Le titre du thème est requis.'}, status=status.HTTP_400_BAD_REQUEST)
+
+            # Bloquer les doublons de thèmes (insensible à la casse/espaces)
+            normalized_titre = _normalize_name(titre)
+            for existing_theme in Theme.objects.only('id', 'titre'):
+                if _normalize_name(existing_theme.titre) == normalized_titre:
+                    return Response({'error': 'Un thème avec ce nom existe déjà.'}, status=status.HTTP_400_BAD_REQUEST)
+
             theme_image_value = request.data.get('theme_image', '')
             theme_image_file = request.FILES.get('theme_image')
 
@@ -248,11 +261,17 @@ class ThemeViewSet(viewsets.ModelViewSet):
             use_categories = request.data.get('use_categories') == 'true'
             categories_created = []
             if use_categories:
+                local_category_names = set()
                 cat_index = 0
                 while f'categories[{cat_index}][nom]' in request.data:
-                    cat_nom = request.data.get(f'categories[{cat_index}][nom]')
+                    cat_nom = ' '.join(str(request.data.get(f'categories[{cat_index}][nom]') or '').strip().split())
                     cat_ordre = request.data.get(f'categories[{cat_index}][ordre]', cat_index)
                     if cat_nom and cat_nom.strip():
+                        normalized_cat_nom = _normalize_name(cat_nom)
+                        if normalized_cat_nom in local_category_names:
+                            return Response({'error': f'Doublon détecté dans les catégories: "{cat_nom}".'}, status=status.HTTP_400_BAD_REQUEST)
+                        local_category_names.add(normalized_cat_nom)
+
                         cat_obj = Categorie.objects.create(
                             nom=cat_nom,
                             theme=nouveau_theme,
@@ -263,9 +282,19 @@ class ThemeViewSet(viewsets.ModelViewSet):
                     cat_index += 1
 
             # 2. Boucle pour traiter chaque ligne de sous-thème envoyée par le formulaire
+            # Bloquer aussi les doublons internes au même formulaire
+            local_subtheme_names = set()
             index = 0
             while f'lignes[{index}][sousTheme]' in request.data:
-                nom_st = request.data.get(f'lignes[{index}][sousTheme]')
+                nom_st = ' '.join(str(request.data.get(f'lignes[{index}][sousTheme]') or '').strip().split())
+                if not nom_st:
+                    return Response({'error': f'Le nom du sous-thème est requis (ligne {index + 1}).'}, status=status.HTTP_400_BAD_REQUEST)
+
+                normalized_nom_st = _normalize_name(nom_st)
+                if normalized_nom_st in local_subtheme_names:
+                    return Response({'error': f'Doublon détecté dans les sous-thèmes: "{nom_st}".'}, status=status.HTTP_400_BAD_REQUEST)
+                local_subtheme_names.add(normalized_nom_st)
+
                 libelle_ind = request.data.get(f'lignes[{index}][indicateur]')
                 unite = request.data.get(f'lignes[{index}][unite]')
                 definition = request.data.get(f'lignes[{index}][definition]', '')
@@ -386,6 +415,13 @@ class ThemeViewSet(viewsets.ModelViewSet):
             nom = request.data.get('nom') or request.data.get('name')
             if not nom:
                 return Response({'error': 'Le nom du sous-thème est requis'}, status=status.HTTP_400_BAD_REQUEST)
+            nom = ' '.join(str(nom).strip().split())
+
+            # Bloquer les doublons de sous-thèmes dans le même thème
+            normalized_nom = _normalize_name(nom)
+            for st in theme.sous_themes.all().only('id', 'nom'):
+                if _normalize_name(st.nom) == normalized_nom:
+                    return Response({'error': 'Un sous-thème avec ce nom existe déjà pour ce thème.'}, status=status.HTTP_400_BAD_REQUEST)
             
             # Récupérer l'ID de la catégorie si fourni
             categorie_id = request.data.get('categorie')

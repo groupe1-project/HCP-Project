@@ -971,20 +971,62 @@ function App({ forceVisitor = false }) {
     }
   };
 
+  const normalizeEntityName = (value) => String(value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+
+  const hasDuplicateThemeName = (name, excludeThemeId = null) => {
+    const normalized = normalizeEntityName(name);
+    if (!normalized) return false;
+    return (themes || []).some(t => normalizeEntityName(t.titre) === normalized && Number(t.id) !== Number(excludeThemeId));
+  };
+
+  const hasDuplicateSubThemeNameInTheme = (themeId, name, excludeSubThemeId = null) => {
+    const normalized = normalizeEntityName(name);
+    if (!normalized) return false;
+    const parentTheme = (themes || []).find(t => Number(t.id) === Number(themeId));
+    const subThemesInTheme = parentTheme?.sous_themes || [];
+    return subThemesInTheme.some(st => normalizeEntityName(st.nom) === normalized && Number(st.id) !== Number(excludeSubThemeId));
+  };
+
+  const hasDuplicateCategoryNameInTheme = (themeId, name, excludeCategoryId = null) => {
+    const normalized = normalizeEntityName(name);
+    if (!normalized) return false;
+    const parentTheme = (themes || []).find(t => Number(t.id) === Number(themeId));
+    const categoriesInTheme = parentTheme?.categories || [];
+    return categoriesInTheme.some(cat => normalizeEntityName(cat.nom) === normalized && Number(cat.id) !== Number(excludeCategoryId));
+  };
+
   const renameTheme = async (id, newName) => {
+    const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedName) {
+      alert('Le nom du thème est requis');
+      return;
+    }
+    if (hasDuplicateThemeName(cleanedName, id)) {
+      alert('Ce thème existe déjà. Choisissez un autre nom.');
+      return;
+    }
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: newName });
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: cleanedName });
       alert('Thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
       if (selectedTheme && selectedTheme.id === id) setSelectedTheme(res.data.find(t => t.id === id));
-    } catch (err) { console.error(err); alert('Erreur lors du renommage'); }
+    } catch (err) { console.error(err); alert(err.response?.data?.titre?.[0] || err.response?.data?.error || 'Erreur lors du renommage'); }
   };
 
   const addSubTheme = async (themeId, name, categorieId = null) => {
+    const cleanedName = String(name || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedName) {
+      alert('Le nom du sous-thème est requis');
+      return;
+    }
+    if (hasDuplicateSubThemeNameInTheme(themeId, cleanedName)) {
+      alert('Ce sous-thème existe déjà dans ce thème.');
+      return;
+    }
     try {
       const theme = themes.find(t => t.id === themeId);
-      const payload = { nom: name };
+      const payload = { nom: cleanedName };
       if (categorieId) {
         payload.categorie = categorieId;
         // Si on ajoute à une catégorie, hériter la visibilité de la catégorie
@@ -1002,27 +1044,49 @@ function App({ forceVisitor = false }) {
       setThemes(themesRes.data);
       const fresh = themesRes.data.find(t => t.id === themeId);
       if (fresh) setSelectedTheme(fresh);
-    } catch (err) { console.error(err); alert('Erreur lors de l\'ajout du sous-thème'); }
+    } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors de l\'ajout du sous-thème'); }
   };
 
   const addCategorie = async (themeId, name) => {
+    const cleanedName = String(name || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedName) {
+      alert('Le nom de la catégorie est requis');
+      return;
+    }
+    if (hasDuplicateCategoryNameInTheme(themeId, cleanedName)) {
+      alert('Cette catégorie existe déjà dans ce thème.');
+      return;
+    }
     try {
       const theme = themes.find(t => t.id === themeId);
       const ordre = theme?.categories?.length || 0;
       // Ensure the new category inherits the theme's visibility status
-      const payload = { nom: name, theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
+      const payload = { nom: cleanedName, theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
       await axios.post('http://127.0.0.1:8000/api/categories/', payload);
       alert('Catégorie ajoutée');
       const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
       const fresh = themesRes.data.find(t => t.id === themeId);
       if (fresh) setSelectedTheme(fresh);
-    } catch (err) { console.error(err); alert('Erreur lors de l\'ajout de la catégorie'); }
+    } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors de l\'ajout de la catégorie'); }
   };
 
   const renameSubTheme = async (id, newName) => {
+    const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedName) {
+      alert('Le nom du sous-thème est requis');
+      return;
+    }
+    const targetSubTheme =
+      (selectedTheme?.sous_themes || []).find(st => Number(st.id) === Number(id)) ||
+      (themes || []).flatMap(t => t.sous_themes || []).find(st => Number(st.id) === Number(id));
+    const targetThemeId = targetSubTheme?.theme || selectedTheme?.id;
+    if (targetThemeId && hasDuplicateSubThemeNameInTheme(targetThemeId, cleanedName, id)) {
+      alert('Ce sous-thème existe déjà dans ce thème.');
+      return;
+    }
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: newName });
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: cleanedName });
       alert('Sous-thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1038,7 +1102,7 @@ function App({ forceVisitor = false }) {
           if (freshCat) setSelectedCategorie(freshCat);
         }
       }
-    } catch (err) { console.error(err); alert('Erreur lors du renommage du sous-thème'); }
+    } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors du renommage du sous-thème'); }
   };
 
   const archiveSubTheme = async (id) => {
@@ -2263,6 +2327,43 @@ function App({ forceVisitor = false }) {
   };
 
   const goToTable = () => {
+    const cleanedThemeTitle = String(themeData.titre || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedThemeTitle) {
+      alert('Le titre du thème est requis');
+      return;
+    }
+    if (hasDuplicateThemeName(cleanedThemeTitle)) {
+      alert('Ce thème existe déjà. Choisissez un autre nom.');
+      return;
+    }
+
+    if (useCategories) {
+      const seenCategories = new Set();
+      for (const cat of categoryNames || []) {
+        const cleanedCategory = String(cat?.nom || '').trim().replace(/\s+/g, ' ');
+        if (!cleanedCategory) continue;
+        const normalized = normalizeEntityName(cleanedCategory);
+        if (seenCategories.has(normalized)) {
+          alert(`Doublon détecté dans les catégories: "${cleanedCategory}"`);
+          return;
+        }
+        seenCategories.add(normalized);
+      }
+    }
+
+    const seenSubThemes = new Set();
+    for (const row of rows || []) {
+      const cleanedSubTheme = String(row?.sousTheme || '').trim().replace(/\s+/g, ' ');
+      if (!cleanedSubTheme) continue;
+      const normalized = normalizeEntityName(cleanedSubTheme);
+      if (seenSubThemes.has(normalized)) {
+        alert(`Doublon détecté dans le formulaire: "${cleanedSubTheme}"`);
+        return;
+      }
+      seenSubThemes.add(normalized);
+    }
+
+    setThemeData(prev => ({ ...prev, titre: cleanedThemeTitle }));
     let initialRows = [];
     
     if (useCategories) {
@@ -2302,8 +2403,44 @@ function App({ forceVisitor = false }) {
   };
 
   const handleFinalSubmit = async () => {
+    const cleanedThemeTitle = String(themeData.titre || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedThemeTitle) {
+      alert('Le titre du thème est requis');
+      return;
+    }
+    if (hasDuplicateThemeName(cleanedThemeTitle)) {
+      alert('Ce thème existe déjà. Choisissez un autre nom.');
+      return;
+    }
+
+    if (useCategories) {
+      const seenCategories = new Set();
+      for (const cat of categoryNames || []) {
+        const cleanedCategory = String(cat?.nom || '').trim().replace(/\s+/g, ' ');
+        if (!cleanedCategory) continue;
+        const normalized = normalizeEntityName(cleanedCategory);
+        if (seenCategories.has(normalized)) {
+          alert(`Doublon détecté dans les catégories: "${cleanedCategory}"`);
+          return;
+        }
+        seenCategories.add(normalized);
+      }
+    }
+
+    const seenSubThemes = new Set();
+    for (const row of rows || []) {
+      const cleanedSubTheme = String(row?.sousTheme || '').trim().replace(/\s+/g, ' ');
+      if (!cleanedSubTheme) continue;
+      const normalized = normalizeEntityName(cleanedSubTheme);
+      if (seenSubThemes.has(normalized)) {
+        alert(`Doublon détecté dans les sous-thèmes: "${cleanedSubTheme}"`);
+        return;
+      }
+      seenSubThemes.add(normalized);
+    }
+
     const formData = new FormData();
-    formData.append('titre', themeData.titre);
+    formData.append('titre', cleanedThemeTitle);
     formData.append('statut', themeData.statut);
     if (themeImageFile) formData.append('theme_image', themeImageFile);
     
@@ -2317,7 +2454,8 @@ function App({ forceVisitor = false }) {
     }
     
     rows.forEach((row, i) => {
-      formData.append(`lignes[${i}][sousTheme]`, row.sousTheme);
+      const cleanedSubTheme = String(row.sousTheme || '').trim().replace(/\s+/g, ' ');
+      formData.append(`lignes[${i}][sousTheme]`, cleanedSubTheme);
       formData.append(`lignes[${i}][unite]`, row.unite);
       formData.append(`lignes[${i}][indicateur]`, row.indicateur);
       formData.append(`lignes[${i}][definition]`, row.definition);
@@ -4907,16 +5045,17 @@ function App({ forceVisitor = false }) {
             <div className="flex gap-4">
               <button onClick={() => { setShowActionModal(false); setActionModalCategorieId(null); }} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
               <button onClick={async () => {
-                if (!actionModalValue) { alert('Le nom est requis'); return; }
-                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, actionModalValue); }
-                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, actionModalValue); }
-                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, actionModalValue); }
+                const cleanedModalValue = String(actionModalValue || '').trim().replace(/\s+/g, ' ');
+                if (!cleanedModalValue) { alert('Le nom est requis'); return; }
+                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, cleanedModalValue); }
+                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, cleanedModalValue); }
+                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, cleanedModalValue); }
                 else { 
                   const currentTheme = themes.find(t => t.id === actionModalThemeId);
                   if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0 && !actionModalCategorieId) {
                     return alert('Veuillez sélectionner une catégorie');
                   }
-                  await addSubTheme(actionModalThemeId, actionModalValue, actionModalCategorieId); 
+                  await addSubTheme(actionModalThemeId, cleanedModalValue, actionModalCategorieId); 
                 }
                 setShowActionModal(false);
                 setActionModalCategorieId(null);

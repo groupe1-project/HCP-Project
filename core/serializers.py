@@ -1,6 +1,11 @@
 from rest_framework import serializers
 from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie, UserThemeAssignment, UserRequest, InfoBanner
 
+
+def _normalize_name(value):
+    """Normalize names to prevent duplicates with casing/extra spaces differences."""
+    return ' '.join(str(value or '').strip().split()).lower()
+
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
@@ -32,6 +37,32 @@ class SousThemeSerializer(serializers.ModelSerializer):
             'niveau_geo', 'type_unite', 'est_sommable', 'filtres_disponibles'
             , 'visitor_visible_columns', 'visitor_filters', 'visitor_default_filters', 'visitor_pivot_columns', 'visitor_default_view'
         ]
+
+    def validate_nom(self, value):
+        cleaned = ' '.join(str(value or '').strip().split())
+        if not cleaned:
+            raise serializers.ValidationError("Le nom du sous-theme est obligatoire.")
+        return cleaned
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        nom = attrs.get('nom', getattr(self.instance, 'nom', None))
+        theme = attrs.get('theme', getattr(self.instance, 'theme', None))
+
+        if nom and theme:
+            normalized_nom = _normalize_name(nom)
+            duplicates = SousTheme.objects.filter(theme=theme)
+            if self.instance:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+
+            for st in duplicates.only('id', 'nom'):
+                if _normalize_name(st.nom) == normalized_nom:
+                    raise serializers.ValidationError({
+                        'nom': f'Un sous-theme avec ce nom existe deja pour le theme "{theme.titre}".'
+                    })
+
+        return attrs
 
     def to_representation(self, instance):
         # Use default representation then include visitor fields if present on the instance
@@ -74,6 +105,32 @@ class SousThemeSerializer(serializers.ModelSerializer):
 
 class CategorieSerializer(serializers.ModelSerializer):
     sous_themes = SousThemeSerializer(many=True, read_only=True)
+
+    def validate_nom(self, value):
+        cleaned = ' '.join(str(value or '').strip().split())
+        if not cleaned:
+            raise serializers.ValidationError("Le nom de la categorie est obligatoire.")
+        return cleaned
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        nom = attrs.get('nom', getattr(self.instance, 'nom', None))
+        theme = attrs.get('theme', getattr(self.instance, 'theme', None))
+
+        if nom and theme:
+            normalized_nom = _normalize_name(nom)
+            duplicates = Categorie.objects.filter(theme=theme)
+            if self.instance:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+
+            for categorie in duplicates.only('id', 'nom'):
+                if _normalize_name(categorie.nom) == normalized_nom:
+                    raise serializers.ValidationError({
+                        'nom': f'Une categorie avec ce nom existe deja pour le theme "{theme.titre}".'
+                    })
+
+        return attrs
     
     class Meta:
         model = Categorie
@@ -104,6 +161,30 @@ class ThemeSerializer(serializers.ModelSerializer):
             'source_text',
             'periodicite_text'
         ]
+
+    def validate_titre(self, value):
+        cleaned = ' '.join(str(value or '').strip().split())
+        if not cleaned:
+            raise serializers.ValidationError("Le titre du theme est obligatoire.")
+        return cleaned
+
+    def validate(self, attrs):
+        attrs = super().validate(attrs)
+
+        titre = attrs.get('titre', getattr(self.instance, 'titre', None))
+        if titre:
+            normalized_titre = _normalize_name(titre)
+            duplicates = Theme.objects.all()
+            if self.instance:
+                duplicates = duplicates.exclude(pk=self.instance.pk)
+
+            for theme in duplicates.only('id', 'titre'):
+                if _normalize_name(theme.titre) == normalized_titre:
+                    raise serializers.ValidationError({
+                        'titre': 'Un theme avec ce nom existe deja.'
+                    })
+
+        return attrs
 
 class IndicateurSerializer(serializers.ModelSerializer):
     class Meta:
