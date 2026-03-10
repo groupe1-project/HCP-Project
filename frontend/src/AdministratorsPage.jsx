@@ -130,7 +130,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   if (isSaisisseur) {
     return (
       <div className="p-8 flex-1">
-        <h2 className="text-2xl font-bold text-[#1a5d85]">Espace saisisseur</h2>
+        <h2 className="text-2xl font-bold text-[#7A0A4A]">Espace saisisseur</h2>
         <p className="mt-4 text-gray-700">Zone en développement — contenu à venir.</p>
       </div>
     );
@@ -639,31 +639,31 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   return (
-    <div className="min-h-screen bg-[#f4f1e1] p-6">
+    <div className="min-h-screen bg-[#f8f2f5] p-6">
       <div className="max-w-6xl mx-auto">
         {/* Header */}
-        <div className="bg-[#1a5d85] text-white py-4 px-6 font-bold text-2xl border-b-4 border-black mb-6 rounded-t-3xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+        <div className="bg-[#7A0A4A] text-white py-4 px-6 font-bold text-2xl border-b-4 border-[#B03372] mb-6 rounded-t-3xl shadow-[0_10px_24px_rgba(122,10,74,0.28)]">
           🛡️ Espace d'Administration
         </div>
 
         {/* Onglets de navigation */}
-        <div className="flex gap-2 mb-6 bg-white border-4 border-b-0 border-black p-3 rounded-t-3xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+        <div className="flex gap-2 mb-6 bg-white border-2 border-b-0 border-[#d8b6c8] p-3 rounded-t-3xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
           <button
             onClick={() => setActiveTab('users')}
-            className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border-2 border-black ${
+            className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border ${
               activeTab === 'users'
-                ? 'bg-[#4a77b4] text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                ? 'bg-[#7A0A4A] text-white border-[#7A0A4A] shadow-[0_8px_18px_rgba(122,10,74,0.35)]'
+                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f1dde8]'
             }`}
           >
             👥 GESTION DES SAISISSEURS
           </button>
           <button
             onClick={() => setActiveTab('themes')}
-            className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border-2 border-black ${
+            className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border ${
               activeTab === 'themes'
-                ? 'bg-[#ffb366] text-white shadow-[2px_2px_0px_0px_rgba(0,0,0,1)]'
-                : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                ? 'bg-[#B03372] text-white border-[#B03372] shadow-[0_8px_18px_rgba(122,10,74,0.28)]'
+                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f1dde8]'
             }`}
           >
             📊 GESTION DES THEMES
@@ -674,19 +674,19 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         {activeTab === 'users' && (
           <>
             {/* Header section */}
-            <div className="flex justify-between items-center mb-6 bg-white border-4 border-t-0 border-black px-6 py-4 rounded-b-2xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-              <h2 className="text-2xl font-black text-gray-800">Gestion des Utilisateurs</h2>
+            <div className="flex justify-between items-center mb-6 bg-white border-2 border-t-0 border-[#d8b6c8] px-6 py-4 rounded-b-2xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
+              <h2 className="text-2xl font-black text-[#7A0A4A]">Gestion des Utilisateurs</h2>
               <div className="space-x-2 flex">
                 <button
                   onClick={() => setShowAddModal(true)}
-                  className="px-4 py-2 bg-[#99c199] text-black border-2 border-black rounded-xl font-bold hover:bg-[#88b188] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+                  className="px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
                   disabled={loading}
                 >
                   ➕ Ajouter
                 </button>
                 <button
                   onClick={() => setShowRequestsModal(true)}
-                  className="px-4 py-2 bg-[#a2e3f7] text-black border-2 border-black rounded-xl font-bold hover:bg-[#8fd9ed] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+                  className="px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#faeff5] shadow-[0_6px_14px_rgba(122,10,74,0.18)] transition"
                   disabled={loading}
                 >
                   📬 Demandes
@@ -695,11 +695,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         </div>
 
         {/* Formulaire d'assignation */}
-        <div className="bg-white border-4 border-black p-6 mb-6 rounded-3xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-          <h3 className="text-2xl font-black mb-4 text-gray-800">🔗 Assigner Thème à Utilisateur</h3>
+        <div className="bg-white border-2 border-[#d8b6c8] p-6 mb-6 rounded-3xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
+          <h3 className="text-2xl font-black mb-4 text-[#7A0A4A]">🔗 Assigner Thème à Utilisateur</h3>
           <div className="grid grid-cols-2 gap-4 mb-4">
             <div>
-              <label className="block text-sm font-bold mb-2 text-gray-700">Utilisateur</label>
+              <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Utilisateur</label>
               <select
                 value={selectedSaisisseur || ''}
                 onChange={(e) => {
@@ -708,7 +708,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   setSelectedSubTheme(null);
                   setSubThemes([]);
                 }}
-                className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold bg-white"
+                className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
               >
                 <option value="">-- Sélectionner --</option>
                 {saisisseurs.map(s => (
@@ -719,12 +719,12 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-bold mb-2 text-gray-700">Thème</label>
+              <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Thème</label>
               <select
                 value={selectedTheme || ''}
                 onChange={(e) => handleThemeChange(e.target.value)}
                 disabled={!selectedSaisisseur}
-                className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold bg-white disabled:bg-gray-100"
+                className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white disabled:bg-[#f3e8ef] text-[#4d1734] focus:border-[#B03372]"
               >
                 <option value="">-- Sélectionner --</option>
                 {getAvailableThemes().map(theme => (
@@ -733,11 +733,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-bold mb-2 text-gray-700">Sous-Thème (optionnel)</label>
+              <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Sous-Thème (optionnel)</label>
               <select
                 value={selectedSubTheme || ''}
                 onChange={(e) => setSelectedSubTheme(e.target.value || null)}
-                className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold bg-white disabled:bg-gray-100"
+                className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white disabled:bg-[#f3e8ef] text-[#4d1734] focus:border-[#B03372]"
                 disabled={!selectedTheme}
               >
                 <option value="">-- Aucun --</option>
@@ -749,7 +749,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
           </div>
           <button
             onClick={addToPendingAssignments}
-            className="w-full px-4 py-3 bg-[#a2e3f7] text-black border-2 border-black rounded-xl font-bold hover:bg-[#8fd9ed] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+            className="w-full px-4 py-3 bg-[#B03372] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#8f245e] shadow-[0_8px_16px_rgba(122,10,74,0.28)] transition"
             disabled={!selectedSaisisseur || !selectedTheme || loading}
           >
             ➕ Ajouter à la Queue
@@ -757,23 +757,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
           {/* Afficher la queue d'assignations */}
           {pendingAssignments.length > 0 && (
-            <div className="mt-6 p-4 bg-[#fef9f2] border-2 border-black rounded-2xl">
-              <h4 className="text-lg font-bold mb-3 text-gray-800">📦 Assignations en Attente ({pendingAssignments.length})</h4>
+            <div className="mt-6 p-4 bg-[#fcf4f8] border border-[#d8b6c8] rounded-2xl">
+              <h4 className="text-lg font-bold mb-3 text-[#7A0A4A]">📦 Assignations en Attente ({pendingAssignments.length})</h4>
               <div className="space-y-2 mb-4">
                 {pendingAssignments.map((assignment, idx) => (
-                  <div key={idx} className="flex justify-between items-center bg-white border-2 border-black p-3 rounded-lg">
+                  <div key={idx} className="flex justify-between items-center bg-white border border-[#d8b6c8] p-3 rounded-lg">
                     <div className="flex-1">
                       <p className="font-semibold text-sm">
                         <strong>{saisisseurs.find(s => s.id === assignment.user)?.first_name || 'Utilisateur'}</strong>
                       </p>
-                      <p className="text-sm text-gray-700">
+                      <p className="text-sm text-[#6b2949]">
                         Thème: <strong>{assignment.themeTitle}</strong>
                         {assignment.subThemeTitle && ` > Sous-thème: ${assignment.subThemeTitle}`}
                       </p>
                     </div>
                     <button
                       onClick={() => removeFromPendingAssignments(idx)}
-                      className="ml-4 px-3 py-1 bg-red-400 text-white border border-black rounded font-bold hover:bg-red-500 transition"
+                      className="ml-4 px-3 py-1 bg-[#ca5f8f] text-white border border-[#ca5f8f] rounded font-bold hover:bg-[#b24f7c] transition"
                     >
                       ✕
                     </button>
@@ -783,7 +783,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <div className="flex gap-2">
                 <button
                   onClick={handleAssignTheme}
-                  className="flex-1 px-4 py-2 bg-[#99c199] text-black border-2 border-black rounded-xl font-bold hover:bg-[#88b188] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+                  className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
                   disabled={loading}
                 >
                   ✓ Valider les Assignations
@@ -793,7 +793,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     setPendingAssignments([]);
                     setShowAssignmentQueue(false);
                   }}
-                  className="flex-1 px-4 py-2 bg-[#ffb366] text-black border-2 border-black rounded-xl font-bold hover:bg-[#ff9933] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+                  className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#faeff5] shadow-[0_6px_12px_rgba(122,10,74,0.15)] transition"
                   disabled={loading}
                 >
                   ✕ Annuler
@@ -804,13 +804,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         </div>
 
         {/* Tableau des Saisisseurs */}
-        <div className="bg-white border-4 border-black rounded-3xl overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-          <div className="px-6 py-4 bg-[#6d92c7] text-white border-b-2 border-black">
+        <div className="bg-white border-2 border-[#d8b6c8] rounded-3xl overflow-hidden shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
+          <div className="px-6 py-4 bg-[#7A0A4A] text-white border-b border-[#B03372]">
             <h2 className="text-xl font-black">📋 Utilisateurs</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-[#4a77b4] text-white border-b-2 border-black">
+              <thead className="bg-[#B03372] text-white border-b border-[#a12663]">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-bold">Nom</th>
                   <th className="px-6 py-3 text-left text-sm font-bold">Email</th>
@@ -831,19 +831,19 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     return (
                       <tr
                         key={saisisseur.id}
-                        className={`border-b transition ${isArchived ? 'bg-gray-100 text-gray-400' : 'hover:bg-gray-50'}`}
+                        className={`border-b border-[#f0dce7] transition ${isArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fdf7fa]'}`}
                       >
                         <td className={`px-6 py-3 font-medium ${isArchived ? 'line-through' : ''}`}>
                           {saisisseur.first_name || saisisseur.username}
                         </td>
-                        <td className="px-6 py-3 text-gray-600">{saisisseur.email}</td>
+                        <td className="px-6 py-3 text-[#6b2949]">{saisisseur.email}</td>
                         <td className="px-6 py-3">
                           <div className="flex items-center gap-2">
-                            <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded text-sm font-medium">
+                            <span className="px-3 py-1 bg-[#f4e3ed] text-[#7A0A4A] rounded text-sm font-medium">
                               {getRoleLabel(saisisseur.role)}
                             </span>
                             {isArchived && (
-                              <span className="px-2 py-1 bg-gray-200 text-gray-700 rounded text-xs font-bold">Archivé</span>
+                              <span className="px-2 py-1 bg-[#ead8e2] text-[#7A0A4A] rounded text-xs font-bold">Archivé</span>
                             )}
                           </div>
                         </td>
@@ -883,19 +883,19 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               setMenuPosition({ top, left });
                               setOpenMenuId(openMenuId === `user-${saisisseur.id}` ? null : `user-${saisisseur.id}`);
                             }}
-                            className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded text-sm transition font-bold"
+                            className="px-3 py-1 bg-[#f4e3ed] hover:bg-[#ebd2df] text-[#7A0A4A] rounded text-sm transition font-bold"
                             title="Actions"
                           >
                             ⋮
                           </button>
                           {openMenuId === `user-${saisisseur.id}` && (
-                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '200px' }} className="w-56 bg-white rounded-lg shadow-xl border border-gray-200 overflow-y-auto">
+                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '200px' }} className="w-56 bg-white rounded-lg shadow-xl border border-[#d8b6c8] overflow-y-auto">
                               <button
                                 onClick={() => {
                                   handleResetPasswordUser(saisisseur.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm"
                               >
                                 🔒 Réinitialiser le mot de passe
                               </button>
@@ -905,7 +905,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleUnarchiveSaisisseur(saisisseur.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                                 >
                                   ↩️ Désarchiver
                                 </button>
@@ -915,7 +915,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleArchiveSaisisseur(saisisseur.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                                 >
                                   📦 Archiver
                                 </button>
@@ -925,7 +925,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleDeleteSaisisseur(saisisseur.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-red-100 text-red-600 flex items-center gap-2 text-sm border-t rounded-b-lg"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#9c1f5a] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
                               >
                                 🗑️ Supprimer
                               </button>
@@ -942,13 +942,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         </div>
 
         {/* Tableau des Assignations */}
-        <div className="bg-white border-4 border-black rounded-3xl overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)] mt-6">
-          <div className="px-6 py-4 bg-[#6d92c7] text-white border-b-2 border-black">
+        <div className="bg-white border-2 border-[#d8b6c8] rounded-3xl overflow-hidden shadow-[0_10px_20px_rgba(122,10,74,0.12)] mt-6">
+          <div className="px-6 py-4 bg-[#7A0A4A] text-white border-b border-[#B03372]">
             <h2 className="text-xl font-black">🧩 Taches Affectees</h2>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-[#4a77b4] text-white border-b-2 border-black">
+              <thead className="bg-[#B03372] text-white border-b border-[#a12663]">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-bold">Utilisateur</th>
                   <th className="px-6 py-3 text-left text-sm font-bold">Tache</th>
@@ -991,12 +991,12 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     return (
                       <tr
                         key={assignment.id}
-                        className={`border-b transition ${isUserArchived ? 'bg-gray-100 text-gray-400' : 'hover:bg-gray-50'}`}
+                        className={`border-b border-[#f0dce7] transition ${isUserArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fdf7fa]'}`}
                       >
                         <td className={`px-6 py-3 font-medium ${isUserArchived ? 'line-through' : ''}`}>
                           {userName}
                         </td>
-                        <td className="px-6 py-3 text-gray-700">{taskLabel}</td>
+                        <td className="px-6 py-3 text-[#6b2949]">{taskLabel}</td>
                         <td className="px-4 py-3 text-center">
                           <span className={`px-2 py-1 rounded text-xs font-semibold border ${priorityBadge}`}>
                             {assignment.priorite || 'Normale'}
@@ -1004,18 +1004,18 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
+                            <div className="flex-1 bg-[#f0dce7] rounded-full h-2 overflow-hidden">
                               <div 
                                 className={`h-full ${progressColor} transition-all`} 
                                 style={{ width: `${progression}%` }}
                               ></div>
                             </div>
-                            <span className="text-xs font-medium text-gray-600 w-10 text-right">
+                            <span className="text-xs font-medium text-[#6b2949] w-10 text-right">
                               {progression}%
                             </span>
                           </div>
                         </td>
-                        <td className="px-4 py-3 text-sm text-gray-600">
+                        <td className="px-4 py-3 text-sm text-[#6b2949]">
                           {formatAssignmentDate(assignment.date_assignation)}
                         </td>
                         <td className="px-4 py-3 text-sm">
@@ -1074,29 +1074,29 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               setMenuPosition({ top, left });
                               setOpenMenuId(openMenuId === `assign-${assignment.id}` ? null : `assign-${assignment.id}`);
                             }}
-                            className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded text-sm transition font-bold"
+                            className="px-3 py-1 bg-[#f4e3ed] hover:bg-[#ebd2df] text-[#7A0A4A] rounded text-sm transition font-bold"
                             title="Actions"
                           >
                             ⋮
                           </button>
                           {openMenuId === `assign-${assignment.id}` && (
-                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '320px' }} className="w-56 bg-white rounded-lg shadow-xl border border-gray-200 overflow-y-auto">
-                              <div className="px-4 py-2 text-xs font-bold text-gray-500 border-b">Changer la priorité</div>
+                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '320px' }} className="w-56 bg-white rounded-lg shadow-xl border border-[#d8b6c8] overflow-y-auto">
+                              <div className="px-4 py-2 text-xs font-bold text-[#7A0A4A] border-b border-[#efdce6]">Changer la priorité</div>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Haute')}
-                                className="w-full text-left px-4 py-2 hover:bg-red-50 flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fde8ef] flex items-center gap-2 text-sm"
                               >
                                 🔴 Haute
                               </button>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Normale')}
-                                className="w-full text-left px-4 py-2 hover:bg-blue-50 flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm"
                               >
                                 🔵 Normale
                               </button>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Basse')}
-                                className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm border-b"
+                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-b border-[#efdce6]"
                               >
                                 ⚪ Basse
                               </button>
@@ -1105,7 +1105,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleValidateSaisisseur(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm"
                               >
                                 ✅ Valider les modifications
                               </button>
@@ -1113,7 +1113,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                 onClick={() => {
                                   handleOpenSubmissionPreview(assignment.id);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-gray-50 flex items-center gap-2 text-sm border-t"
+                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                               >
                                 🔍 Aperçu de la soumission
                               </button>
@@ -1123,7 +1123,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleUnarchiveSaisisseur(assignment.user);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                                 >
                                   ↩️ Désarchiver
                                 </button>
@@ -1133,7 +1133,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleArchiveSaisisseur(assignment.user);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                                 >
                                   📦 Archiver
                                 </button>
@@ -1143,7 +1143,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleDeleteAssignment(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-red-100 text-red-600 flex items-center gap-2 text-sm border-t rounded-b-lg"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#9c1f5a] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
                               >
                                 🗑️ Supprimer
                               </button>
@@ -1164,17 +1164,17 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {/* Section Gestion des Thèmes */}
       {activeTab === 'themes' && (
         <>
-          <div className="flex justify-between items-center mb-6 bg-white border-4 border-black px-6 py-4 rounded-3xl shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
-            <h1 className="text-3xl font-black text-gray-800">📊 Gestion des Thèmes</h1>
-            <div className="text-lg font-bold text-gray-700 bg-[#a2e3f7] px-4 py-2 rounded-xl border-2 border-black">
+          <div className="flex justify-between items-center mb-6 bg-white border-2 border-[#d8b6c8] px-6 py-4 rounded-3xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
+            <h1 className="text-3xl font-black text-[#7A0A4A]">📊 Gestion des Thèmes</h1>
+            <div className="text-lg font-bold text-[#7A0A4A] bg-[#f4e3ed] px-4 py-2 rounded-xl border border-[#d8b6c8]">
               Total: {allThemes.length} thème(s)
             </div>
           </div>
 
           {/* Tableau des thèmes */}
-          <div className="bg-white border-4 border-black rounded-3xl overflow-hidden shadow-[4px_4px_0px_0px_rgba(0,0,0,1)]">
+          <div className="bg-white border-2 border-[#d8b6c8] rounded-3xl overflow-hidden shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
             <table className="w-full">
-              <thead className="bg-[#6d92c7] text-white border-b-2 border-black">
+              <thead className="bg-[#7A0A4A] text-white border-b border-[#B03372]">
                 <tr>
                   <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider w-12"></th>
                   <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider">Thème</th>
@@ -1188,18 +1188,18 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 {allThemes.map((theme) => (
                   <React.Fragment key={theme.id}>
                     {/* Ligne Thème */}
-                    <tr className="hover:bg-gray-50 transition">
+                    <tr className="hover:bg-[#fdf7fa] transition">
                       <td className="px-6 py-4">
                         <button
                           onClick={() => toggleThemeExpansion(theme.id)}
-                          className="text-gray-600 hover:text-gray-900 font-bold text-xl"
+                          className="text-[#7A0A4A] hover:text-[#5E0738] font-bold text-xl"
                         >
                           {expandedThemes[theme.id] ? '▼' : '▶'}
                         </button>
                       </td>
                       <td className="px-6 py-4">
-                        <div className="font-bold text-gray-900">{theme.titre}</div>
-                        <div className="text-xs text-gray-500">ID: {theme.id}</div>
+                        <div className="font-bold text-[#4d1734]">{theme.titre}</div>
+                        <div className="text-xs text-[#9a6f85]">ID: {theme.id}</div>
                       </td>
                       <td className="px-6 py-4 text-center">
                         <span className={`px-3 py-1 rounded-full text-xs font-bold ${
@@ -1220,7 +1220,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="text-gray-600 font-semibold">
+                        <span className="text-[#7A0A4A] font-semibold">
                           {theme.sous_themes?.length || 0}
                         </span>
                       </td>
@@ -1255,17 +1255,17 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     {/* Sous-thèmes (affichés si thème expandé) */}
                     {expandedThemes[theme.id] && theme.sous_themes && theme.sous_themes.length > 0 && (
                       theme.sous_themes.map((subTheme) => (
-                        <tr key={subTheme.id} className="bg-blue-50 hover:bg-blue-100 transition">
+                        <tr key={subTheme.id} className="bg-[#fcf4f8] hover:bg-[#f8e8f0] transition">
                           <td className="px-6 py-3"></td>
                           <td className="px-6 py-3 pl-12">
                             <div className="flex items-center">
-                              <span className="text-blue-600 mr-2">└─</span>
+                              <span className="text-[#B03372] mr-2">└─</span>
                               <div>
                                 <div className="flex items-center gap-3">
-                                  <div className="font-semibold text-gray-800">{subTheme.nom}</div>
+                                  <div className="font-semibold text-[#4d1734]">{subTheme.nom}</div>
                                   {/* 'Visiteur' button removed from admin themes list */}
                                 </div>
-                                <div className="text-xs text-gray-500">ID: {subTheme.id}</div>
+                                <div className="text-xs text-[#9a6f85]">ID: {subTheme.id}</div>
                               </div>
                             </div>
                           </td>
@@ -1321,7 +1321,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
                     {/* Message si aucun sous-thème */}
                     {expandedThemes[theme.id] && (!theme.sous_themes || theme.sous_themes.length === 0) && (
-                      <tr className="bg-blue-50">
+                      <tr className="bg-[#fcf4f8]">
                         <td colSpan="6" className="px-6 py-3 text-center text-gray-500 italic">
                           Aucun sous-thème pour ce thème
                         </td>
@@ -1344,42 +1344,42 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {/* Modal - Ajouter Utilisateur */}
       {showAddModal && (
         <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-          <div className="bg-[#fef9f2] border-4 border-black p-8 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-3xl font-black mb-6 text-center text-gray-800">➕ Ajouter Utilisateur</h2>
+          <div className="bg-white border-2 border-[#d8b6c8] p-8 rounded-3xl w-full max-w-md shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
+            <h2 className="text-3xl font-black mb-6 text-center text-[#7A0A4A]">➕ Ajouter Utilisateur</h2>
             {errorMessage && (
-              <div className="mb-4 p-4 bg-[#f28a8a] border-2 border-black text-white rounded-xl font-bold">
+              <div className="mb-4 p-4 bg-[#ca5f8f] border border-[#b85282] text-white rounded-xl font-bold">
                 ⚠️ {errorMessage}
               </div>
             )}
             <form onSubmit={handleAddSaisisseur}>
               <div className="mb-4">
-                <label className="block text-sm font-bold mb-2 text-gray-700">Nom Complet</label>
+                <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Nom Complet</label>
                 <input
                   type="text"
                   required
                   value={newSaisisseur.name}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, name: e.target.value })}
-                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold"
+                  className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold focus:border-[#B03372]"
                   placeholder="Nom et Prénom"
                 />
               </div>
               <div className="mb-4">
-                <label className="block text-sm font-bold mb-2 text-gray-700">Email</label>
+                <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Email</label>
                 <input
                   type="email"
                   required
                   value={newSaisisseur.email}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, email: e.target.value })}
-                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold"
+                  className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold focus:border-[#B03372]"
                   placeholder="email@exemple.com"
                 />
               </div>
               <div className="mb-6">
-                <label className="block text-sm font-bold mb-2 text-gray-700">Rôle</label>
+                <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Rôle</label>
                 <select
                   value={newSaisisseur.role}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, role: e.target.value })}
-                  className="w-full px-3 py-2 border-2 border-black rounded-lg outline-none font-semibold bg-white"
+                  className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
                 >
                   <option value="SAISISSEUR">Saisisseur</option>
                   <option value="AVANCE">Saisisseur Avancé</option>
@@ -1389,14 +1389,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <div className="flex gap-4 mt-8">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 bg-[#99c199] text-black border-2 border-black rounded-xl font-bold hover:bg-[#88b188] shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+                  className="flex-1 px-4 py-3 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
                 >
                   ✓ Ajouter
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-4 py-3 bg-gray-300 text-black border-2 border-black rounded-xl font-bold hover:bg-gray-400 shadow-[2px_2px_0px_0px_rgba(0,0,0,1)] transition"
+                  className="flex-1 px-4 py-3 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#faeff5] shadow-[0_6px_12px_rgba(122,10,74,0.16)] transition"
                 >
                   ✕ Annuler
                 </button>
@@ -1409,12 +1409,12 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {/* Modal - Boîte de Réception */}
       {showRequestsModal && (
         <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
-          <div className="bg-white rounded-lg p-6 max-w-5xl w-full my-8 max-h-[90vh] overflow-auto">
+          <div className="bg-white rounded-2xl border-2 border-[#d8b6c8] p-6 max-w-5xl w-full my-8 max-h-[90vh] overflow-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
             <div className="flex justify-between items-center mb-6 sticky top-0 bg-white">
-              <h2 className="text-2xl font-bold">📬 Boîte de Réception des Demandes</h2>
+              <h2 className="text-2xl font-bold text-[#7A0A4A]">📬 Boîte de Réception des Demandes</h2>
               <button
                 onClick={() => setShowRequestsModal(false)}
-                className="text-gray-500 hover:text-gray-700 text-2xl"
+                className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl"
               >
                 ✕
               </button>
@@ -1428,7 +1428,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse">
                   <thead>
-                    <tr className="bg-gray-100 border-b-2 border-gray-300">
+                    <tr className="bg-[#f8edf3] border-b border-[#e5c9d7] text-[#7A0A4A]">
                       <th className="px-4 py-3 text-left font-semibold">Nom</th>
                       <th className="px-4 py-3 text-left font-semibold">Email</th>
                       <th className="px-4 py-3 text-left font-semibold">Rôle Demandé</th>
@@ -1439,11 +1439,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   </thead>
                   <tbody>
                     {userRequests.map((req) => (
-                      <tr key={req.id} className="border-b hover:bg-gray-50 transition">
+                      <tr key={req.id} className="border-b border-[#f0dce7] hover:bg-[#fdf7fa] transition">
                         <td className="px-4 py-3 font-medium">{req.requester_name}</td>
-                        <td className="px-4 py-3 text-sm text-gray-600">{req.requester_email}</td>
+                        <td className="px-4 py-3 text-sm text-[#6b2949]">{req.requester_email}</td>
                         <td className="px-4 py-3">
-                          <span className="px-2 py-1 bg-purple-100 text-purple-800 rounded text-xs font-medium">
+                          <span className="px-2 py-1 bg-[#f4e3ed] text-[#7A0A4A] rounded text-xs font-medium">
                             {getRoleLabel(req.requested_role)}
                           </span>
                         </td>
@@ -1464,13 +1464,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             <option value="Rejeté">✗ Rejeté</option>
                           </select>
                         </td>
-                        <td className="px-4 py-3 text-xs text-gray-600 max-w-xs truncate" title={req.demande_texte || ''}>
+                        <td className="px-4 py-3 text-xs text-[#6b2949] max-w-xs truncate" title={req.demande_texte || ''}>
                           {req.demande_texte || '—'}
                         </td>
                         <td className="px-4 py-3">
                           <button
                             onClick={() => handleResetPassword(req.id)}
-                            className="px-3 py-1 bg-orange-500 text-white rounded hover:bg-orange-600 text-xs font-medium transition"
+                            className="px-3 py-1 bg-[#B03372] text-white rounded hover:bg-[#8f245e] text-xs font-medium transition"
                             title="Réinitialiser le mot de passe"
                           >
                             🔑 Mot de passe
@@ -1486,23 +1486,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         {/* Modal: Aperçu Soumission Saisisseur */}
         {previewModalOpen && previewContent && (
           <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-lg p-6 max-w-4xl w-full max-h-[90vh] overflow-auto">
+            <div className="bg-white rounded-2xl border-2 border-[#d8b6c8] p-6 max-w-4xl w-full max-h-[90vh] overflow-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
               <div className="flex justify-between items-center mb-4">
-                <h2 className="text-2xl font-bold">Aperçu de la soumission — {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}</h2>
-                <button onClick={() => setPreviewModalOpen(false)} className="text-gray-500 hover:text-gray-700 text-2xl">✕</button>
+                <h2 className="text-2xl font-bold text-[#7A0A4A]">Aperçu de la soumission — {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}</h2>
+                <button onClick={() => setPreviewModalOpen(false)} className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl">✕</button>
               </div>
 
               <div className="space-y-4">
                 <div>
                   <h3 className="font-bold">Métadonnées</h3>
-                  <pre className="whitespace-pre-wrap text-sm p-3 bg-gray-50 border rounded">{JSON.stringify(previewContent.notes.meta || {}, null, 2)}</pre>
+                  <pre className="whitespace-pre-wrap text-sm p-3 bg-[#fcf4f8] border border-[#e5c9d7] rounded">{JSON.stringify(previewContent.notes.meta || {}, null, 2)}</pre>
                 </div>
 
                 <div>
                   <h3 className="font-bold">Graphiques</h3>
                   {Array.isArray(previewContent.notes.charts) && previewContent.notes.charts.length > 0 ? (
                     previewContent.notes.charts.map((c, i) => (
-                      <div key={i} className="p-3 bg-white border rounded mb-2">
+                      <div key={i} className="p-3 bg-white border border-[#e5c9d7] rounded mb-2">
                         <div className="font-semibold">{c.title || `Graphique ${i+1}`}</div>
                         <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(c, null, 2)}</pre>
                       </div>
@@ -1517,7 +1517,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   {Array.isArray(previewContent.notes.tables) && previewContent.notes.tables.length > 0 ? (
                     <div className="overflow-auto border rounded">
                       <table className="w-full table-auto text-sm">
-                        <thead className="bg-gray-100">
+                        <thead className="bg-[#f8edf3] text-[#7A0A4A]">
                           <tr>
                             {Object.keys(previewContent.notes.tables[0] || {}).slice(0,8).map((h) => (
                               <th key={h} className="px-2 py-1 text-left">{h}</th>
@@ -1540,7 +1540,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               </div>
 
               <div className="mt-4 flex justify-end gap-2">
-                <button onClick={() => setPreviewModalOpen(false)} className="px-4 py-2 bg-gray-300 rounded">Fermer</button>
+                <button onClick={() => setPreviewModalOpen(false)} className="px-4 py-2 bg-[#f4e3ed] text-[#7A0A4A] border border-[#d8b6c8] rounded">Fermer</button>
               </div>
             </div>
           </div>
@@ -1549,7 +1549,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             <div className="mt-6 flex justify-end gap-2 sticky bottom-0 bg-white pt-4">
               <button
                 onClick={() => setShowRequestsModal(false)}
-                className="px-4 py-2 bg-gray-400 text-white rounded hover:bg-gray-500 transition"
+                className="px-4 py-2 bg-[#7A0A4A] text-white rounded hover:bg-[#5E0738] transition"
               >
                 Fermer
               </button>
@@ -1561,16 +1561,16 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {/* Modal - Configuration Visiteur par Sous-thème */}
       {configModalOpen && configSubTheme && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+          <div className="bg-white border-2 border-[#d8b6c8] p-6 rounded-3xl w-full max-w-4xl max-h-[90vh] overflow-y-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
             <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-black">Configurer la vue Visiteur — {configSubTheme.nom}</h2>
-              <button onClick={() => setConfigModalOpen(false)} className="text-gray-500 hover:text-gray-700 text-2xl">✕</button>
+              <h2 className="text-2xl font-black text-[#7A0A4A]">Configurer la vue Visiteur — {configSubTheme.nom}</h2>
+              <button onClick={() => setConfigModalOpen(false)} className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl">✕</button>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
               <div>
                 <label className="font-bold mb-2 block">Colonnes disponibles</label>
-                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded border">
+                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
                   {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {})).map(c => (
                     <label key={c} className="flex items-center gap-2 text-sm">
                       <input type="checkbox" className="w-4 h-4" checked={modalVisitorCols.includes(c)} onChange={(e) => {
@@ -1585,7 +1585,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
               <div>
                 <label className="font-bold mb-2 block">Filtres disponibles</label>
-                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded border">
+                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
                   {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {})).map(c => (
                     <label key={`f-${c}`} className="flex items-center gap-2 text-sm">
                       <input type="checkbox" className="w-4 h-4" checked={modalVisitorFilters.includes(c)} onChange={(e) => {
@@ -1601,14 +1601,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
               <div>
                 <label className="font-bold mb-2 block">Filtres par défaut</label>
-                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-gray-50 rounded border">
+                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
                   {modalVisitorFilters.length === 0 && <div className="text-sm text-gray-600">Aucun filtre sélectionné</div>}
                   {modalVisitorFilters.map(f => {
                     const opts = Array.from(new Set((configSubTheme.data || []).map(r => r && r[f]).filter(v => v !== null && v !== undefined)));
                     return (
                       <div key={`d-${f}`} className="text-sm">
                         <label className="block font-semibold">{f}</label>
-                        <select className="w-full p-2 rounded border" value={modalVisitorDefaultFilters[f] ?? ''} onChange={(e) => setModalVisitorDefaultFilters(prev => ({...prev, [f]: e.target.value}))}>
+                        <select className="w-full p-2 rounded border border-[#d8b6c8]" value={modalVisitorDefaultFilters[f] ?? ''} onChange={(e) => setModalVisitorDefaultFilters(prev => ({...prev, [f]: e.target.value}))}>
                           <option value="">-- Aucun --</option>
                           {opts.map(o => <option key={String(o)} value={String(o)}>{String(o)}</option>)}
                         </select>
@@ -1620,7 +1620,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             </div>
 
             <div className="flex gap-3 mt-6">
-              <button className="px-4 py-2 bg-green-500 text-white rounded font-bold" onClick={async () => {
+              <button className="px-4 py-2 bg-[#7A0A4A] text-white rounded font-bold hover:bg-[#5E0738]" onClick={async () => {
                 try {
                   const payload = {
                     visitor_visible_columns: modalVisitorCols,
@@ -1640,7 +1640,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 }
               }}>Enregistrer</button>
 
-              <button className="px-4 py-2 bg-gray-200 rounded font-bold" onClick={() => {
+              <button className="px-4 py-2 bg-[#f4e3ed] text-[#7A0A4A] border border-[#d8b6c8] rounded font-bold" onClick={() => {
                 // reset modal to original values
                 setModalVisitorCols(configSubTheme.visitor_visible_columns || []);
                 setModalVisitorFilters(configSubTheme.visitor_filters || configSubTheme.filtres_disponibles || []);
@@ -1648,7 +1648,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               }}>Recharger</button>
 
               <div className="flex-1" />
-              <button className="px-4 py-2 bg-red-400 text-white rounded font-bold" onClick={() => setConfigModalOpen(false)}>Fermer</button>
+              <button className="px-4 py-2 bg-[#B03372] text-white rounded font-bold hover:bg-[#8f245e]" onClick={() => setConfigModalOpen(false)}>Fermer</button>
             </div>
           </div>
         </div>

@@ -4,7 +4,7 @@ from rest_framework.routers import DefaultRouter
 from core.views import (
     ThemeViewSet, CategorieViewSet, SousThemeViewSet,
     UserThemeAssignmentViewSet, UserRequestViewSet,
-    PublicThemeViewSet, PublicSousThemeViewSet
+    PublicThemeViewSet, PublicSousThemeViewSet, InfoBannerView
 )
 from core.user_views import UserViewSet
 from core.auth_views import login, logout, request_reset, reset_password
@@ -26,4 +26,5 @@ urlpatterns = [
     path('api/auth/logout/', logout, name='logout'),
     path('api/auth/request-reset/', request_reset, name='request_reset'),
     path('api/auth/reset-password/', reset_password, name='reset_password'),
+    path('api/info-banner/', InfoBannerView.as_view(), name='info-banner'),
 ]

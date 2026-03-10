@@ -225,3 +225,20 @@ class Metadata(models.Model):
     source = models.CharField(max_length=255)
     methode_calcul = models.TextField()
     periodicite = models.CharField(max_length=100)
+
+
+class InfoBanner(models.Model):
+    """Message d'information global affiché dans la barre INFOS."""
+    message = models.TextField(default="")
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='info_banners_updated'
+    )
+
+    def __str__(self):
+        short = (self.message or '').strip().replace('\n', ' ')
+        return short[:60] if short else 'Info banner vide'

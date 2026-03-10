@@ -116,6 +116,9 @@ function App({ forceVisitor = false }) {
   const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
   const [expandedCategories, setExpandedCategories] = useState({});
   const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
+  const [infoBannerText, setInfoBannerText] = useState("L'ICP du mois de Janvier 2026 est disponible");
+  const [infoBannerDraft, setInfoBannerDraft] = useState('');
+  const [savingInfoBanner, setSavingInfoBanner] = useState(false);
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   const pathname = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
@@ -126,6 +129,7 @@ function App({ forceVisitor = false }) {
   const isSaisisseur = pathHasSaisisseur || (userRole === 'SAISISSEUR' && isAuthenticated);
   const canEdit = isAuthenticated && !isVisitor;
   const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
+  const infoBannerApi = 'http://127.0.0.1:8000/api/info-banner/';
 
   // Helper: when a saisisseur saves, persist changes as a draft in UserThemeAssignment.notes
   const saveDraftAssignmentForSaisisseur = async (partialNotes = {}, statut = 'En cours') => {
@@ -212,6 +216,23 @@ function App({ forceVisitor = false }) {
       setActiveDataTab('tableau');
     }
   }, [formStep, selectedSubTheme?.id]);
+
+  useEffect(() => {
+    const fetchInfoBanner = async () => {
+      try {
+        const res = await axios.get(infoBannerApi);
+        const message = String(res?.data?.message || '').trim();
+        if (message) {
+          setInfoBannerText(message);
+          setInfoBannerDraft(message);
+        }
+      } catch (err) {
+        console.error('Erreur chargement info banner', err);
+      }
+    };
+
+    fetchInfoBanner();
+  }, []);
 
   // Keep axios Authorization header in sync with the current auth_context
   useEffect(() => {
@@ -809,6 +830,29 @@ function App({ forceVisitor = false }) {
     } catch (err) {
       console.error(err);
       showToast('Erreur lors de la mise à jour', 'error');
+    }
+  };
+
+  const saveInfoBanner = async () => {
+    const msg = (infoBannerDraft || '').trim();
+    if (!msg) {
+      showToast('Le message info ne peut pas etre vide', 'warning');
+      return;
+    }
+
+    try {
+      setSavingInfoBanner(true);
+      const res = await axios.put(infoBannerApi, { message: msg });
+      const savedMessage = String(res?.data?.message || msg).trim();
+      setInfoBannerText(savedMessage || msg);
+      setInfoBannerDraft(savedMessage || msg);
+      showToast('Information publiee pour les visiteurs', 'success');
+    } catch (err) {
+      console.error('Erreur sauvegarde info banner', err);
+      const serverError = err?.response?.data?.error;
+      showToast(serverError || 'Erreur lors de la mise a jour de l\'info', 'error');
+    } finally {
+      setSavingInfoBanner(false);
     }
   };
 
@@ -2459,10 +2503,30 @@ function App({ forceVisitor = false }) {
 
         <div className="bg-[#7A0A4A] px-6 py-2 border-b border-[#B03372] flex items-center gap-3">
           <span className="bg-[#B03372] text-white px-4 py-1 font-bold rounded-sm">INFOS</span>
-          <div className="bg-white text-[#7A0A4A] px-4 py-1.5 flex-1 rounded-sm font-medium">L'ICP du mois de Janvier 2026 est disponible</div>
+          {canEdit && userRole === 'ADMIN' && activeMenu === 'Admin' ? (
+            <div className="flex-1 flex items-center gap-2">
+              <input
+                type="text"
+                value={infoBannerDraft}
+                onChange={(e) => setInfoBannerDraft(e.target.value)}
+                placeholder="Ecrire une information pour les visiteurs..."
+                className="bg-white text-[#7A0A4A] px-4 py-1.5 flex-1 rounded-sm font-medium border border-[#c9c9c9] outline-none focus:border-[#B03372]"
+              />
+              <button
+                type="button"
+                onClick={saveInfoBanner}
+                disabled={savingInfoBanner}
+                className={`px-4 py-1.5 rounded-sm font-bold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#B03372] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
+              >
+                {savingInfoBanner ? 'Validation...' : 'Valider'}
+              </button>
+            </div>
+          ) : (
+            <div className="bg-white text-[#7A0A4A] px-4 py-1.5 flex-1 rounded-sm font-medium">{infoBannerText}</div>
+          )}
         </div>
 
-        {formStep !== 4 && (
+        {formStep !== 4 && activeMenu !== 'Admin' && (
           <div className={`px-6 bg-[#E8DFC0] border-b border-[#CCB47F] ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
             {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
               <div className="flex items-center gap-2">
@@ -2701,13 +2765,15 @@ function App({ forceVisitor = false }) {
 
               {openCategorieMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: categorieMenuPos.left, top: categorieMenuPos.top, zIndex: 9999 }} key={`cat-menu-${openCategorieMenu}-${themes.find(x => x.id === openCategorieMenu)?.categories?.length || 0}`}>
-                  <div className="w-64 bg-white rounded-lg shadow-2xl border-2 border-black max-h-96 overflow-y-auto">
-                    <div className="px-4 py-3 border-b-2 border-black text-sm font-bold text-gray-800 bg-gray-100">Choisir une catégorie</div>
+                  <div className="w-[min(22rem,92vw)] bg-[#fffdf9] rounded-xl shadow-[0_16px_28px_rgba(94,7,56,0.28)] border border-[#B03372] max-h-96 overflow-y-auto">
+                    <div className="px-4 py-3 text-sm font-bold text-white bg-gradient-to-r from-[#7A0A4A] to-[#B03372]">Choisir une catégorie</div>
                     {(() => {
                       const currentTheme = themes.find(x => x.id === openCategorieMenu);
                       if (!currentTheme || !currentTheme.categories) return null;
-                      return currentTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => (
-                        <div key={cat.id} className="px-4 py-3 border-b border-gray-200 hover:bg-blue-50 transition-colors flex items-center gap-2 justify-between">
+                      return currentTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => {
+                        const isActiveCat = String(selectedCategorie?.id) === String(cat.id);
+                        return (
+                        <div key={cat.id} className={`px-3 py-2 border-b border-[#efd5e5] last:border-b-0 transition-colors flex items-center gap-2 justify-between ${isActiveCat ? 'bg-[#f8ebf2]' : 'hover:bg-[#fdf1f7]'}`}>
                           <button 
                             onClick={(e) => { 
                               e.stopPropagation();
@@ -2719,14 +2785,14 @@ function App({ forceVisitor = false }) {
                             }}
                             className="flex-1 text-left flex items-center gap-2"
                           >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
                               <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                               <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                               <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                               <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
                             </svg>
-                            <span className="font-semibold">{cat.nom}</span>
-                            <span className="ml-auto text-xs text-gray-500">({cat.sous_themes?.length || 0})</span>
+                            <span className={`font-semibold truncate ${isActiveCat ? 'text-[#5E0738]' : 'text-[#6E001F]'}`}>{cat.nom}</span>
+                            <span className={`ml-auto text-xs ${isActiveCat ? 'text-[#7A0A4A]' : 'text-gray-500'}`}>({cat.sous_themes?.length || 0})</span>
                           </button>
                           {canEdit && userRole === 'ADMIN' && (
                             <button
@@ -2734,7 +2800,7 @@ function App({ forceVisitor = false }) {
                                 e.stopPropagation();
                                 deleteCategorie(cat.id);
                               }}
-                              className="p-1 hover:bg-red-200 rounded transition-colors text-red-600"
+                              className="p-1 hover:bg-red-100 rounded transition-colors text-red-600"
                               title="Supprimer cette catégorie"
                             >
                               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
@@ -2743,7 +2809,7 @@ function App({ forceVisitor = false }) {
                             </button>
                           )}
                         </div>
-                      ));
+                      );});
                     })()}
                   </div>
                 </div>

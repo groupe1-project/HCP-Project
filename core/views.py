@@ -6,18 +6,48 @@ import string
 import random
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from rest_framework.views import APIView
 from rest_framework import viewsets, status
 from rest_framework.decorators import action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated, AllowAny
 from django.db.models import Q
-from .models import Theme, Categorie, SousTheme, Indicateur, Donnee, CustomUser, UserThemeAssignment, UserRequest
+from .models import Theme, Categorie, SousTheme, Indicateur, Donnee, CustomUser, UserThemeAssignment, UserRequest, InfoBanner
 from .serializers import (
     ThemeSerializer, CategorieSerializer, SousThemeSerializer,
-    UserThemeAssignmentSerializer, UserRequestSerializer, UserSerializer
+    UserThemeAssignmentSerializer, UserRequestSerializer, UserSerializer,
+    InfoBannerSerializer
 )
 
 logger = logging.getLogger(__name__)
+
+
+class InfoBannerView(APIView):
+    """Message global INFOS: lecture publique, écriture réservée aux admins."""
+
+    def get_permissions(self):
+        if self.request.method == 'GET':
+            return [AllowAny()]
+        return [IsAuthenticated()]
+
+    def get(self, request):
+        banner, _ = InfoBanner.objects.get_or_create(id=1, defaults={'message': ''})
+        serializer = InfoBannerSerializer(banner)
+        return Response(serializer.data, status=status.HTTP_200_OK)
+
+    def put(self, request):
+        if getattr(request.user, 'role', None) != 'ADMIN':
+            return Response({'error': 'Accès refusé : seulement les administrateurs peuvent modifier cette info.'}, status=status.HTTP_403_FORBIDDEN)
+
+        message = str(request.data.get('message', '')).strip()
+        if not message:
+            return Response({'error': 'Le message info ne peut pas être vide.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        banner, _ = InfoBanner.objects.get_or_create(id=1, defaults={'message': message, 'updated_by': request.user})
+        banner.message = message
+        banner.updated_by = request.user
+        banner.save()
+        return Response(InfoBannerSerializer(banner).data, status=status.HTTP_200_OK)
 
 class CategorieViewSet(viewsets.ModelViewSet):
     queryset = Categorie.objects.all().order_by('id')

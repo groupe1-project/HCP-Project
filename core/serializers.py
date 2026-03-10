@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie, UserThemeAssignment, UserRequest
+from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie, UserThemeAssignment, UserRequest, InfoBanner
 
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
@@ -147,3 +147,12 @@ class UserRequestSerializer(serializers.ModelSerializer):
             'statut', 'demande_texte', 'date_creation', 'date_modification',
             'created_by', 'created_by_name'
         ]
+
+
+class InfoBannerSerializer(serializers.ModelSerializer):
+    updated_by_name = serializers.ReadOnlyField(source='updated_by.username')
+
+    class Meta:
+        model = InfoBanner
+        fields = ['id', 'message', 'updated_at', 'updated_by', 'updated_by_name']
+        read_only_fields = ['updated_at', 'updated_by', 'updated_by_name']
