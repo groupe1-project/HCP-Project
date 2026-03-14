@@ -1,1 +1,140 @@
+@import url('https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600;700&family=Noto+Sans+Arabic:wght@400;500;600;700&display=swap');
 @import "tailwindcss";
+
+:root {
+	--color-primary: #8B004B;
+	--color-primary-hover: #6E003C;
+	--color-secondary: #D8A24A;
+	--color-bg: #F4E9D3;
+	--color-surface: #FFF7E9;
+	--color-text-main: #3B1F2B;
+	--color-text-muted: #6D4B55;
+	--color-border: #CDAA78;
+	--color-success: #059669;
+	--color-warning: #D97706;
+	--color-error: #DC2626;
+
+	--radius-md: 12px;
+	--shadow-soft: 0 8px 24px rgba(17, 24, 39, 0.08);
+	--shadow-soft-hover: 0 12px 28px rgba(17, 24, 39, 0.12);
+
+	--space-1: 8px;
+	--space-2: 16px;
+	--space-3: 24px;
+	--space-4: 32px;
+}
+
+* {
+	box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+	min-height: 100%;
+}
+
+body {
+	margin: 0;
+	background: var(--color-bg);
+	color: var(--color-text-main);
+	font-family: 'IBM Plex Sans', 'Noto Sans Arabic', 'Noto Sans', sans-serif;
+	font-weight: 400;
+	line-height: 1.5;
+	text-rendering: optimizeLegibility;
+	-webkit-font-smoothing: antialiased;
+	-moz-osx-font-smoothing: grayscale;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+	font-weight: 700;
+	letter-spacing: 0.01em;
+}
+
+.app-shell {
+	background: var(--color-bg);
+	color: var(--color-text-main);
+}
+
+.app-shell button,
+.app-shell input,
+.app-shell select,
+.app-shell textarea {
+	border-radius: var(--radius-md);
+}
+
+.app-shell .border-black {
+	border-color: var(--color-border) !important;
+}
+
+.app-shell .border-2.border-black,
+.app-shell .border-4.border-black {
+	border-width: 1px !important;
+}
+
+.app-shell .shadow-md,
+.app-shell .shadow-lg,
+.app-shell .shadow-xl,
+.app-shell .shadow-2xl,
+.app-shell .shadow-\[8px_8px_0px_0px_rgba\(0\,0\,0\,1\)\] {
+	box-shadow: var(--shadow-soft) !important;
+}
+
+.app-shell .shadow-md:hover,
+.app-shell .shadow-lg:hover,
+.app-shell .shadow-xl:hover,
+.app-shell .shadow-2xl:hover {
+	box-shadow: var(--shadow-soft-hover) !important;
+}
+
+.app-shell .text-gray-600,
+.app-shell .text-gray-700,
+.app-shell .text-gray-500,
+.app-shell .text-\[\#545454\] {
+	color: var(--color-text-muted) !important;
+}
+
+/* Targeted color-placement tuning to stay close to official visual identity. */
+.app-shell .bg-\[\#f9fafb\],
+.app-shell .bg-\[\#f4f5f7\],
+.app-shell .bg-\[\#f2f2f2\] {
+	background-color: #F6E7CF !important;
+}
+
+.app-shell .border-\[\#9d9d9d\],
+.app-shell .border-\[\#9b2b64\],
+.app-shell .border-\[\#B03372\],
+.app-shell .border-\[\#b84c83\],
+.app-shell .border-\[\#d6619c\] {
+	border-color: #A65B79 !important;
+}
+
+.app-shell .bg-\[\#a12863\],
+.app-shell .bg-\[\#7A0A4A\] {
+	background-color: var(--color-primary) !important;
+}
+
+.app-shell .hover\:bg-\[\#8f245e\]:hover,
+.app-shell .hover\:bg-\[\#5E0738\]:hover,
+.app-shell .hover\:bg-\[\#7A0A4A\]:hover,
+.app-shell .bg-\[\#5E0738\] {
+	background-color: var(--color-primary-hover) !important;
+}
+
+.app-shell .bg-\[\#E6A76A\],
+.app-shell .bg-\[\#D89253\] {
+	background-color: #E3A666 !important;
+}
+
+.app-shell .border-\[\#9A4A2A\] {
+	border-color: #B87A44 !important;
+}
+
+.app-shell .text-\[\#6E001F\] {
+	color: #5B162D !important;
+}

@@ -46,6 +46,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   // États pour les assignations multiples
   const [pendingAssignments, setPendingAssignments] = useState([]);
   const [showAssignmentQueue, setShowAssignmentQueue] = useState(false);
+
+  // États dédiés à l'espace saisisseur
+  const [myAssignments, setMyAssignments] = useState([]);
+  const [myLoading, setMyLoading] = useState(false);
+  const [selectedMyAssignment, setSelectedMyAssignment] = useState(null);
+  const [myProgression, setMyProgression] = useState(0);
+  const [myComment, setMyComment] = useState('');
   
   // Charger les utilisateurs au montage
   useEffect(() => {
@@ -55,13 +62,95 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
     } catch (e) {}
 
-    // Pour un saisisseur, ne pas lancer les fetchs administrateurs (page vide pour l'instant)
-    if (isSaisisseur) return;
+    // Pour un saisisseur, charger uniquement ses assignations
+    if (isSaisisseur) {
+      fetchMyAssignments();
+      return;
+    }
 
     fetchSaisisseurs();
     fetchThemes();
     fetchUserRequests();
   }, [isSaisisseur]);
+
+  const parseAssignmentNotes = (rawNotes) => {
+    try {
+      return rawNotes ? JSON.parse(rawNotes) : {};
+    } catch (e) {
+      return { _raw: rawNotes || '' };
+    }
+  };
+
+  const fetchMyAssignments = async () => {
+    try {
+      setMyLoading(true);
+      const response = await axios.get(`${API_BASE}/user-theme-assignments/`);
+      const data = Array.isArray(response.data) ? response.data : [];
+      setMyAssignments(data);
+      if (selectedMyAssignment) {
+        const refreshed = data.find(a => a.id === selectedMyAssignment.id);
+        if (refreshed) {
+          setSelectedMyAssignment(refreshed);
+          setMyProgression(refreshed.progression || 0);
+        }
+      }
+    } catch (error) {
+      console.error('Erreur chargement assignations saisisseur:', error);
+    } finally {
+      setMyLoading(false);
+    }
+  };
+
+  const openMyAssignment = (assignment) => {
+    setSelectedMyAssignment(assignment);
+    setMyProgression(assignment.progression || 0);
+    setMyComment('');
+  };
+
+  const saveMyDraft = async () => {
+    if (!selectedMyAssignment) return;
+    try {
+      const notesObj = parseAssignmentNotes(selectedMyAssignment.notes);
+      notesObj.saisisseur_draft = {
+        comment: String(myComment || '').trim(),
+        updated_at: new Date().toISOString(),
+      };
+      const history = Array.isArray(notesObj.workflow_history) ? notesObj.workflow_history : [];
+      history.push({
+        at: new Date().toISOString(),
+        actor: 'saisisseur',
+        action: 'draft_save',
+        message: String(myComment || '').trim(),
+      });
+      notesObj.workflow_history = history;
+
+      await axios.patch(`${API_BASE}/user-theme-assignments/${selectedMyAssignment.id}/`, {
+        notes: JSON.stringify(notesObj),
+        progression: Number(myProgression || 0),
+        statut: 'En cours',
+      });
+      alert('Brouillon enregistré.');
+      await fetchMyAssignments();
+    } catch (error) {
+      console.error('Erreur sauvegarde brouillon:', error);
+      alert(error.response?.data?.error || 'Erreur lors de la sauvegarde du brouillon');
+    }
+  };
+
+  const submitMyAssignment = async () => {
+    if (!selectedMyAssignment) return;
+    try {
+      await axios.post(`${API_BASE}/user-theme-assignments/${selectedMyAssignment.id}/submit/`, {
+        message: String(myComment || '').trim(),
+        progression: Number(myProgression || 0),
+      });
+      alert('Soumission envoyée à l\'administrateur.');
+      await fetchMyAssignments();
+    } catch (error) {
+      console.error('Erreur soumission:', error);
+      alert(error.response?.data?.error || 'Erreur lors de la soumission');
+    }
+  };
 
   // Vérifier les permissions
   useEffect(() => {
@@ -126,12 +215,122 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     return () => window.removeEventListener('openVisitorConfig', handler);
   }, [themes]);
 
-  // Si c'est la vue saisisseur, afficher un espace vide / placeholder
+  // Espace saisisseur: exécution des tâches et coordination avec l'admin
   if (isSaisisseur) {
+    const waiting = myAssignments.filter(a => a.statut === 'En attente').length;
+    const done = myAssignments.filter(a => a.statut === 'Complété').length;
+    const inProgress = myAssignments.filter(a => a.statut === 'En cours').length;
+    const notesObj = parseAssignmentNotes(selectedMyAssignment?.notes);
+    const history = Array.isArray(notesObj.workflow_history) ? notesObj.workflow_history.slice().reverse() : [];
+    const lastReview = notesObj.admin_last_review || null;
+
     return (
-      <div className="p-8 flex-1">
-        <h2 className="text-2xl font-bold text-[#7A0A4A]">Espace saisisseur</h2>
-        <p className="mt-4 text-gray-700">Zone en développement — contenu à venir.</p>
+      <div className="min-h-screen bg-[#f8f2f5] p-6">
+        <div className="max-w-6xl mx-auto space-y-6">
+          <div className="bg-[#7A0A4A] text-white py-4 px-6 font-bold text-2xl rounded-2xl shadow-[0_10px_24px_rgba(122,10,74,0.28)]">
+            🧾 Espace Saisisseur
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+            <div className="bg-white border border-[#d8b6c8] rounded-xl p-4">
+              <div className="text-xs text-[#9a6f85]">Tâches assignées</div>
+              <div className="text-2xl font-black text-[#7A0A4A]">{myAssignments.length}</div>
+            </div>
+            <div className="bg-white border border-[#d8b6c8] rounded-xl p-4">
+              <div className="text-xs text-[#9a6f85]">En cours</div>
+              <div className="text-2xl font-black text-[#7A0A4A]">{inProgress}</div>
+            </div>
+            <div className="bg-white border border-[#d8b6c8] rounded-xl p-4">
+              <div className="text-xs text-[#9a6f85]">Soumises</div>
+              <div className="text-2xl font-black text-[#b26a00]">{waiting}</div>
+            </div>
+            <div className="bg-white border border-[#d8b6c8] rounded-xl p-4">
+              <div className="text-xs text-[#9a6f85]">Validées</div>
+              <div className="text-2xl font-black text-[#1a7f4b]">{done}</div>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            <div className="bg-white border-2 border-[#d8b6c8] rounded-2xl overflow-hidden">
+              <div className="px-4 py-3 bg-[#7A0A4A] text-white font-bold">Mes tâches</div>
+              <div className="max-h-[420px] overflow-auto">
+                {myLoading ? (
+                  <div className="p-4 text-[#7A0A4A]">Chargement...</div>
+                ) : myAssignments.length === 0 ? (
+                  <div className="p-4 text-gray-500">Aucune tâche assignée.</div>
+                ) : (
+                  myAssignments.map((a) => (
+                    <button
+                      key={a.id}
+                      onClick={() => openMyAssignment(a)}
+                      className={`w-full text-left px-4 py-3 border-b border-[#f0dce7] hover:bg-[#fdf7fa] ${selectedMyAssignment?.id === a.id ? 'bg-[#fcf0f6]' : ''}`}
+                    >
+                      <div className="font-semibold text-[#4d1734]">{a.theme_titre || 'Thème'}{a.sous_theme_nom ? ` > ${a.sous_theme_nom}` : ''}</div>
+                      <div className="text-xs text-[#8c4f6a] mt-1">Priorité: {a.priorite || 'Normale'} | Statut: {a.statut}</div>
+                    </button>
+                  ))
+                )}
+              </div>
+            </div>
+
+            <div className="bg-white border-2 border-[#d8b6c8] rounded-2xl p-4 space-y-4">
+              {!selectedMyAssignment ? (
+                <div className="text-gray-500">Sélectionnez une tâche pour commencer.</div>
+              ) : (
+                <>
+                  <div>
+                    <h3 className="text-lg font-black text-[#7A0A4A]">{selectedMyAssignment.theme_titre || 'Thème'}{selectedMyAssignment.sous_theme_nom ? ` > ${selectedMyAssignment.sous_theme_nom}` : ''}</h3>
+                    <div className="text-sm text-[#8c4f6a]">Statut actuel: {selectedMyAssignment.statut}</div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-bold text-[#7A0A4A] mb-2">Progression</label>
+                    <input type="range" min="0" max="100" value={myProgression} onChange={(e) => setMyProgression(Number(e.target.value))} className="w-full" />
+                    <div className="text-sm text-[#4d1734] mt-1">{myProgression}%</div>
+                  </div>
+
+                  <div>
+                    <label className="block text-sm font-bold text-[#7A0A4A] mb-2">Message pour l'admin</label>
+                    <textarea
+                      value={myComment}
+                      onChange={(e) => setMyComment(e.target.value)}
+                      className="w-full min-h-[110px] p-3 border border-[#cda1b9] rounded-lg outline-none focus:border-[#B03372]"
+                      placeholder="Expliquez l'avancement, les points bloquants ou les remarques..."
+                    />
+                  </div>
+
+                  {lastReview && (
+                    <div className={`p-3 rounded-lg border ${lastReview.decision === 'reject' ? 'bg-[#fff1f1] border-[#f1b5b5]' : 'bg-[#eefcf4] border-[#b8e6c8]'}`}>
+                      <div className="font-semibold text-sm">Dernier retour admin: {lastReview.decision === 'reject' ? 'Correction demandée' : 'Approuvé'}</div>
+                      <div className="text-sm mt-1">{lastReview.message || '—'}</div>
+                    </div>
+                  )}
+
+                  <div className="flex gap-2">
+                    <button onClick={saveMyDraft} className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-lg font-bold hover:bg-[#faeff5]">💾 Enregistrer brouillon</button>
+                    <button onClick={submitMyAssignment} className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-lg font-bold hover:bg-[#5E0738]">📤 Soumettre à l'admin</button>
+                  </div>
+
+                  <div>
+                    <h4 className="font-bold text-sm text-[#7A0A4A] mb-2">Historique</h4>
+                    <div className="max-h-[160px] overflow-auto border border-[#efdce6] rounded-lg p-2 bg-[#fcf4f8]">
+                      {history.length === 0 ? (
+                        <div className="text-xs text-gray-500">Aucun historique.</div>
+                      ) : (
+                        history.map((h, idx) => (
+                          <div key={`h-${idx}`} className="text-xs border-b border-[#efdce6] py-1 last:border-b-0">
+                            <div className="font-semibold text-[#6b2949]">{h.action} • {h.actor}</div>
+                            <div className="text-[#8c4f6a]">{h.message || '—'}</div>
+                          </div>
+                        ))
+                      )}
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
       </div>
     );
   }
@@ -141,7 +340,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       // Charger les utilisateurs
       const usersResponse = await axios.get(`${API_BASE}/users/`);
       const filteredUsers = usersResponse.data.filter(user => 
-        user.role === 'SAISISSEUR' || user.role === 'AVANCE'
+        user.role === 'SAISISSEUR'
       );
       
       // Charger les assignations
@@ -583,27 +782,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleValidateSaisisseur = async (assignmentId) => {
-    // Validate a saisisseur submission: fetch assignment, parse notes and apply to sous-theme
     try {
-      const res = await axios.get(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
-      const assignment = res.data;
-      let notesObj = {};
-      try { notesObj = assignment.notes ? JSON.parse(assignment.notes) : {}; } catch (e) { notesObj = { raw: assignment.notes }; }
+      const adminComment = prompt('Commentaire de validation (optionnel):', '') || '';
+      await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/review/`, {
+        decision: 'approve',
+        message: adminComment.trim(),
+      });
 
-      if (assignment.sous_theme) {
-        const payload = {};
-        if (notesObj.tables) payload.data_json = notesObj.tables;
-        if (notesObj.charts) payload.charts_config = notesObj.charts;
-        if (notesObj.meta) Object.assign(payload, notesObj.meta);
-
-        if (Object.keys(payload).length > 0) {
-          await axios.patch(`${API_BASE}/sousthemes/${assignment.sous_theme}/`, payload);
-        }
-      }
-
-      // Mark assignment completed
-      await axios.patch(`${API_BASE}/user-theme-assignments/${assignmentId}/`, { statut: 'Complété', progression: 100 });
-      alert('Modifications validées et appliquées.');
+      alert('Soumission approuvée et appliquée.');
       fetchSaisisseurs();
       setOpenMenuId(null);
     } catch (error) {
@@ -612,24 +798,41 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
+  const handleRejectSaisisseur = async (assignmentId) => {
+    const reason = prompt('Précisez les corrections demandées:', '');
+    if (reason === null) return;
+
+    try {
+      await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/review/`, {
+        decision: 'reject',
+        message: String(reason || '').trim(),
+      });
+      alert('Retour envoyé au saisisseur.');
+      fetchSaisisseurs();
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error('Erreur lors du rejet:', error);
+      alert(error.response?.data?.error || 'Erreur lors de l\'envoi du retour');
+    }
+  };
+
   const handleOpenSubmissionPreview = async (assignmentId) => {
     try {
+      setOpenMenuId(null);
       const res = await axios.get(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
       const assignment = res.data;
       let notesObj = {};
       try { notesObj = assignment.notes ? JSON.parse(assignment.notes) : {}; } catch (e) { notesObj = { raw: assignment.notes }; }
       setPreviewContent({ assignment, notes: notesObj });
       setPreviewModalOpen(true);
-      setOpenMenuId(null);
     } catch (err) {
       console.error('Erreur ouverture soumission:', err);
-      alert('Impossible d\'ouvrir la soumission');
+      alert(err?.response?.data?.error || err?.message || 'Impossible d\'ouvrir la soumission');
     }
   };
 
   const getRoleLabel = (role) => {
-    return role === 'SAISISSEUR' ? 'Saisisseur' :
-           role === 'AVANCE' ? 'Saisisseur Avancé' : 'Administrateur';
+    return role === 'SAISISSEUR' ? 'Saisisseur' : 'Administrateur';
   };
 
   const formatAssignmentDate = (value) => {
@@ -1105,13 +1308,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleValidateSaisisseur(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#eefcf4] flex items-center gap-2 text-sm"
                               >
-                                ✅ Valider les modifications
+                                ✅ Approuver la soumission
+                              </button>
+                              <button
+                                onClick={() => {
+                                  handleRejectSaisisseur(assignment.id);
+                                  setOpenMenuId(null);
+                                }}
+                                className="w-full text-left px-4 py-2 hover:bg-[#fff1f1] text-[#9c1f5a] flex items-center gap-2 text-sm"
+                              >
+                                🛠️ Demander des corrections
                               </button>
                               <button
                                 onClick={() => {
                                   handleOpenSubmissionPreview(assignment.id);
+                                  setOpenMenuId(null);
                                 }}
                                 className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                               >
@@ -1382,7 +1595,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
                 >
                   <option value="SAISISSEUR">Saisisseur</option>
-                  <option value="AVANCE">Saisisseur Avancé</option>
                   <option value="ADMIN">Administrateur</option>
                 </select>
               </div>
@@ -1519,7 +1731,10 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                       <table className="w-full table-auto text-sm">
                         <thead className="bg-[#f8edf3] text-[#7A0A4A]">
                           <tr>
-                            {Object.keys(previewContent.notes.tables[0] || {}).slice(0,8).map((h) => (
+                            {(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
+                              ? previewContent.notes.columns_order
+                              : Object.keys(previewContent.notes.tables[0] || {})
+                            ).slice(0,8).map((h) => (
                               <th key={h} className="px-2 py-1 text-left">{h}</th>
                             ))}
                           </tr>
@@ -1527,7 +1742,10 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         <tbody>
                           {previewContent.notes.tables.slice(0,6).map((r, idx) => (
                             <tr key={idx} className="border-t">
-                              {Object.values(r).slice(0,8).map((v, j) => <td key={j} className="px-2 py-1">{String(v)}</td>)}
+                              {(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
+                                ? previewContent.notes.columns_order
+                                : Object.keys(previewContent.notes.tables[0] || {})
+                              ).slice(0,8).map((h, j) => <td key={`${idx}-${j}`} className="px-2 py-1">{String(r?.[h] ?? '')}</td>)}
                             </tr>
                           ))}
                         </tbody>

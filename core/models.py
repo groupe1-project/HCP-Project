@@ -7,7 +7,6 @@ class CustomUser(AbstractUser):
     ROLE_CHOICES = (
         ('ADMIN', 'Administrateur'),
         ('SAISISSEUR', 'Saisisseur'),
-        ('AVANCE', 'Saisisseur Avancé'),
     )
     role = models.CharField(max_length=20, choices=ROLE_CHOICES, default='SAISISSEUR')
 
@@ -242,3 +241,30 @@ class InfoBanner(models.Model):
     def __str__(self):
         short = (self.message or '').strip().replace('\n', ' ')
         return short[:60] if short else 'Info banner vide'
+
+
+class SiteContent(models.Model):
+    """Contenu éditorial global (Contact, À propos, Liens utiles)."""
+    about_title = models.CharField(max_length=255, default='À propos de la plateforme')
+    about_text = models.TextField(default='Cette plateforme centralise les statistiques régionales pour une consultation claire, fiable et actualisée.')
+
+    contact_title = models.CharField(max_length=255, default='Contact')
+    contact_email = models.EmailField(default='contact@hcp.ma')
+    contact_phone = models.CharField(max_length=80, default='+212 5 23 00 00 00')
+    contact_address = models.TextField(default='Direction Régionale HCP\nBéni Mellal - Khénifra')
+    contact_hours = models.CharField(max_length=255, default='Lundi - Vendredi, 08:30 - 16:30')
+
+    # Exemple: [{"label": "HCP Maroc", "url": "https://www.hcp.ma"}]
+    useful_links = models.JSONField(default=list, blank=True)
+
+    updated_at = models.DateTimeField(auto_now=True)
+    updated_by = models.ForeignKey(
+        CustomUser,
+        on_delete=models.SET_NULL,
+        null=True,
+        blank=True,
+        related_name='site_contents_updated'
+    )
+
+    def __str__(self):
+        return 'Contenu global du site'

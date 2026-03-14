@@ -10,8 +10,8 @@ import ChartModal from './components/ChartModal';
 const SidebarButton = ({ label, onClick, active }) => (
   <button 
     onClick={onClick}
-    className={`w-full py-3 px-5 text-left font-bold border-b border-[#d0ceca] transition-colors uppercase tracking-wide ${
-      active ? 'bg-[#d2d0cc] text-[#8A0A45] shadow-inner' : 'bg-[#dcdad6] text-[#8A0A45] hover:bg-[#d2d0cc]'
+    className={`w-full py-3 px-5 text-left font-semibold border-b border-[var(--color-border)] transition-colors uppercase tracking-wide ${
+      active ? 'bg-[#f1dec0] text-[var(--color-primary)] shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-primary)] hover:bg-[#f7e8cf]'
     }`}
   >
     {label}
@@ -57,6 +57,7 @@ function App({ forceVisitor = false }) {
   const [actionModalCategorieId, setActionModalCategorieId] = useState(null);
   const [rows, setRows] = useState([]);
   const [assignedSubThemes, setAssignedSubThemes] = useState([]);
+  const [saisisseurAssignments, setSaisisseurAssignments] = useState([]);
   const [showThemeMeta, setShowThemeMeta] = useState(false);
   const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
   const [showSubThemeMeta, setShowSubThemeMeta] = useState(false);
@@ -77,6 +78,8 @@ function App({ forceVisitor = false }) {
   const [publicThemes, setPublicThemes] = useState([]);
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
+  const [editTableColumns, setEditTableColumns] = useState([]);
+  const [isSmartImporting, setIsSmartImporting] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [activeDataTab, setActiveDataTab] = useState('tableau');
   const [visitorTableView, setVisitorTableView] = useState('horizontal');
@@ -119,6 +122,27 @@ function App({ forceVisitor = false }) {
   const [infoBannerText, setInfoBannerText] = useState("L'ICP du mois de Janvier 2026 est disponible");
   const [infoBannerDraft, setInfoBannerDraft] = useState('');
   const [savingInfoBanner, setSavingInfoBanner] = useState(false);
+  const [siteContent, setSiteContent] = useState({
+    about_title: 'A propos de la plateforme',
+    about_text: '',
+    contact_title: 'Contact',
+    contact_email: '',
+    contact_phone: '',
+    contact_address: '',
+    contact_hours: '',
+    useful_links: [],
+  });
+  const [siteContentDraft, setSiteContentDraft] = useState({
+    about_title: 'A propos de la plateforme',
+    about_text: '',
+    contact_title: 'Contact',
+    contact_email: '',
+    contact_phone: '',
+    contact_address: '',
+    contact_hours: '',
+    useful_links: [],
+  });
+  const [savingSiteContent, setSavingSiteContent] = useState(false);
 
   // --- TOUS LES useEffect EN MÊME TEMPS ---
   const pathname = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
@@ -130,6 +154,106 @@ function App({ forceVisitor = false }) {
   const canEdit = isAuthenticated && !isVisitor;
   const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
   const infoBannerApi = 'http://127.0.0.1:8000/api/info-banner/';
+  const siteContentApi = 'http://127.0.0.1:8000/api/site-content/';
+  const isInfoMenu = ['Contact', 'APropos', 'LiensUtiles'].includes(activeMenu);
+
+  const parseAssignmentNotes = (rawNotes) => {
+    try {
+      return rawNotes ? JSON.parse(rawNotes) : {};
+    } catch (e) {
+      return {};
+    }
+  };
+
+  const getSaisisseurAssignmentForSubTheme = (subThemeId, assignments = saisisseurAssignments) => {
+    return (assignments || []).find((assignment) => String(assignment.sous_theme) === String(subThemeId)) || null;
+  };
+
+  const buildDraftSubTheme = (subTheme, assignment = null) => {
+    if (!subTheme) return subTheme;
+    if (!isSaisisseur) return subTheme;
+
+    const linkedAssignment = assignment || getSaisisseurAssignmentForSubTheme(subTheme.id);
+    if (!linkedAssignment) return subTheme;
+
+    const notes = parseAssignmentNotes(linkedAssignment.notes);
+    const draftSubTheme = { ...subTheme };
+
+    if (Array.isArray(notes.tables)) {
+      draftSubTheme.data = notes.tables;
+      draftSubTheme.data_json = notes.tables;
+    }
+
+    if (Array.isArray(notes.columns_order) && notes.columns_order.length > 0) {
+      draftSubTheme.columns_order = notes.columns_order;
+    } else if (Array.isArray(notes.tables) && notes.tables[0]) {
+      draftSubTheme.columns_order = Object.keys(notes.tables[0]);
+    }
+
+    if (Array.isArray(notes.charts)) {
+      draftSubTheme.charts_config = notes.charts;
+    }
+
+    if (notes.meta && typeof notes.meta === 'object') {
+      Object.assign(draftSubTheme, notes.meta);
+    }
+
+    if (notes.advancedConfig && typeof notes.advancedConfig === 'object') {
+      Object.assign(draftSubTheme, notes.advancedConfig);
+    }
+
+    if (notes.visitor_defaults) {
+      draftSubTheme.visitor_default_filters = notes.visitor_defaults;
+    }
+
+    draftSubTheme.__draftAssignmentId = linkedAssignment.id;
+    draftSubTheme.__draftStatus = linkedAssignment.statut;
+    return draftSubTheme;
+  };
+
+  const applyUpdatedAssignmentToState = (updatedAssignment) => {
+    setSaisisseurAssignments((prev) => {
+      const exists = (prev || []).some((assignment) => assignment.id === updatedAssignment.id);
+      return exists
+        ? prev.map((assignment) => (assignment.id === updatedAssignment.id ? updatedAssignment : assignment))
+        : [...(prev || []), updatedAssignment];
+    });
+
+    setSelectedSubTheme((prev) => {
+      if (!prev || String(prev.id) !== String(updatedAssignment.sous_theme)) return prev;
+      return buildDraftSubTheme(prev, updatedAssignment);
+    });
+  };
+
+  const collectCurrentSaisisseurDraftPayload = () => {
+    const tableRows = showEditTable && editTableRows.length > 0
+      ? editTableRows
+      : getTableRows(selectedSubTheme);
+    const tableColumns = (showEditTable && editTableColumns.length > 0)
+      ? editTableColumns
+      : (selectedSubTheme?.columns || selectedSubTheme?.columns_order || (tableRows[0] ? Object.keys(tableRows[0]) : []));
+
+    return {
+      tables: tableRows || [],
+      columns_order: tableColumns || [],
+      charts: savedCharts || [],
+      meta: {
+        definition_text: selectedSubTheme?.definition_text || '',
+        unite_text: selectedSubTheme?.unite_text || '',
+        indication_text: selectedSubTheme?.indication_text || '',
+        source_text: selectedSubTheme?.source_text || '',
+        periodicite_text: selectedSubTheme?.periodicite_text || '',
+        couverture_text: selectedSubTheme?.couverture_text || '',
+      },
+      visitor_defaults: selectedSubTheme?.visitor_default_filters || modalVisitorDefaultFilters || {},
+      advancedConfig: {
+        niveau_geo: selectedSubTheme?.niveau_geo || null,
+        type_unite: selectedSubTheme?.type_unite || '',
+        est_sommable: selectedSubTheme?.est_sommable ?? true,
+        filtres_disponibles: selectedSubTheme?.filtres_disponibles || [],
+      },
+    };
+  };
 
   // Helper: when a saisisseur saves, persist changes as a draft in UserThemeAssignment.notes
   const saveDraftAssignmentForSaisisseur = async (partialNotes = {}, statut = 'En cours') => {
@@ -138,9 +262,18 @@ function App({ forceVisitor = false }) {
       if (!userId) return alert('Utilisateur non identifié (saisisseur)');
       if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
 
-      // Find existing assignment for this user + sous_theme
-      const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
-      const existing = resp.data.find(a => String(a.user) === String(userId) && a.sous_theme === selectedSubTheme.id);
+      let existing = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
+      if (!existing) {
+        const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+        const myAssignments = (resp.data || []).filter((assignment) => String(assignment.user) === String(userId) && assignment.sous_theme);
+        setSaisisseurAssignments(myAssignments);
+        existing = myAssignments.find((assignment) => String(assignment.sous_theme) === String(selectedSubTheme.id));
+      }
+
+      if (!existing) {
+        alert('Aucune assignation active trouvée pour ce sous-thème.');
+        return;
+      }
 
       // Merge notes with existing
       let mergedNotes = {};
@@ -149,17 +282,8 @@ function App({ forceVisitor = false }) {
       }
       mergedNotes = { ...mergedNotes, ...partialNotes };
 
-      if (existing) {
-        await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(mergedNotes), statut });
-      } else {
-        await axios.post('http://127.0.0.1:8000/api/user-theme-assignments/', {
-          user: parseInt(userId, 10),
-          theme: selectedSubTheme.theme,
-          sous_theme: selectedSubTheme.id,
-          statut,
-          notes: JSON.stringify(mergedNotes)
-        });
-      }
+      const patchResponse = await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(mergedNotes), statut });
+      applyUpdatedAssignmentToState(patchResponse.data);
 
       // Note: do not mutate global selected subtheme or charts here. Drafts are stored
       // on the server in the assignment notes and should not affect live views
@@ -234,6 +358,30 @@ function App({ forceVisitor = false }) {
     fetchInfoBanner();
   }, []);
 
+  useEffect(() => {
+    const fetchSiteContent = async () => {
+      try {
+        const res = await axios.get(siteContentApi);
+        const payload = {
+          about_title: String(res?.data?.about_title || 'A propos de la plateforme'),
+          about_text: String(res?.data?.about_text || ''),
+          contact_title: String(res?.data?.contact_title || 'Contact'),
+          contact_email: String(res?.data?.contact_email || ''),
+          contact_phone: String(res?.data?.contact_phone || ''),
+          contact_address: String(res?.data?.contact_address || ''),
+          contact_hours: String(res?.data?.contact_hours || ''),
+          useful_links: Array.isArray(res?.data?.useful_links) ? res.data.useful_links : [],
+        };
+        setSiteContent(payload);
+        setSiteContentDraft(payload);
+      } catch (err) {
+        console.error('Erreur chargement contenu site', err);
+      }
+    };
+
+    fetchSiteContent();
+  }, []);
+
   // Keep axios Authorization header in sync with the current auth_context
   useEffect(() => {
     try {
@@ -279,7 +427,7 @@ function App({ forceVisitor = false }) {
   useEffect(() => {
     // Visitor mode must never open admin/saisisseur workspace even if localStorage has old value
     if (isVisitor) {
-      const visitorAllowedMenus = ['Themes', 'Indicateurs'];
+      const visitorAllowedMenus = ['Themes', 'Indicateurs', 'APropos', 'Contact', 'LiensUtiles'];
       if (!visitorAllowedMenus.includes(activeMenu)) {
         setActiveMenu('Themes');
         try { localStorage.setItem('activeMenu', 'Themes'); } catch (e) {}
@@ -320,6 +468,7 @@ function App({ forceVisitor = false }) {
         if (!userId) return;
         const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
         const my = resp.data.filter(a => String(a.user) === String(userId) && a.sous_theme);
+        setSaisisseurAssignments(my);
         const subs = [];
         for (const a of my) {
           try {
@@ -374,6 +523,16 @@ function App({ forceVisitor = false }) {
       showToast('Ouverture de la modale avancée', 'info');
     }
   }, [showAdvancedConfig]);
+
+  useEffect(() => {
+    if (!isSaisisseur || !selectedSubTheme) return;
+    const assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
+    if (!assignment) return;
+
+    const draftedSubTheme = buildDraftSubTheme(selectedSubTheme, assignment);
+    const draftedRows = getTableRows(draftedSubTheme) || [];
+    setSelectedSubTheme((prev) => (prev ? { ...draftedSubTheme, data: draftedRows } : prev));
+  }, [isSaisisseur, saisisseurAssignments]);
 
   // Écoute globale pour ouvrir la config visiteur depuis le sous-thème
   useEffect(() => {
@@ -761,10 +920,11 @@ function App({ forceVisitor = false }) {
   const selectSubTheme = (sub) => {
     if (!sub) return setSelectedSubTheme(sub);
     try {
-      const rows = getTableRows(sub) || [];
-      setSelectedSubTheme({ ...sub, data: rows });
+      const draftedSub = buildDraftSubTheme(sub);
+      const rows = getTableRows(draftedSub) || [];
+      setSelectedSubTheme({ ...draftedSub, data: rows });
     } catch (e) {
-      setSelectedSubTheme(sub);
+      setSelectedSubTheme(buildDraftSubTheme(sub));
     }
   };
   const handleLogin = () => {
@@ -856,6 +1016,58 @@ function App({ forceVisitor = false }) {
     }
   };
 
+  const sanitizeUsefulLinks = (rawLinks) => {
+    if (!Array.isArray(rawLinks)) return [];
+    return rawLinks
+      .map((item) => {
+        const label = String(item?.label || '').trim();
+        let url = String(item?.url || '').trim();
+        if (!label || !url) return null;
+        if (!/^https?:\/\//i.test(url)) {
+          url = `https://${url}`;
+        }
+        return { label, url };
+      })
+      .filter(Boolean);
+  };
+
+  const saveSiteContent = async () => {
+    try {
+      setSavingSiteContent(true);
+      const payload = {
+        ...siteContentDraft,
+        useful_links: sanitizeUsefulLinks(siteContentDraft.useful_links),
+      };
+      const res = await axios.put(siteContentApi, payload);
+      const saved = {
+        about_title: String(res?.data?.about_title || payload.about_title || 'A propos de la plateforme'),
+        about_text: String(res?.data?.about_text || payload.about_text || ''),
+        contact_title: String(res?.data?.contact_title || payload.contact_title || 'Contact'),
+        contact_email: String(res?.data?.contact_email || payload.contact_email || ''),
+        contact_phone: String(res?.data?.contact_phone || payload.contact_phone || ''),
+        contact_address: String(res?.data?.contact_address || payload.contact_address || ''),
+        contact_hours: String(res?.data?.contact_hours || payload.contact_hours || ''),
+        useful_links: Array.isArray(res?.data?.useful_links) ? res.data.useful_links : payload.useful_links,
+      };
+      setSiteContent(saved);
+      setSiteContentDraft(saved);
+      showToast('Contenu mis a jour avec succes', 'success');
+    } catch (err) {
+      console.error('Erreur sauvegarde contenu site', err);
+      const serverData = err?.response?.data;
+      const serverError = serverData?.error;
+      const fieldErrors = serverData && typeof serverData === 'object'
+        ? Object.entries(serverData)
+            .filter(([k]) => k !== 'error')
+            .map(([k, v]) => `${k}: ${Array.isArray(v) ? v.join(', ') : String(v)}`)
+            .join(' | ')
+        : '';
+      showToast(serverError || fieldErrors || 'Erreur lors de la sauvegarde du contenu', 'error');
+    } finally {
+      setSavingSiteContent(false);
+    }
+  };
+
   const showConfirm = (message, onConfirm) => {
     setOpenThemeMenu(null);
     setOpenActionMenu(null);
@@ -903,6 +1115,15 @@ function App({ forceVisitor = false }) {
 
   const saveChartExclusions = async (chartId, excludedRowsList) => {
     try {
+      if (isSaisisseur) {
+        const nextCharts = (savedCharts || []).map((chart) => (
+          chart.id === chartId ? { ...chart, excluded_rows: excludedRowsList } : chart
+        ));
+        setSavedCharts(nextCharts);
+        await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
+        return;
+      }
+
       await axios.put(
         `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${chartId}/`,
         {
@@ -925,8 +1146,39 @@ function App({ forceVisitor = false }) {
   };
 
   const openEditTable = () => {
-    setEditTableRows(JSON.parse(JSON.stringify(getTableRows(selectedSubTheme) || [])));
+    const rowsCopy = JSON.parse(JSON.stringify(getTableRows(selectedSubTheme) || []));
+    const baseCols = (selectedSubTheme?.columns || []).length > 0
+      ? [...(selectedSubTheme.columns || [])]
+      : (rowsCopy[0] ? Object.keys(rowsCopy[0]) : []);
+
+    const normalizedRows = rowsCopy.map((row) =>
+      Object.fromEntries(baseCols.map((col) => [col, row?.[col] ?? '']))
+    );
+
+    setEditTableColumns(baseCols);
+    setEditTableRows(normalizedRows);
     setShowEditTable(true);
+  };
+
+  const handleEditColumnNameChange = (index, rawValue) => {
+    const nextName = String(rawValue ?? '');
+    const prevName = editTableColumns[index];
+    if (prevName === nextName) return;
+
+    const nextCols = [...editTableColumns];
+    nextCols[index] = nextName;
+    setEditTableColumns(nextCols);
+
+    setEditTableRows((prevRows) =>
+      (prevRows || []).map((row) => {
+        const nextRow = { ...row };
+        if (Object.prototype.hasOwnProperty.call(nextRow, prevName)) {
+          nextRow[nextName] = nextRow[prevName];
+          delete nextRow[prevName];
+        }
+        return nextRow;
+      })
+    );
   };
 
   const archiveTheme = async (id) => {
@@ -1254,16 +1506,35 @@ function App({ forceVisitor = false }) {
 
   const saveEditedTable = async () => {
     try {
+      const finalColumns = (editTableColumns || [])
+        .map((c) => String(c ?? '').trim())
+        .filter((c) => c !== '');
+
+      if (finalColumns.length === 0) {
+        alert('Veuillez définir au moins une colonne');
+        return;
+      }
+
+      if (new Set(finalColumns).size !== finalColumns.length) {
+        alert('Les noms des colonnes doivent être uniques');
+        return;
+      }
+
+      const normalizedRows = (editTableRows || []).map((row) =>
+        Object.fromEntries(finalColumns.map((col) => [col, row?.[col] ?? '']))
+      );
+
       if (isSaisisseur) {
         // Save table rows in assignment notes as draft
-        await saveDraftAssignmentForSaisisseur({ tables: editTableRows }, 'En cours');
+        await saveDraftAssignmentForSaisisseur({ tables: normalizedRows, columns_order: finalColumns }, 'En cours');
         alert('Brouillon de la table enregistré');
         setShowEditTable(false);
         return;
       }
 
       const res = await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
-        data_json: editTableRows,
+        data_json: normalizedRows,
+        columns_order: finalColumns,
       });
       const updated = res.data;
       selectSubTheme(updated);
@@ -1290,10 +1561,42 @@ function App({ forceVisitor = false }) {
     if (!confirm('Remplacer le tableau existant par ce fichier ?')) { if (e.target) e.target.value = null; return; }
     const fd = new FormData();
     fd.append('file', file);
+    fd.append('free_schema', 'true');
+
+    const readExcelRows = async (excelFile) => {
+      const buffer = await excelFile.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const sheetName = wb.SheetNames?.[0];
+      if (!sheetName) return { columns: [], rows: [] };
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+      const columns = rows.length > 0
+        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
+        : [];
+
+      const normalizedRows = (rows || []).map((row) =>
+        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
+      );
+      return { columns, rows: normalizedRows };
+    };
+
     try {
       if (isSaisisseur) {
-        // For saisisseur, do not directly replace the server table; store as a draft instead.
-        alert('Import non autorisé en tant que saisisseur. Utilisez l\'éditeur et cliquez sur "Enregistrer (brouillon)" pour enregistrer vos modifications.');
+        const imported = await readExcelRows(file);
+        if (!imported.columns.length) {
+          alert('Le fichier importé est vide ou sans colonnes exploitables.');
+          if (e.target) e.target.value = null;
+          return;
+        }
+
+        await saveDraftAssignmentForSaisisseur({
+          tables: imported.rows,
+          columns_order: imported.columns,
+        }, 'En cours');
+
+        setEditTableColumns(imported.columns);
+        setEditTableRows(imported.rows);
+        alert('Import effectué en brouillon (saisisseur).');
         if (e.target) e.target.value = null;
         return;
       }
@@ -1309,10 +1612,126 @@ function App({ forceVisitor = false }) {
       const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
       if (freshSub) {
         selectSubTheme(freshSub);
-        if (showEditTable) setEditTableRows(JSON.parse(JSON.stringify(getTableRows(freshSub) || [])));
+        if (showEditTable) {
+          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
+          const refreshedCols = (freshSub.columns || []).length > 0
+            ? [...(freshSub.columns || [])]
+            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
+          setEditTableColumns(refreshedCols);
+          setEditTableRows(
+            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
+          );
+        }
       }
     } catch (err) { console.error(err.response?.data || err); alert('Erreur lors de l\'import: ' + (err.response?.data?.error || err.message)); }
     if (e.target) e.target.value = null;
+  };
+
+  const handleSmartImportFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!confirm('Importer avec IA et remapper vers la structure actuelle du tableau ?')) { if (e.target) e.target.value = null; return; }
+    const fd = new FormData();
+    fd.append('file', file);
+    fd.append('free_schema', 'true');
+
+    const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+    const readExcelRows = async (excelFile) => {
+      const buffer = await excelFile.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const sheetName = wb.SheetNames?.[0];
+      if (!sheetName) return { columns: [], rows: [] };
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+      const columns = rows.length > 0
+        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
+        : [];
+      const normalizedRows = (rows || []).map((row) =>
+        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
+      );
+      return { columns, rows: normalizedRows };
+    };
+
+    try {
+      if (isSaisisseur) {
+        const imported = await readExcelRows(file);
+        if (!imported.columns.length) {
+          alert('Le fichier importé est vide ou sans colonnes exploitables.');
+          if (e.target) e.target.value = null;
+          return;
+        }
+
+        const targetColumns = (editTableColumns && editTableColumns.length > 0)
+          ? editTableColumns
+          : (selectedSubTheme?.columns || (getTableRows(selectedSubTheme)?.[0] ? Object.keys(getTableRows(selectedSubTheme)[0]) : []));
+
+        if (!targetColumns || targetColumns.length === 0) {
+          await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
+          setEditTableColumns(imported.columns);
+          setEditTableRows(imported.rows);
+          alert('Import brouillon effectué. Aucune structure cible trouvée, colonnes source conservées.');
+          if (e.target) e.target.value = null;
+          return;
+        }
+
+        const sourceByNorm = new Map(imported.columns.map((c) => [normalizeCol(c), c]));
+        const mappedRows = imported.rows.map((r) => {
+          const out = {};
+          targetColumns.forEach((tc) => {
+            const src = sourceByNorm.get(normalizeCol(tc));
+            out[tc] = src ? (r?.[src] ?? '') : '';
+          });
+          return out;
+        });
+
+        await saveDraftAssignmentForSaisisseur({
+          tables: mappedRows,
+          columns_order: targetColumns,
+        }, 'En cours');
+
+        setEditTableColumns(targetColumns);
+        setEditTableRows(mappedRows);
+        alert('Import "IA" brouillon effectué (remappage local vers la structure cible).');
+        if (e.target) e.target.value = null;
+        return;
+      }
+
+      setIsSmartImporting(true);
+      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import-smart/`, fd);
+      const warnings = result?.data?.warnings || [];
+      if (warnings.length > 0) {
+        alert(`Import IA termine: ${warnings.join(' | ')}`);
+      } else {
+        alert('Import IA reussi');
+      }
+
+      // refresh
+      const themesRes = await axios.get(themesApiBase);
+      setThemes(themesRes.data);
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
+      if (freshTheme) setSelectedTheme(freshTheme);
+      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
+        || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
+      if (freshSub) {
+        selectSubTheme(freshSub);
+        if (showEditTable) {
+          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
+          const refreshedCols = (freshSub.columns || []).length > 0
+            ? [...(freshSub.columns || [])]
+            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
+          setEditTableColumns(refreshedCols);
+          setEditTableRows(
+            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
+          );
+        }
+      }
+    } catch (err) {
+      console.error(err.response?.data || err);
+      alert('Erreur lors de l\'import IA: ' + (err.response?.data?.error || err.message));
+    } finally {
+      setIsSmartImporting(false);
+      if (e.target) e.target.value = null;
+    }
   };
 
   const getExportSnapshot = () => {
@@ -2038,12 +2457,15 @@ function App({ forceVisitor = false }) {
 
     try {
       if (isSaisisseur) {
-        // Save chart config in assignment notes as draft
-        const newChart = { ...currentChartConfig };
-        // remove transient props
-        delete newChart.__temp;
-        // Merge into existing draft
-        await saveDraftAssignmentForSaisisseur({ charts: (savedCharts || []).concat(newChart) }, 'En cours');
+        const nextChart = { ...currentChartConfig };
+        delete nextChart.__temp;
+
+        const nextCharts = currentChartConfig.id
+          ? (savedCharts || []).map((chart) => (chart.id === currentChartConfig.id ? nextChart : chart))
+          : [...(savedCharts || []), { ...nextChart, id: nextChart.id || `draft-${Date.now()}` }];
+
+        setSavedCharts(nextCharts);
+        await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
         setIsModalOpen(false);
         setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '', group_by: '' });
         return;
@@ -2112,6 +2534,13 @@ function App({ forceVisitor = false }) {
   const deleteChart = async (id) => {
     if (!confirm('Supprimer ce graphique ?')) return;
     try {
+      if (isSaisisseur) {
+        const nextCharts = (savedCharts || []).filter((chart) => chart.id !== id);
+        setSavedCharts(nextCharts);
+        await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
+        return;
+      }
+
       await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
       setSavedCharts(prev => prev.filter(c => c.id !== id));
       // refresh subtheme
@@ -2594,16 +3023,19 @@ function App({ forceVisitor = false }) {
 
   // --- RENDU PRINCIPAL (Admin) ---
   return (
-    <div className="flex min-h-screen bg-[#5E0738] font-sans">
+    <div className="app-shell flex min-h-screen bg-[var(--color-bg)] text-[var(--color-text-main)]">
       
       {/* 1. MENU LATÉRAL */}
-      <div className="w-64 bg-[#dcdad6] border-r border-[#d0ceca] flex flex-col">
-        <div className="p-4 bg-white border-b border-[#d7d7d7] flex flex-col items-center min-h-[210px]">
+      <div className="w-64 bg-[var(--color-surface)] border-r border-[var(--color-border)] flex flex-col shadow-sm">
+        <div className="p-4 bg-[var(--color-surface)] border-b border-[var(--color-border)] flex flex-col items-center min-h-[210px]">
           <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
-        <div className="bg-[#c9c9c9] text-[#111111] py-2 px-4 font-bold text-center border-b border-[#d0ceca]">Menu</div>
+        <div className="bg-[#f9fafb] text-[var(--color-text-main)] py-2 px-4 font-semibold text-center border-b border-[var(--color-border)]">Menu</div>
         <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
         <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
+        <SidebarButton label="A propos" active={activeMenu === 'APropos'} onClick={() => { setActiveMenu('APropos'); setFormStep(0); }} />
+        <SidebarButton label="Contact" active={activeMenu === 'Contact'} onClick={() => { setActiveMenu('Contact'); setFormStep(0); }} />
+        <SidebarButton label="Liens utiles" active={activeMenu === 'LiensUtiles'} onClick={() => { setActiveMenu('LiensUtiles'); setFormStep(0); }} />
         {canEdit && (
           <>
             <SidebarButton
@@ -2617,7 +3049,7 @@ function App({ forceVisitor = false }) {
 
       {/* 2. CONTENU PRINCIPAL */}
       <div className="flex-1 flex flex-col">
-        <div className="bg-[#7A0A4A] px-6 py-3 border-b border-[#B03372] flex items-center gap-4 shadow-[0_2px_8px_rgba(0,0,0,0.18)] relative">
+        <div className="bg-[var(--color-primary)] px-6 py-3 border-b border-[#9b2b64] flex items-center gap-4 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative">
           <h1 className="text-white text-[28px] md:text-[34px] font-bold text-center tracking-wide leading-tight flex-1">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
@@ -2625,13 +3057,13 @@ function App({ forceVisitor = false }) {
             <div className="flex items-center gap-2">
               <button
                 onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }}
-                className="bg-[#7A0A4A] hover:bg-[#5E0738] text-white font-bold py-2 px-3 rounded border border-[#b84c83]"
+                className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold py-2 px-3 rounded-xl border border-[#b84c83]"
               >
                 Parametres
               </button>
               <button
                 onClick={handleLogout}
-                className="bg-[#5E0738] hover:bg-[#4A062E] text-white font-bold py-2 px-3 rounded border border-[#7A0A4A]"
+                className="bg-[var(--color-primary-hover)] hover:bg-[#4A062E] text-white font-semibold py-2 px-3 rounded-xl border border-[#7A0A4A]"
               >
                 Deconnexion
               </button>
@@ -2639,8 +3071,8 @@ function App({ forceVisitor = false }) {
           )}
         </div>
 
-        <div className="bg-[#7A0A4A] px-6 py-2 border-b border-[#B03372] flex items-center gap-3">
-          <span className="bg-[#B03372] text-white px-4 py-1 font-bold rounded-sm">INFOS</span>
+        <div className="bg-[var(--color-primary)] px-6 py-2 border-b border-[#9b2b64] flex items-center gap-3">
+          <span className="bg-[#a12863] text-white px-4 py-1 font-semibold rounded-xl">INFOS</span>
           {canEdit && userRole === 'ADMIN' && activeMenu === 'Admin' ? (
             <div className="flex-1 flex items-center gap-2">
               <input
@@ -2648,24 +3080,24 @@ function App({ forceVisitor = false }) {
                 value={infoBannerDraft}
                 onChange={(e) => setInfoBannerDraft(e.target.value)}
                 placeholder="Ecrire une information pour les visiteurs..."
-                className="bg-white text-[#7A0A4A] px-4 py-1.5 flex-1 rounded-sm font-medium border border-[#c9c9c9] outline-none focus:border-[#B03372]"
+                className="bg-[var(--color-surface)] text-[var(--color-primary)] px-4 py-1.5 flex-1 rounded-xl font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
               />
               <button
                 type="button"
                 onClick={saveInfoBanner}
                 disabled={savingInfoBanner}
-                className={`px-4 py-1.5 rounded-sm font-bold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#B03372] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
+                className={`px-4 py-1.5 rounded-xl font-semibold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
               >
                 {savingInfoBanner ? 'Validation...' : 'Valider'}
               </button>
             </div>
           ) : (
-            <div className="bg-white text-[#7A0A4A] px-4 py-1.5 flex-1 rounded-sm font-medium">{infoBannerText}</div>
+            <div className="bg-[var(--color-surface)] text-[var(--color-primary)] px-4 py-1.5 flex-1 rounded-xl font-medium border border-[var(--color-border)]">{infoBannerText}</div>
           )}
         </div>
 
-        {formStep !== 4 && activeMenu !== 'Admin' && (
-          <div className={`px-6 bg-[#E8DFC0] border-b border-[#CCB47F] ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
+        {formStep !== 4 && activeMenu !== 'Admin' && !isInfoMenu && (
+          <div className={`px-6 bg-[#f4f5f7] border-b border-[var(--color-border)] ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
             {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
               <div className="flex items-center gap-2">
                 <button
@@ -2758,6 +3190,151 @@ function App({ forceVisitor = false }) {
             <AdministratorsPage isSaisisseur={isSaisisseur} />
           )}
 
+          {activeMenu === 'APropos' && (
+            <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
+              <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
+                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">{siteContent.about_title || 'A propos de la plateforme'}</h2>
+                {canEdit && userRole === 'ADMIN' ? (
+                  <div className="space-y-4">
+                    <input
+                      type="text"
+                      value={siteContentDraft.about_title || ''}
+                      onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, about_title: e.target.value }))}
+                      className="w-full p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                      placeholder="Titre de la page A propos"
+                    />
+                    <textarea
+                      value={siteContentDraft.about_text || ''}
+                      onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, about_text: e.target.value }))}
+                      className="w-full min-h-[220px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                      placeholder="Texte de presentation visible pour les visiteurs"
+                    />
+                    <div className="flex justify-end">
+                      <button
+                        onClick={saveSiteContent}
+                        disabled={savingSiteContent}
+                        className={`px-5 py-2 rounded-xl font-semibold border ${savingSiteContent ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]'}`}
+                      >
+                        {savingSiteContent ? 'Enregistrement...' : 'Enregistrer'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="leading-8 text-[#243447] whitespace-pre-wrap">{siteContent.about_text || 'Le contenu A propos sera bientot disponible.'}</div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'Contact' && (
+            <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
+              <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
+                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">{siteContent.contact_title || 'Contact'}</h2>
+                {canEdit && userRole === 'ADMIN' ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <input type="text" value={siteContentDraft.contact_title || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_title: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Titre de la page Contact" />
+                    <input type="email" value={siteContentDraft.contact_email || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_email: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Email de contact" />
+                    <input type="text" value={siteContentDraft.contact_phone || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_phone: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Telephone" />
+                    <input type="text" value={siteContentDraft.contact_hours || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_hours: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Horaires" />
+                    <textarea value={siteContentDraft.contact_address || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_address: e.target.value }))} className="md:col-span-2 min-h-[120px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Adresse postale" />
+                    <div className="md:col-span-2 flex justify-end">
+                      <button
+                        onClick={saveSiteContent}
+                        disabled={savingSiteContent}
+                        className={`px-5 py-2 rounded-xl font-semibold border ${savingSiteContent ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]'}`}
+                      >
+                        {savingSiteContent ? 'Enregistrement...' : 'Enregistrer'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[#243447]">
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Email</div><div>{siteContent.contact_email || 'contact@hcp.ma'}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Telephone</div><div>{siteContent.contact_phone || '-'}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Adresse</div><div className="whitespace-pre-wrap">{siteContent.contact_address || '-'}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Horaires</div><div>{siteContent.contact_hours || '-'}</div></div>
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          {activeMenu === 'LiensUtiles' && (
+            <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
+              <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
+                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">Liens utiles</h2>
+                {canEdit && userRole === 'ADMIN' ? (
+                  <div className="space-y-3">
+                    {(siteContentDraft.useful_links || []).map((link, idx) => (
+                      <div key={`link-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1.4fr_auto] gap-2 items-center">
+                        <input
+                          type="text"
+                          value={link?.label || ''}
+                          onChange={(e) => setSiteContentDraft((prev) => {
+                            const next = [...(prev.useful_links || [])];
+                            next[idx] = { ...(next[idx] || {}), label: e.target.value };
+                            return { ...prev, useful_links: next };
+                          })}
+                          placeholder="Label"
+                          className="p-2 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                        />
+                        <input
+                          type="text"
+                          value={link?.url || ''}
+                          onChange={(e) => setSiteContentDraft((prev) => {
+                            const next = [...(prev.useful_links || [])];
+                            next[idx] = { ...(next[idx] || {}), url: e.target.value };
+                            return { ...prev, useful_links: next };
+                          })}
+                          placeholder="https://exemple.ma"
+                          className="p-2 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links: (prev.useful_links || []).filter((_, i) => i !== idx) }))}
+                          className="px-3 py-2 rounded-xl border border-red-300 text-red-700 hover:bg-red-50"
+                        >
+                          Supprimer
+                        </button>
+                      </div>
+                    ))}
+                    <div className="flex flex-wrap gap-2 justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links: [...(prev.useful_links || []), { label: '', url: '' }] }))}
+                        className="px-4 py-2 rounded-xl border border-[#CCB47F] bg-[#f8f3e7] text-[#7A0A4A] font-semibold hover:bg-[#f2e9d2]"
+                      >
+                        + Ajouter un lien
+                      </button>
+                      <button
+                        onClick={saveSiteContent}
+                        disabled={savingSiteContent}
+                        className={`px-5 py-2 rounded-xl font-semibold border ${savingSiteContent ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]'}`}
+                      >
+                        {savingSiteContent ? 'Enregistrement...' : 'Enregistrer'}
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                    {(siteContent.useful_links || []).map((link, idx) => (
+                      <a
+                        key={`pub-link-${idx}`}
+                        href={link?.url}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="block border border-[#d8e4ec] rounded-xl p-4 bg-[#f8fafc] hover:bg-[#eef6fb]"
+                      >
+                        <div className="font-semibold text-[#7A0A4A]">{link?.label || 'Lien'}</div>
+                        <div className="text-sm text-[#2f4b5a] break-all">{link?.url || ''}</div>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* ÉTAPE 0 : GRILLE DES THÈMES */}
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
@@ -2819,7 +3396,7 @@ function App({ forceVisitor = false }) {
                       )}
                     </div>
                     <div className="flex mt-4 gap-2">
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <button onClick={(e) => { 
                           e.stopPropagation(); 
                           const rect = e.currentTarget.getBoundingClientRect(); 
@@ -2838,7 +3415,7 @@ function App({ forceVisitor = false }) {
                       )}
 
                       <div>
-                        {canEdit && (
+                        {canEdit && userRole === 'ADMIN' && (
                           <button onClick={(e) => { 
                               e.stopPropagation();
                               const rect = e.currentTarget.getBoundingClientRect();
@@ -2870,7 +3447,7 @@ function App({ forceVisitor = false }) {
               )}
 
               {/* Floating theme menu (renders at viewport level to avoid being clipped) */}
-              {openThemeMenu && (
+              {canEdit && userRole === 'ADMIN' && openThemeMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: themeMenuPos.left, top: themeMenuPos.top, zIndex: 9999 }}>
                   <div className="w-52 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
                     <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>
@@ -2953,7 +3530,7 @@ function App({ forceVisitor = false }) {
                 </div>
               )}
 
-              {openActionMenu && (
+              {canEdit && userRole === 'ADMIN' && openActionMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: actionMenuPos.left, top: actionMenuPos.top, zIndex: 9999 }}>
                   <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
                     <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
@@ -3314,7 +3891,7 @@ function App({ forceVisitor = false }) {
               {/* Affichage avec catégories ou sans */}
               {selectedCategorie ? (
                 // Affichage d'une seule catégorie
-                <div className="grid grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {selectedCategorie.sous_themes?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
                     <div 
                       key={st.id || i} 
@@ -3330,7 +3907,7 @@ function App({ forceVisitor = false }) {
                           setShowAll(false);
                         } catch (err) { console.error(err); }
                       }}
-                      className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-lg text-[#6E001F] font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
+                      className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md text-[#6E001F] font-bold text-left hover:scale-[1.01] transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                     >
                       {st.archived && (
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
@@ -3338,7 +3915,7 @@ function App({ forceVisitor = false }) {
                       <div className="text-[20px] leading-tight">
                         <span>{st.nom}</span>
                       </div>
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <div className="flex justify-center gap-2 mt-4 text-black">
                           <button onClick={(e) => { 
                             e.stopPropagation(); 
@@ -3410,7 +3987,7 @@ function App({ forceVisitor = false }) {
 
                     <div className="border-t border-[#B03372] opacity-70" />
 
-                    <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-6">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                       {(() => {
                         const sortedCats = (selectedTheme.categories || []).slice().sort((a, b) => a.ordre - b.ordre);
                         const allSubThemes = sortedCats.flatMap(cat =>
@@ -3442,7 +4019,7 @@ function App({ forceVisitor = false }) {
                                   setShowAll(false);
                                 } catch (err) { console.error(err); }
                               }}
-                              className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-lg text-[#6E001F] font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
+                              className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md text-[#6E001F] font-bold text-left hover:scale-[1.01] transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                             >
                               {st.archived && (
                                 <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
@@ -3451,7 +4028,7 @@ function App({ forceVisitor = false }) {
                               <div className="text-[20px] leading-tight">
                                 <span>{st.nom}</span>
                               </div>
-                              {canEdit && (
+                              {canEdit && userRole === 'ADMIN' && (
                                 <div className="flex justify-center gap-2 mt-4 text-black">
                                   <button onClick={(e) => {
                                     e.stopPropagation();
@@ -3497,7 +4074,7 @@ function App({ forceVisitor = false }) {
                   </div>
               ) : (
                 // Affichage sans catégories (thèmes classiques)
-                <div className="grid grid-cols-4 gap-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {selectedTheme.sous_themes && selectedTheme.sous_themes.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
                     <div 
                       key={st.id || i} 
@@ -3513,7 +4090,7 @@ function App({ forceVisitor = false }) {
                           setShowAll(false);
                         } catch (err) { console.error(err); }
                       }}
-                      className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-lg text-[#6E001F] font-bold text-left hover:scale-105 transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
+                      className={`relative cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md text-[#6E001F] font-bold text-left hover:scale-[1.01] transition-transform min-h-[120px] ${st.archived ? 'bg-gray-600 line-through opacity-80 text-white' : 'bg-[#E6A76A]'}`}
                     >
                       {st.archived && (
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
@@ -3521,7 +4098,7 @@ function App({ forceVisitor = false }) {
                       <div className="text-[20px] leading-tight">
                         <span>{st.nom}</span>
                       </div>
-                      {canEdit && (
+                      {canEdit && userRole === 'ADMIN' && (
                         <div className="flex justify-center gap-2 mt-4 text-black">
                           <button onClick={(e) => { 
                             e.stopPropagation(); 
@@ -3633,44 +4210,8 @@ function App({ forceVisitor = false }) {
                         onClick={async (e) => {
                           e.stopPropagation();
                           try {
-                            const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
-                            if (!userId) return alert('Utilisateur non identifié');
-
-                            const notes = {
-                              tables: editTableRows || [],
-                              charts: savedCharts || [],
-                              meta: subThemeMeta || {},
-                              visitor_defaults: modalVisitorDefaultFilters || {},
-                              advancedConfig: advancedConfig || {}
-                            };
-
-                            // Try to create, otherwise update existing assignment
-                            try {
-                              await axios.post('http://127.0.0.1:8000/api/user-theme-assignments/', {
-                                user: parseInt(userId, 10),
-                                theme: selectedSubTheme.theme,
-                                sous_theme: selectedSubTheme.id,
-                                statut: 'En cours',
-                                notes: JSON.stringify(notes)
-                              });
-                              showToast('Brouillon enregistré', 'success');
-                            } catch (err) {
-                              // unique constraint -> find existing assignment and patch
-                              try {
-                                const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
-                                const existing = resp.data.find(a => String(a.user) === String(userId) && a.sous_theme === selectedSubTheme.id);
-                                if (existing) {
-                                  await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(notes), statut: 'En cours' });
-                                  showToast('Brouillon mis à jour', 'success');
-                                } else {
-                                  console.error('Erreur création brouillon', err);
-                                  alert('Erreur lors de l\'enregistrement du brouillon');
-                                }
-                              } catch (err2) {
-                                console.error(err2);
-                                alert('Erreur lors de l\'enregistrement du brouillon');
-                              }
-                            }
+                            const notes = collectCurrentSaisisseurDraftPayload();
+                            await saveDraftAssignmentForSaisisseur(notes, 'En cours');
                           } catch (err) {
                             console.error(err);
                             alert('Impossible d\'enregistrer le brouillon');
@@ -3686,46 +4227,30 @@ function App({ forceVisitor = false }) {
                           e.stopPropagation();
                           if (!confirm('Envoyer ce sous-thème aux administrateurs pour révision ?')) return;
                           try {
-                            const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
-                            if (!userId) return alert('Utilisateur non identifié');
-
-                            const notes = {
-                              tables: editTableRows || [],
-                              charts: savedCharts || [],
-                              meta: subThemeMeta || {},
-                              visitor_defaults: modalVisitorDefaultFilters || {},
-                              advancedConfig: advancedConfig || {}
-                            };
-
-                            // Try create, otherwise patch existing -> set statut 'En attente'
-                            try {
-                              await axios.post('http://127.0.0.1:8000/api/user-theme-assignments/', {
-                                user: parseInt(userId, 10),
-                                theme: selectedSubTheme.theme,
-                                sous_theme: selectedSubTheme.id,
-                                statut: 'En attente',
-                                notes: JSON.stringify(notes)
-                              });
-                              showToast('Soumis aux administrateurs', 'success');
-                            } catch (err) {
-                              try {
-                                const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
-                                const existing = resp.data.find(a => String(a.user) === String(userId) && a.sous_theme === selectedSubTheme.id);
-                                if (existing) {
-                                  await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(notes), statut: 'En attente' });
-                                  showToast('Soumission mise à jour', 'success');
-                                } else {
-                                  console.error('Erreur soumission', err);
-                                  alert('Erreur lors de la soumission');
-                                }
-                              } catch (err2) {
-                                console.error(err2);
-                                alert('Erreur lors de la soumission');
-                              }
+                            const notes = collectCurrentSaisisseurDraftPayload();
+                            await saveDraftAssignmentForSaisisseur(notes, 'En cours');
+                            let assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
+                            if (!assignment?.id) {
+                              const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+                              const refreshResp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+                              const myAssignments = (refreshResp.data || []).filter((a) => String(a.user) === String(userId) && a.sous_theme);
+                              setSaisisseurAssignments(myAssignments);
+                              assignment = myAssignments.find((a) => String(a.sous_theme) === String(selectedSubTheme.id));
                             }
+
+                            if (!assignment?.id) {
+                              throw new Error('Assignation introuvable pour ce sous-thème.');
+                            }
+
+                            const submitRes = await axios.post(`http://127.0.0.1:8000/api/user-theme-assignments/${assignment.id}/submit/`, {
+                              message: 'Soumission depuis l\'éditeur du sous-thème',
+                              progression: 100,
+                            });
+                            applyUpdatedAssignmentToState(submitRes.data);
+                            showToast('Soumis aux administrateurs', 'success');
                           } catch (err) {
                             console.error(err);
-                            alert('Impossible de soumettre');
+                            alert(err?.response?.data?.error || err?.message || 'Impossible de soumettre');
                           }
                         }}
                         className="bg-blue-600 text-white px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-blue-700"
@@ -4426,6 +4951,10 @@ function App({ forceVisitor = false }) {
                 Remplacer par un fichier
                 <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFileChange} />
               </label>
+              <label className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer ${isSmartImporting ? 'bg-gray-300' : 'bg-[#ffcf80]'}`}>
+                {isSmartImporting ? 'Import IA...' : 'Importer avec IA'}
+                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleSmartImportFileChange} disabled={isSmartImporting} />
+              </label>
               <div className="text-sm italic text-gray-600">Choisir un fichier Excel pour remplacer le tableau actuel</div>
             </div>
 
@@ -4433,8 +4962,14 @@ function App({ forceVisitor = false }) {
               <table className="w-full border-collapse">
                 <thead>
                   <tr>
-                    {(selectedSubTheme.columns || []).map(col => (
-                      <th key={col} className="p-2 border border-gray-300 text-xs">{col}</th>
+                    {(editTableColumns || []).map((col, ci) => (
+                      <th key={`${col}-${ci}`} className="p-2 border border-gray-300 text-xs">
+                        <input
+                          className="w-full p-1 text-xs font-semibold border border-gray-200 rounded"
+                          value={col}
+                          onChange={(e) => handleEditColumnNameChange(ci, e.target.value)}
+                        />
+                      </th>
                     ))}
                     <th className="p-2 border border-gray-300 text-xs">Actions</th>
                   </tr>
@@ -4442,8 +4977,8 @@ function App({ forceVisitor = false }) {
                 <tbody>
                   {editTableRows.map((row, ri) => (
                     <tr key={ri} className="hover:bg-gray-50">
-                      {(selectedSubTheme.columns || []).map(col => (
-                        <td key={col} className="p-1 border">
+                      {(editTableColumns || []).map((col, ci) => (
+                        <td key={`${col}-${ci}`} className="p-1 border">
                           <input className="w-full p-1 text-xs" value={row[col] ?? ''} onChange={e => { const r = [...editTableRows]; r[ri] = {...r[ri], [col]: e.target.value}; setEditTableRows(r); }} />
                         </td>
                       ))}
@@ -4457,7 +4992,7 @@ function App({ forceVisitor = false }) {
             </div>
 
             <div className="flex gap-4 mt-4">
-              <button onClick={() => setEditTableRows(prev => [...prev, Object.fromEntries((selectedSubTheme.columns || []).map(c => [c, '']))])} className="bg-green-400 text-white px-4 py-2 rounded">Ajouter ligne</button>
+              <button onClick={() => setEditTableRows(prev => [...prev, Object.fromEntries((editTableColumns || []).map(c => [c, '']))])} className="bg-green-400 text-white px-4 py-2 rounded">Ajouter ligne</button>
               <div className="flex-1" />
               <button onClick={() => setShowEditTable(false)} className="bg-gray-200 px-4 py-2 rounded">Annuler</button>
               <button onClick={saveEditedTable} className="bg-[#ffb366] px-4 py-2 rounded">Enregistrer</button>
@@ -4527,6 +5062,28 @@ function App({ forceVisitor = false }) {
                   // parse filters text into array before saving
                   const parsed = String(advancedConfigFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== '');
                   setSubThemeMeta({...subThemeMeta, niveau_geo: advancedConfig.niveau_geo, type_unite: advancedConfig.type_unite, est_sommable: advancedConfig.est_sommable, filtres_disponibles: parsed});
+                  if (isSaisisseur) {
+                    setSelectedSubTheme((prev) => prev ? {
+                      ...prev,
+                      niveau_geo: advancedConfig.niveau_geo,
+                      type_unite: advancedConfig.type_unite,
+                      est_sommable: advancedConfig.est_sommable,
+                      filtres_disponibles: parsed,
+                    } : prev);
+                    setAdvancedConfig(prev => ({ ...prev, filtres_disponibles: parsed }));
+                    await saveDraftAssignmentForSaisisseur({
+                      advancedConfig: {
+                        niveau_geo: advancedConfig.niveau_geo,
+                        type_unite: advancedConfig.type_unite,
+                        est_sommable: advancedConfig.est_sommable,
+                        filtres_disponibles: parsed,
+                      }
+                    }, 'En cours');
+                    showToast('Configuration avancée enregistrée en brouillon', 'success');
+                    setShowAdvancedConfig(false);
+                    return;
+                  }
+
                   await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
                     niveau_geo: advancedConfig.niveau_geo,
                     type_unite: advancedConfig.type_unite,
@@ -4970,7 +5527,7 @@ function App({ forceVisitor = false }) {
       )}
 
       {/* Modal for renaming / adding sub-theme */}
-      {openSubActionMenu && (
+      {canEdit && userRole === 'ADMIN' && openSubActionMenu && (
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subActionMenuPos.left, top: subActionMenuPos.top, zIndex: 9999 }}>
           <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
@@ -4986,7 +5543,7 @@ function App({ forceVisitor = false }) {
         </div>
       )}
 
-      {openSubThemeMenu && (
+      {canEdit && userRole === 'ADMIN' && openSubThemeMenu && (
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subThemeMenuPos.left, top: subThemeMenuPos.top, zIndex: 9999 }}>
           <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Options</div>

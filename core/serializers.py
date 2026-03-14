@@ -1,5 +1,5 @@
 from rest_framework import serializers
-from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie, UserThemeAssignment, UserRequest, InfoBanner
+from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie, UserThemeAssignment, UserRequest, InfoBanner, SiteContent
 
 
 def _normalize_name(value):
@@ -237,3 +237,35 @@ class InfoBannerSerializer(serializers.ModelSerializer):
         model = InfoBanner
         fields = ['id', 'message', 'updated_at', 'updated_by', 'updated_by_name']
         read_only_fields = ['updated_at', 'updated_by', 'updated_by_name']
+
+
+class SiteContentSerializer(serializers.ModelSerializer):
+    updated_by_name = serializers.ReadOnlyField(source='updated_by.username')
+
+    class Meta:
+        model = SiteContent
+        fields = [
+            'id',
+            'about_title',
+            'about_text',
+            'contact_title',
+            'contact_email',
+            'contact_phone',
+            'contact_address',
+            'contact_hours',
+            'useful_links',
+            'updated_at',
+            'updated_by',
+            'updated_by_name',
+        ]
+        read_only_fields = ['updated_at', 'updated_by', 'updated_by_name']
+        extra_kwargs = {
+            'about_title': {'required': False, 'allow_blank': True},
+            'about_text': {'required': False, 'allow_blank': True},
+            'contact_title': {'required': False, 'allow_blank': True},
+            'contact_email': {'required': False, 'allow_blank': True},
+            'contact_phone': {'required': False, 'allow_blank': True},
+            'contact_address': {'required': False, 'allow_blank': True},
+            'contact_hours': {'required': False, 'allow_blank': True},
+            'useful_links': {'required': False},
+        }
