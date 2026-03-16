@@ -186,8 +186,11 @@ function App({ forceVisitor = false }) {
 
     if (Array.isArray(notes.columns_order) && notes.columns_order.length > 0) {
       draftSubTheme.columns_order = notes.columns_order;
+      draftSubTheme.columns = notes.columns_order;
     } else if (Array.isArray(notes.tables) && notes.tables[0]) {
-      draftSubTheme.columns_order = Object.keys(notes.tables[0]);
+      const inferredColumns = Object.keys(notes.tables[0]);
+      draftSubTheme.columns_order = inferredColumns;
+      draftSubTheme.columns = inferredColumns;
     }
 
     if (Array.isArray(notes.charts)) {
@@ -258,13 +261,17 @@ function App({ forceVisitor = false }) {
   // Helper: when a saisisseur saves, persist changes as a draft in UserThemeAssignment.notes
   const saveDraftAssignmentForSaisisseur = async (partialNotes = {}, statut = 'En cours') => {
     try {
+      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurRequestConfig = saisisseurToken
+        ? { headers: { Authorization: `Token ${saisisseurToken}` } }
+        : {};
       const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
       if (!userId) return alert('Utilisateur non identifié (saisisseur)');
       if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
 
       let existing = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
       if (!existing) {
-        const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+        const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/', saisisseurRequestConfig);
         const myAssignments = (resp.data || []).filter((assignment) => String(assignment.user) === String(userId) && assignment.sous_theme);
         setSaisisseurAssignments(myAssignments);
         existing = myAssignments.find((assignment) => String(assignment.sous_theme) === String(selectedSubTheme.id));
@@ -282,7 +289,11 @@ function App({ forceVisitor = false }) {
       }
       mergedNotes = { ...mergedNotes, ...partialNotes };
 
-      const patchResponse = await axios.patch(`http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`, { notes: JSON.stringify(mergedNotes), statut });
+      const patchResponse = await axios.patch(
+        `http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`,
+        { notes: JSON.stringify(mergedNotes), statut },
+        saisisseurRequestConfig,
+      );
       applyUpdatedAssignmentToState(patchResponse.data);
 
       // Note: do not mutate global selected subtheme or charts here. Drafts are stored
@@ -583,14 +594,39 @@ function App({ forceVisitor = false }) {
         const filters = normalizeFilters(rawFilters);
         const hierarchy = normalizeFilters(found.visitor_pivot_columns || []);
 
-        setModalVisitorCols(cols);
-        setModalVisitorFilters(filters);
-        setModalVisitorHierarchy(hierarchy);
-        setModalVisitorColsText(Array.isArray(cols) ? cols.join(', ') : String(cols || ''));
-        setModalVisitorFiltersText(filters.join(', '));
-        setModalVisitorHierarchyText(hierarchy.join(', '));
-        setModalVisitorDefaultView((found.visitor_default_view === 'vertical') ? 'vertical' : 'horizontal');
-        setModalVisitorDefaultFilters(parseDefaultsString(found.visitor_default_filters || {}));
+        // Start with the live SousTheme values
+        let vcCols = cols;
+        let vcFilters = filters;
+        let vcHierarchy = hierarchy;
+        let vcDefaultView = (found.visitor_default_view === 'vertical') ? 'vertical' : 'horizontal';
+        let vcDefaultFilters = parseDefaultsString(found.visitor_default_filters || {});
+
+        // If saisisseur, prefer the pending visitor_config stored in assignment notes
+        if (isSaisisseur) {
+          const assignmentForSt = getSaisisseurAssignmentForSubTheme(found.id);
+          if (assignmentForSt) {
+            try {
+              const notesParsed = assignmentForSt.notes ? JSON.parse(assignmentForSt.notes) : {};
+              const vc = notesParsed.visitor_config;
+              if (vc && typeof vc === 'object') {
+                if (Array.isArray(vc.visitor_visible_columns)) vcCols = vc.visitor_visible_columns;
+                if (Array.isArray(vc.visitor_filters)) vcFilters = vc.visitor_filters;
+                if (Array.isArray(vc.visitor_pivot_columns)) vcHierarchy = vc.visitor_pivot_columns;
+                if (vc.visitor_default_view) vcDefaultView = vc.visitor_default_view === 'vertical' ? 'vertical' : 'horizontal';
+                if (vc.visitor_default_filters) vcDefaultFilters = parseDefaultsString(vc.visitor_default_filters);
+              }
+            } catch (_) {}
+          }
+        }
+
+        setModalVisitorCols(vcCols);
+        setModalVisitorFilters(vcFilters);
+        setModalVisitorHierarchy(vcHierarchy);
+        setModalVisitorColsText(Array.isArray(vcCols) ? vcCols.join(', ') : String(vcCols || ''));
+        setModalVisitorFiltersText(vcFilters.join(', '));
+        setModalVisitorHierarchyText(vcHierarchy.join(', '));
+        setModalVisitorDefaultView(vcDefaultView);
+        setModalVisitorDefaultFilters(vcDefaultFilters);
         setConfigModalOpen(true);
       } catch (err) {
         console.error('Erreur ouverture config visiteur', err);
@@ -600,7 +636,7 @@ function App({ forceVisitor = false }) {
 
     window.addEventListener('openVisitorConfig', handler);
     return () => window.removeEventListener('openVisitorConfig', handler);
-  }, [themes]);
+  }, [themes, isSaisisseur, saisisseurAssignments]);
 
   useEffect(() => {
     setSavedCharts(selectedSubTheme?.charts_config || []);
@@ -972,24 +1008,78 @@ function App({ forceVisitor = false }) {
     setUserRole('');
   };
 
+  const resolveCurrentAuthStorage = () => {
+    let ctx = '';
+    try {
+      ctx = localStorage.getItem('auth_context') || '';
+    } catch (e) {
+      ctx = '';
+    }
+
+    if (!ctx) {
+      if (isSaisisseur) ctx = 'saisisseur';
+      else if (pathHasAdmin || userRole === 'ADMIN') ctx = 'admin';
+    }
+
+    if (ctx === 'saisisseur') {
+      return {
+        context: 'saisisseur',
+        userId: localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id'),
+        email: localStorage.getItem('user_email_saisisseur') || localStorage.getItem('user_email') || '',
+        token: localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token') || '',
+        emailKey: localStorage.getItem('user_email_saisisseur') !== null ? 'user_email_saisisseur' : 'user_email',
+      };
+    }
+
+    if (ctx === 'admin') {
+      return {
+        context: 'admin',
+        userId: localStorage.getItem('user_id_admin') || localStorage.getItem('user_id'),
+        email: localStorage.getItem('user_email_admin') || localStorage.getItem('user_email') || '',
+        token: localStorage.getItem('auth_token_admin') || localStorage.getItem('auth_token') || '',
+        emailKey: localStorage.getItem('user_email_admin') !== null ? 'user_email_admin' : 'user_email',
+      };
+    }
+
+    return {
+      context: 'default',
+      userId: localStorage.getItem('user_id') || '',
+      email: localStorage.getItem('user_email') || '',
+      token: localStorage.getItem('auth_token') || '',
+      emailKey: 'user_email',
+    };
+  };
+
   const updateAccount = async () => {
     if (settingsForm.newPassword && settingsForm.newPassword !== settingsForm.confirmPassword) {
       showToast('Les mots de passe ne correspondent pas', 'error');
       return;
     }
+
+    const auth = resolveCurrentAuthStorage();
+    if (!auth.userId) {
+      showToast('Utilisateur non identifié', 'error');
+      return;
+    }
+
     try {
-      const userId = localStorage.getItem('user_id');
       const payload = { email: settingsForm.email };
       if (settingsForm.newPassword) payload.password = settingsForm.newPassword;
-      
-      await axios.patch(`http://127.0.0.1:8000/api/users/${userId}/`, payload);
-      localStorage.setItem('user_email', settingsForm.email);
+
+      const requestConfig = auth.token
+        ? { headers: { Authorization: `Token ${auth.token}` } }
+        : undefined;
+
+      await axios.patch(`http://127.0.0.1:8000/api/users/${auth.userId}/`, payload, requestConfig);
+      localStorage.setItem(auth.emailKey, settingsForm.email);
+      if (auth.context === 'saisisseur') localStorage.setItem('user_email', settingsForm.email);
       showToast('Informations mises à jour', 'success');
       setShowSettings(false);
       setSettingsForm({ email: '', newPassword: '', confirmPassword: '' });
     } catch (err) {
       console.error(err);
-      showToast('Erreur lors de la mise à jour', 'error');
+      const serverError = err?.response?.data?.error;
+      showToast(serverError || 'Erreur lors de la mise à jour', 'error');
     }
   };
 
@@ -2186,10 +2276,22 @@ function App({ forceVisitor = false }) {
 
   const visibleColumnsForRender = React.useMemo(() => {
     if (!selectedSubTheme) return [];
+    const fallbackColumns =
+      (Array.isArray(selectedSubTheme.columns) && selectedSubTheme.columns.length > 0)
+        ? selectedSubTheme.columns
+        : (Array.isArray(selectedSubTheme.columns_order) && selectedSubTheme.columns_order.length > 0)
+          ? selectedSubTheme.columns_order
+          : (() => {
+              const rows = getTableRows(selectedSubTheme) || [];
+              return rows[0] ? Object.keys(rows[0]) : [];
+            })();
+
     if (isVisitor) {
-      return (selectedSubTheme.visitor_visible_columns && selectedSubTheme.visitor_visible_columns.length) ? selectedSubTheme.visitor_visible_columns : (selectedSubTheme.columns || []);
+      return (selectedSubTheme.visitor_visible_columns && selectedSubTheme.visitor_visible_columns.length)
+        ? selectedSubTheme.visitor_visible_columns
+        : fallbackColumns;
     }
-    return selectedSubTheme.columns || [];
+    return fallbackColumns;
   }, [selectedSubTheme, isVisitor]);
 
   const filtersForRender = React.useMemo(() => {
@@ -2969,6 +3071,19 @@ function App({ forceVisitor = false }) {
       null
     );
   };
+  const assignedSubThemeIdSet = React.useMemo(() => {
+    return new Set(
+      (saisisseurAssignments || [])
+        .filter((a) => a && a.sous_theme && a.assignment_archived !== true)
+        .map((a) => String(a.sous_theme))
+    );
+  }, [saisisseurAssignments]);
+
+  const isSubThemeVisibleForCurrentRole = (subTheme) => {
+    if (!isSaisisseur) return true;
+    if (!subTheme?.id) return false;
+    return assignedSubThemeIdSet.has(String(subTheme.id));
+  };
   const indicatorsSubThemes = themes.flatMap(theme => {
     const directSubThemes = (theme.sous_themes || []).map(st => ({
       ...st,
@@ -2989,7 +3104,7 @@ function App({ forceVisitor = false }) {
       if (!byId.has(st.id)) byId.set(st.id, st);
     });
     return Array.from(byId.values());
-  });
+  }).filter(st => isSubThemeVisibleForCurrentRole(st));
 
   // Affiche le loading ou la page de login/admin
   if (authLoading) {
@@ -3056,7 +3171,11 @@ function App({ forceVisitor = false }) {
           {canEdit && (
             <div className="flex items-center gap-2">
               <button
-                onClick={() => { setSettingsForm({ email: localStorage.getItem('user_email') || '', newPassword: '', confirmPassword: '' }); setShowSettings(true); }}
+                onClick={() => {
+                  const auth = resolveCurrentAuthStorage();
+                  setSettingsForm({ email: auth.email || '', newPassword: '', confirmPassword: '' });
+                  setShowSettings(true);
+                }}
                 className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold py-2 px-3 rounded-xl border border-[#b84c83]"
               >
                 Parametres
@@ -3892,7 +4011,10 @@ function App({ forceVisitor = false }) {
               {selectedCategorie ? (
                 // Affichage d'une seule catégorie
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {selectedCategorie.sous_themes?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
+                  {selectedCategorie.sous_themes
+                    ?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                    .filter(st => isSubThemeVisibleForCurrentRole(st))
+                    .map((st, i) => (
                     <div 
                       key={st.id || i} 
                       onClick={async () => { 
@@ -4004,6 +4126,7 @@ function App({ forceVisitor = false }) {
 
                         return Array.from(byId.values())
                           .filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                          .filter(st => isSubThemeVisibleForCurrentRole(st))
                           .map((st, i) => (
                             <div
                               key={st.id || i}
@@ -4075,7 +4198,10 @@ function App({ forceVisitor = false }) {
               ) : (
                 // Affichage sans catégories (thèmes classiques)
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                  {selectedTheme.sous_themes && selectedTheme.sous_themes.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase())).map((st, i) => (
+                  {selectedTheme.sous_themes && selectedTheme.sous_themes
+                    .filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                    .filter(st => isSubThemeVisibleForCurrentRole(st))
+                    .map((st, i) => (
                     <div 
                       key={st.id || i} 
                       onClick={async () => { 
@@ -4227,12 +4353,16 @@ function App({ forceVisitor = false }) {
                           e.stopPropagation();
                           if (!confirm('Envoyer ce sous-thème aux administrateurs pour révision ?')) return;
                           try {
+                            const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+                            const saisisseurRequestConfig = saisisseurToken
+                              ? { headers: { Authorization: `Token ${saisisseurToken}` } }
+                              : {};
                             const notes = collectCurrentSaisisseurDraftPayload();
                             await saveDraftAssignmentForSaisisseur(notes, 'En cours');
                             let assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
                             if (!assignment?.id) {
                               const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
-                              const refreshResp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+                              const refreshResp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/', saisisseurRequestConfig);
                               const myAssignments = (refreshResp.data || []).filter((a) => String(a.user) === String(userId) && a.sous_theme);
                               setSaisisseurAssignments(myAssignments);
                               assignment = myAssignments.find((a) => String(a.sous_theme) === String(selectedSubTheme.id));
@@ -4242,10 +4372,14 @@ function App({ forceVisitor = false }) {
                               throw new Error('Assignation introuvable pour ce sous-thème.');
                             }
 
-                            const submitRes = await axios.post(`http://127.0.0.1:8000/api/user-theme-assignments/${assignment.id}/submit/`, {
-                              message: 'Soumission depuis l\'éditeur du sous-thème',
-                              progression: 100,
-                            });
+                            const submitRes = await axios.post(
+                              `http://127.0.0.1:8000/api/user-theme-assignments/${assignment.id}/submit/`,
+                              {
+                                message: 'Soumission depuis l\'éditeur du sous-thème',
+                                progression: 100,
+                              },
+                              saisisseurRequestConfig,
+                            );
                             applyUpdatedAssignmentToState(submitRes.data);
                             showToast('Soumis aux administrateurs', 'success');
                           } catch (err) {
@@ -5374,9 +5508,46 @@ function App({ forceVisitor = false }) {
                     visitor_pivot_columns: parsedHierarchy,
                     visitor_default_view: modalVisitorDefaultView === 'vertical' ? 'vertical' : 'horizontal'
                   };
-                  await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`, payload);
-                  showToast('Configuration visiteur enregistrée', 'success');
-                  // update local text/array states to reflect saved values
+
+                  if (isSaisisseur) {
+                    // Saisisseur: store visitor config as a draft in assignment notes (pending admin validation)
+                    await saveDraftAssignmentForSaisisseur({ visitor_config: payload }, 'En cours');
+                    showToast('Configuration visiteur enregistrée (en attente de validation admin)', 'success');
+                  } else {
+                    // Admin: apply directly to the SousTheme
+                    await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`, payload);
+                    showToast('Configuration visiteur enregistrée', 'success');
+                    // fetch the updated sous-thème and update local state so the view refreshes immediately
+                    try {
+                      const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);
+                      const freshSubTheme = freshRes.data;
+                      selectSubTheme(freshSubTheme);
+                      // also refresh the themes list to keep things in sync
+                      const res = await axios.get(themesApiBase);
+                      setThemes(res.data);
+                      const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
+                      if (freshTheme) setSelectedTheme(freshTheme);
+                      // additionally refresh public themes so visitor view can update if needed
+                      try {
+                        const pub = await axios.get('http://127.0.0.1:8000/api/public-themes/');
+                        setPublicThemes(pub.data);
+                        if (typeof window !== 'undefined' && window.location.pathname.includes('/visiteur')) {
+                          setThemes(pub.data);
+                          // try to find the subtheme in public payload and set it
+                          for (const t of pub.data || []) {
+                            const st = (t.sous_themes || []).find(s => String(s.id) === String(configSubTheme.id));
+                            if (st) { selectSubTheme(st); break; }
+                          }
+                        }
+                      } catch (pubErr) {
+                        console.warn('Impossible de rafraîchir public-themes', pubErr);
+                      }
+                    } catch (refreshErr) {
+                      console.error('Erreur lors du rafraîchissement du sous-thème', refreshErr);
+                    }
+                  }
+
+                  // update modal state to reflect saved values
                   setModalVisitorCols(parsedCols);
                   setModalVisitorFilters(parsedFilters);
                   setModalVisitorHierarchy(parsedHierarchy);
@@ -5384,34 +5555,6 @@ function App({ forceVisitor = false }) {
                   setModalVisitorFiltersText(parsedFilters.join(', '));
                   setModalVisitorHierarchyText(parsedHierarchy.join(', '));
                   setVisitorTableView(modalVisitorDefaultView === 'vertical' ? 'vertical' : 'horizontal');
-                  // fetch the updated sous-thème and update local state so the view refreshes immediately
-                  try {
-                    const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);
-                    const freshSubTheme = freshRes.data;
-                    selectSubTheme(freshSubTheme);
-                    // also refresh the themes list to keep things in sync
-                    const res = await axios.get(themesApiBase);
-                    setThemes(res.data);
-                    const freshTheme = res.data.find(t => t.id === selectedTheme?.id);
-                    if (freshTheme) setSelectedTheme(freshTheme);
-                    // additionally refresh public themes so visitor view can update if needed
-                    try {
-                      const pub = await axios.get('http://127.0.0.1:8000/api/public-themes/');
-                      setPublicThemes(pub.data);
-                      if (typeof window !== 'undefined' && window.location.pathname.includes('/visiteur')) {
-                        setThemes(pub.data);
-                        // try to find the subtheme in public payload and set it
-                        for (const t of pub.data || []) {
-                          const st = (t.sous_themes || []).find(s => String(s.id) === String(configSubTheme.id));
-                          if (st) { selectSubTheme(st); break; }
-                        }
-                      }
-                    } catch (pubErr) {
-                      console.warn('Impossible de rafraîchir public-themes', pubErr);
-                    }
-                  } catch (refreshErr) {
-                    console.error('Erreur lors du rafraîchissement du sous-thème', refreshErr);
-                  }
                   setConfigModalOpen(false);
                 } catch (err) {
                   console.error(err);

@@ -1,3 +1,5 @@
+import json
+
 from rest_framework import serializers
 from .models import Theme, SousTheme, Indicateur, Donnee, CustomUser, Categorie, UserThemeAssignment, UserRequest, InfoBanner, SiteContent
 
@@ -207,6 +209,21 @@ class UserThemeAssignmentSerializer(serializers.ModelSerializer):
     theme_titre = serializers.ReadOnlyField(source='theme.titre')
     sous_theme_nom = serializers.ReadOnlyField(source='sous_theme.nom')
     indicateur_libelle = serializers.ReadOnlyField(source='indicateur.libelle')
+    assignment_archived = serializers.SerializerMethodField()
+
+    def get_assignment_archived(self, obj):
+        raw_notes = obj.notes
+        if not raw_notes:
+            return False
+        if isinstance(raw_notes, dict):
+            return bool(raw_notes.get('assignment_archived', False))
+        try:
+            parsed = json.loads(raw_notes)
+            if isinstance(parsed, dict):
+                return bool(parsed.get('assignment_archived', False))
+        except Exception:
+            return False
+        return False
     
     class Meta:
         model = UserThemeAssignment
@@ -215,7 +232,7 @@ class UserThemeAssignmentSerializer(serializers.ModelSerializer):
             'theme', 'theme_titre', 'sous_theme', 'sous_theme_nom',
             'indicateur', 'indicateur_libelle', 'statut',
             'date_assignation', 'date_modification', 'date_completion',
-            'notes', 'progression', 'priorite'
+            'notes', 'progression', 'priorite', 'assignment_archived'
         ]
 
 class UserRequestSerializer(serializers.ModelSerializer):

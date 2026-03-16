@@ -1030,6 +1030,59 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
         })
         notes_obj['workflow_history'] = history
 
+    def _is_assignment_archived(self, assignment):
+        notes_obj = self._load_notes(assignment)
+        return bool(notes_obj.get('assignment_archived', False)) if isinstance(notes_obj, dict) else False
+
+    def create(self, request, *args, **kwargs):
+        # Création d'assignation réservée aux admins
+        if getattr(request.user, 'role', None) != 'ADMIN':
+            return Response({'error': 'Seuls les administrateurs peuvent créer des assignations.'}, status=status.HTTP_403_FORBIDDEN)
+
+        user_id = request.data.get('user')
+        theme_id = request.data.get('theme')
+        sous_theme_id = request.data.get('sous_theme')
+        indicateur_id = request.data.get('indicateur')
+
+        theme_id = None if theme_id in ['', None] else theme_id
+        sous_theme_id = None if sous_theme_id in ['', None] else sous_theme_id
+        indicateur_id = None if indicateur_id in ['', None] else indicateur_id
+
+        existing = UserThemeAssignment.objects.filter(
+            user_id=user_id,
+            theme_id=theme_id,
+            sous_theme_id=sous_theme_id,
+            indicateur_id=indicateur_id,
+        ).first()
+
+        # Si une assignation identique existe mais est archivée, on la réactive.
+        if existing:
+            if self._is_assignment_archived(existing):
+                notes_obj = self._load_notes(existing)
+                if not isinstance(notes_obj, dict):
+                    notes_obj = {}
+                notes_obj['assignment_archived'] = False
+                self._append_history(
+                    notes_obj,
+                    actor=request.user.username,
+                    action='admin_reassign_after_archive',
+                    message='Réaffectation après archivage',
+                )
+                self._save_notes(existing, notes_obj)
+
+                existing.statut = 'En cours'
+                existing.progression = 0
+                existing.date_completion = None
+                if request.data.get('priorite'):
+                    existing.priorite = request.data.get('priorite')
+                existing.save()
+
+                return Response(self.get_serializer(existing).data, status=status.HTTP_200_OK)
+
+            return Response({'error': 'Cette assignation existe déjà et est active.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        return super().create(request, *args, **kwargs)
+
     def perform_create(self, serializer):
         # Création d'assignation réservée aux admins
         if getattr(self.request.user, 'role', None) != 'ADMIN':
@@ -1053,6 +1106,36 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
             if any(field in request.data for field in forbidden_fields):
                 return Response({'error': 'Modification non autorisée pour ce champ.'}, status=status.HTTP_403_FORBIDDEN)
         return super().partial_update(request, *args, **kwargs)
+
+    @action(detail=True, methods=['post'], url_path='archive')
+    def archive_assignment(self, request, pk=None):
+        """Archive une assignation sans désactiver l'utilisateur lié."""
+        assignment = self.get_object()
+        if getattr(request.user, 'role', None) != 'ADMIN':
+            return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
+
+        notes_obj = self._load_notes(assignment)
+        notes_obj['assignment_archived'] = True
+        self._append_history(notes_obj, actor=request.user.username, action='admin_archive_assignment', message='Assignation archivée')
+        self._save_notes(assignment, notes_obj)
+        assignment.save()
+
+        return Response(self.get_serializer(assignment).data, status=status.HTTP_200_OK)
+
+    @action(detail=True, methods=['post'], url_path='unarchive')
+    def unarchive_assignment(self, request, pk=None):
+        """Désarchive une assignation sans modifier l'utilisateur lié."""
+        assignment = self.get_object()
+        if getattr(request.user, 'role', None) != 'ADMIN':
+            return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
+
+        notes_obj = self._load_notes(assignment)
+        notes_obj['assignment_archived'] = False
+        self._append_history(notes_obj, actor=request.user.username, action='admin_unarchive_assignment', message='Assignation désarchivée')
+        self._save_notes(assignment, notes_obj)
+        assignment.save()
+
+        return Response(self.get_serializer(assignment).data, status=status.HTTP_200_OK)
     
     @action(detail=True, methods=['patch'])
     def update_statut(self, request, pk=None):
@@ -1148,6 +1231,15 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
                 if 'visitor_defaults' in notes_obj:
                     sous_theme.visitor_default_filters = notes_obj.get('visitor_defaults') or {}
 
+                # Apply visitor config submitted by the saisisseur via the visitor config button
+                visitor_config = notes_obj.get('visitor_config')
+                if isinstance(visitor_config, dict):
+                    for field in ['visitor_visible_columns', 'visitor_filters', 'visitor_pivot_columns', 'visitor_default_view']:
+                        if field in visitor_config:
+                            setattr(sous_theme, field, visitor_config[field])
+                    if 'visitor_default_filters' in visitor_config:
+                        sous_theme.visitor_default_filters = visitor_config['visitor_default_filters'] or {}
+
                 sous_theme.save()
 
             assignment.statut = 'Complété'
@@ -1166,6 +1258,18 @@ class UserRequestViewSet(viewsets.ModelViewSet):
     queryset = UserRequest.objects.all().order_by('-date_creation')
     serializer_class = UserRequestSerializer
     permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        qs = super().get_queryset()
+        user = getattr(self.request, 'user', None)
+        if getattr(user, 'role', None) == 'ADMIN':
+            return qs
+        return qs.filter(created_by=user)
+
+    def list(self, request, *args, **kwargs):
+        if getattr(request.user, 'role', None) != 'ADMIN':
+            return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
+        return super().list(request, *args, **kwargs)
     
     @action(detail=False, methods=['post'])
     def create_user_with_email(self, request):
@@ -1305,6 +1409,8 @@ L'équipe HCP
     def update_statut(self, request, pk=None):
         """Met à jour le statut d'une demande"""
         try:
+            if getattr(request.user, 'role', None) != 'ADMIN':
+                return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
             user_request = self.get_object()
             new_statut = request.data.get('statut')
             
@@ -1376,6 +1482,8 @@ L'équipe HCP
     def reset_password(self, request, pk=None):
         """Réinitialise le mot de passe d'un utilisateur et envoie un email"""
         try:
+            if getattr(request.user, 'role', None) != 'ADMIN':
+                return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
             user_request = self.get_object()
             
             # Chercher l'utilisateur associé

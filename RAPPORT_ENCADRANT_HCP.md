@@ -228,13 +228,4 @@ La prochaine étape n'est pas une refonte d'architecture, mais un **durcissement
 
 ---
 
-# Annexe - Version courte pour email
-Bonjour,
 
-Le projet HCP est implémenté en architecture monolithe modulaire (Django/DRF) avec frontend React (SPA). Il couvre la gestion complète des thèmes/sous-thèmes, des utilisateurs et affectations, de la publication publique, ainsi que l'import intelligent de fichiers Excel.
-
-L'import intelligent a été renforcé : normalisation des tables croisées, adoption contrôlée du schéma entrant (free_schema), mapping IA et fallback heuristique en cas d'indisponibilité IA.
-
-Le système est opérationnel sur les parcours métier clés. Les chantiers restants avant production concernent surtout la sécurisation des secrets/configuration, l'augmentation de la couverture de tests et la modularisation frontend.
-
-Cordialement.

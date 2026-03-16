@@ -1,7 +1,25 @@
-import React, { useState, useEffect } from 'react';
+﻿import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import {
+  ResponsiveContainer,
+  CartesianGrid,
+  BarChart,
+  Bar,
+  Legend,
+  LineChart,
+  Line,
+  PieChart,
+  Pie,
+  Cell,
+  ScatterChart,
+  Scatter,
+  XAxis,
+  YAxis,
+  Tooltip,
+} from 'recharts';
 
 const API_BASE = 'http://127.0.0.1:8000/api';
+const ADMIN_SEEN_SUBMISSIONS_KEY = 'admin_seen_submission_markers';
 
 const AdministratorsPage = ({ isSaisisseur = false }) => {
   // État pour l'onglet actif
@@ -12,6 +30,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [assignments, setAssignments] = useState([]);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showRequestsModal, setShowRequestsModal] = useState(false);
+  const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [loading, setLoading] = useState(false);
   const [userRole, setUserRole] = useState(localStorage.getItem('user_role') || '');
   const [errorMessage, setErrorMessage] = useState('');
@@ -42,6 +61,18 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
   const [previewModalOpen, setPreviewModalOpen] = useState(false);
   const [previewContent, setPreviewContent] = useState(null);
+  const [previewTablePage, setPreviewTablePage] = useState(1);
+  const [previewPageSize, setPreviewPageSize] = useState(-1);
+  const [seenSubmissionMarkers, setSeenSubmissionMarkers] = useState(() => {
+    try {
+      const raw = localStorage.getItem(ADMIN_SEEN_SUBMISSIONS_KEY);
+      const parsed = raw ? JSON.parse(raw) : {};
+      return parsed && typeof parsed === 'object' ? parsed : {};
+    } catch (_) {
+      return {};
+    }
+  });
+  const [notificationBootstrapDone, setNotificationBootstrapDone] = useState(false);
   
   // États pour les assignations multiples
   const [pendingAssignments, setPendingAssignments] = useState([]);
@@ -56,9 +87,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   
   // Charger les utilisateurs au montage
   useEffect(() => {
-    // Configure axios with the token relevant to admin context
+    // Configure axios with the token relevant to the current page context.
     try {
-      const token = localStorage.getItem('auth_token_admin') || localStorage.getItem('auth_token');
+      const token = isSaisisseur
+        ? (localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token'))
+        : (localStorage.getItem('auth_token_admin') || localStorage.getItem('auth_token'));
       if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
     } catch (e) {}
 
@@ -73,12 +106,235 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     fetchUserRequests();
   }, [isSaisisseur]);
 
+  useEffect(() => {
+    if (isSaisisseur) return undefined;
+    const intervalId = window.setInterval(() => {
+      fetchSaisisseurs();
+    }, 30000);
+    return () => window.clearInterval(intervalId);
+  }, [isSaisisseur, notificationBootstrapDone, seenSubmissionMarkers]);
+
   const parseAssignmentNotes = (rawNotes) => {
     try {
       return rawNotes ? JSON.parse(rawNotes) : {};
     } catch (e) {
       return { _raw: rawNotes || '' };
     }
+  };
+
+  const normalizeSubmissionNotes = (rawNotes) => {
+    let notes = parseAssignmentNotes(rawNotes);
+
+    // Handle double-encoded JSON payloads.
+    if (typeof notes === 'string') {
+      try { notes = JSON.parse(notes); } catch (e) { notes = { _raw: String(notes || '') }; }
+    }
+
+    // Some legacy payloads stored data under `saisisseur_draft`.
+    if (notes && typeof notes === 'object' && notes.saisisseur_draft && typeof notes.saisisseur_draft === 'object') {
+      notes = { ...notes, ...notes.saisisseur_draft };
+    }
+
+    // Normalize alternative keys to the preview keys.
+    if (notes && typeof notes === 'object') {
+      if (!Array.isArray(notes.tables) && Array.isArray(notes.data_json)) {
+        notes.tables = notes.data_json;
+      }
+      if (!Array.isArray(notes.tables) && Array.isArray(notes.table)) {
+        notes.tables = notes.table;
+      }
+      if (!Array.isArray(notes.charts) && Array.isArray(notes.charts_config)) {
+        notes.charts = notes.charts_config;
+      }
+      if (!Array.isArray(notes.columns_order) && Array.isArray(notes.columns)) {
+        notes.columns_order = notes.columns;
+      }
+    }
+
+    return notes && typeof notes === 'object' ? notes : {};
+  };
+
+  const persistSeenSubmissionMarkers = (nextMarkers) => {
+    setSeenSubmissionMarkers(nextMarkers);
+    try {
+      localStorage.setItem(ADMIN_SEEN_SUBMISSIONS_KEY, JSON.stringify(nextMarkers));
+    } catch (_) {}
+  };
+
+  const getAssignmentSubmissionMeta = (assignment) => {
+    const notes = normalizeSubmissionNotes(assignment?.notes);
+    const history = Array.isArray(notes.workflow_history) ? notes.workflow_history.slice().reverse() : [];
+    const lastSubmitEvent = history.find((entry) => entry && entry.action === 'submit');
+    const comment = String(notes.last_submit_comment || lastSubmitEvent?.message || '').trim();
+    const submittedAt = String(lastSubmitEvent?.at || assignment?.date_modification || '').trim();
+    const marker = assignment?.statut === 'En attente'
+      ? `${assignment.id}:${submittedAt || comment || 'pending'}`
+      : null;
+    return { comment, submittedAt, marker };
+  };
+
+  const playAdminNotificationSound = () => {
+    try {
+      const AudioCtx = window.AudioContext || window.webkitAudioContext;
+      if (!AudioCtx) return;
+      const audioCtx = new AudioCtx();
+      const oscillator = audioCtx.createOscillator();
+      const gainNode = audioCtx.createGain();
+      oscillator.type = 'sine';
+      oscillator.frequency.setValueAtTime(880, audioCtx.currentTime);
+      gainNode.gain.setValueAtTime(0.001, audioCtx.currentTime);
+      gainNode.gain.exponentialRampToValueAtTime(0.08, audioCtx.currentTime + 0.02);
+      gainNode.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + 0.28);
+      oscillator.connect(gainNode);
+      gainNode.connect(audioCtx.destination);
+      oscillator.start(audioCtx.currentTime);
+      oscillator.stop(audioCtx.currentTime + 0.3);
+      oscillator.onended = () => {
+        if (typeof audioCtx.close === 'function') audioCtx.close().catch(() => {});
+      };
+    } catch (_) {}
+  };
+
+  const markSubmissionAsSeen = (assignment) => {
+    const { marker } = getAssignmentSubmissionMeta(assignment);
+    if (!marker) return;
+    persistSeenSubmissionMarkers({ ...seenSubmissionMarkers, [String(assignment.id)]: marker });
+  };
+
+  const PREVIEW_PAGE_SIZE = 12;
+  const PREVIEW_CHART_COLORS = ['#7A0A4A', '#B03372', '#C95A9A', '#8C4F6A', '#D485B2', '#5E0738'];
+
+  const parseNumber = (value) => {
+    const normalized = String(value ?? '').replace(/\s/g, '').replace(',', '.');
+    const num = Number(normalized);
+    return Number.isFinite(num) ? num : null;
+  };
+
+  const applyChartFilters = (rows, chart) => {
+    let filtered = Array.isArray(rows) ? rows.slice() : [];
+
+    if (chart?.filter_column && String(chart.filter_value ?? '') !== '') {
+      const mode = chart.filter_mode || 'include';
+      filtered = filtered.filter((row) => {
+        const eq = String(row?.[chart.filter_column] ?? '') === String(chart.filter_value ?? '');
+        return mode === 'exclude' ? !eq : eq;
+      });
+    }
+
+    if (Array.isArray(chart?.filters)) {
+      chart.filters.forEach((f) => {
+        if (!f?.column || String(f.value ?? '') === '') return;
+        const mode = f.mode || 'include';
+        filtered = filtered.filter((row) => {
+          const eq = String(row?.[f.column] ?? '') === String(f.value ?? '');
+          return mode === 'exclude' ? !eq : eq;
+        });
+      });
+    }
+
+    return filtered;
+  };
+
+  const makeChartPreviewData = (chart, notes) => {
+    const rows = Array.isArray(notes?.tables) ? notes.tables : [];
+    const source = applyChartFilters(rows, chart);
+    const xKey = chart?.x;
+    const yKey = chart?.y;
+    const groupKey = chart?.group_by;
+
+    if (!xKey) return [];
+
+    const smartSort = (values) => {
+      return [...values].sort((a, b) => {
+        const na = Number(String(a).replace(',', '.'));
+        const nb = Number(String(b).replace(',', '.'));
+        const bothNumeric = Number.isFinite(na) && Number.isFinite(nb);
+        if (bothNumeric) return na - nb;
+        return String(a).localeCompare(String(b), 'fr', { numeric: true, sensitivity: 'base' });
+      });
+    };
+
+    if (groupKey) {
+      const groupValues = Array.from(
+        new Set(source.map((row) => String(row?.[groupKey] ?? '')).filter((v) => v !== ''))
+      );
+      const xValues = smartSort(
+        Array.from(new Set(source.map((row) => String(row?.[xKey] ?? '—'))))
+      );
+
+      if (groupValues.length > 0) {
+        const aggregation = {};
+        source.forEach((row) => {
+          const xVal = String(row?.[xKey] ?? '—');
+          const gVal = String(row?.[groupKey] ?? '—');
+          const yVal = parseNumber(row?.[yKey]);
+          aggregation[xVal] = aggregation[xVal] || {};
+          aggregation[xVal][gVal] = (aggregation[xVal][gVal] || 0) + (yVal === null ? 0 : yVal);
+        });
+
+        const seriesData = xValues.map((xVal) => {
+          const out = { name: xVal };
+          groupValues.forEach((gVal) => {
+            out[gVal] = aggregation?.[xVal]?.[gVal] || 0;
+          });
+          return out;
+        });
+
+        if (chart?.type === 'Nuage de points') {
+          const scatterSeriesData = {};
+          groupValues.forEach((gVal) => {
+            scatterSeriesData[gVal] = xValues.map((xVal, idx) => {
+              const parsedX = parseNumber(xVal);
+              return {
+                x: parsedX === null ? idx + 1 : parsedX,
+                y: aggregation?.[xVal]?.[gVal] || 0,
+              };
+            });
+          });
+          return { grouped: true, groupValues, scatterSeriesData, seriesData };
+        }
+
+        if (chart?.type === 'Secteur') {
+          const pieData = groupValues
+            .map((gVal) => {
+              let total = 0;
+              seriesData.forEach((item) => {
+                total += Number(item?.[gVal] || 0);
+              });
+              return { name: gVal, value: total };
+            })
+            .filter((item) => item.value > 0);
+          return { grouped: true, pieData, groupValues, seriesData };
+        }
+
+        return { grouped: true, groupValues, seriesData };
+      }
+    }
+
+    if (chart?.type === 'Nuage de points') {
+      return source
+        .map((row, idx) => {
+          const yVal = parseNumber(row?.[yKey]);
+          if (yVal === null) return null;
+          const xVal = parseNumber(row?.[xKey]);
+          return {
+            x: xVal === null ? idx + 1 : xVal,
+            y: yVal,
+          };
+        })
+        .filter(Boolean)
+        .slice(0, 200);
+    }
+
+    const grouped = new Map();
+    source.forEach((row) => {
+      const xVal = String(row?.[xKey] ?? '—');
+      const yVal = parseNumber(row?.[yKey]);
+      const current = grouped.get(xVal) || 0;
+      grouped.set(xVal, current + (yVal === null ? 1 : yVal));
+    });
+
+    return Array.from(grouped.entries()).map(([name, value]) => ({ name, value }));
   };
 
   const fetchMyAssignments = async () => {
@@ -110,6 +366,10 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const saveMyDraft = async () => {
     if (!selectedMyAssignment) return;
     try {
+      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurRequestConfig = saisisseurToken
+        ? { headers: { Authorization: `Token ${saisisseurToken}` } }
+        : {};
       const notesObj = parseAssignmentNotes(selectedMyAssignment.notes);
       notesObj.saisisseur_draft = {
         comment: String(myComment || '').trim(),
@@ -124,11 +384,15 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       });
       notesObj.workflow_history = history;
 
-      await axios.patch(`${API_BASE}/user-theme-assignments/${selectedMyAssignment.id}/`, {
-        notes: JSON.stringify(notesObj),
-        progression: Number(myProgression || 0),
-        statut: 'En cours',
-      });
+      await axios.patch(
+        `${API_BASE}/user-theme-assignments/${selectedMyAssignment.id}/`,
+        {
+          notes: JSON.stringify(notesObj),
+          progression: Number(myProgression || 0),
+          statut: 'En cours',
+        },
+        saisisseurRequestConfig,
+      );
       alert('Brouillon enregistré.');
       await fetchMyAssignments();
     } catch (error) {
@@ -140,10 +404,18 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const submitMyAssignment = async () => {
     if (!selectedMyAssignment) return;
     try {
-      await axios.post(`${API_BASE}/user-theme-assignments/${selectedMyAssignment.id}/submit/`, {
-        message: String(myComment || '').trim(),
-        progression: Number(myProgression || 0),
-      });
+      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurRequestConfig = saisisseurToken
+        ? { headers: { Authorization: `Token ${saisisseurToken}` } }
+        : {};
+      await axios.post(
+        `${API_BASE}/user-theme-assignments/${selectedMyAssignment.id}/submit/`,
+        {
+          message: String(myComment || '').trim(),
+          progression: Number(myProgression || 0),
+        },
+        saisisseurRequestConfig,
+      );
       alert('Soumission envoyée à l\'administrateur.');
       await fetchMyAssignments();
     } catch (error) {
@@ -263,7 +535,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     <button
                       key={a.id}
                       onClick={() => openMyAssignment(a)}
-                      className={`w-full text-left px-4 py-3 border-b border-[#f0dce7] hover:bg-[#fdf7fa] ${selectedMyAssignment?.id === a.id ? 'bg-[#fcf0f6]' : ''}`}
+                      className={`w-full text-left px-4 py-3 border-b border-[#efdce6] hover:bg-[#fcf4f8] ${selectedMyAssignment?.id === a.id ? 'bg-[#fcf0f6]' : ''}`}
                     >
                       <div className="font-semibold text-[#4d1734]">{a.theme_titre || 'Thème'}{a.sous_theme_nom ? ` > ${a.sous_theme_nom}` : ''}</div>
                       <div className="text-xs text-[#8c4f6a] mt-1">Priorité: {a.priorite || 'Normale'} | Statut: {a.statut}</div>
@@ -294,7 +566,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     <textarea
                       value={myComment}
                       onChange={(e) => setMyComment(e.target.value)}
-                      className="w-full min-h-[110px] p-3 border border-[#cda1b9] rounded-lg outline-none focus:border-[#B03372]"
+                      className="w-full min-h-[110px] p-3 border border-[#d8b6c8] rounded-lg outline-none focus:border-[#B03372]"
                       placeholder="Expliquez l'avancement, les points bloquants ou les remarques..."
                     />
                   </div>
@@ -307,7 +579,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   )}
 
                   <div className="flex gap-2">
-                    <button onClick={saveMyDraft} className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-lg font-bold hover:bg-[#faeff5]">💾 Enregistrer brouillon</button>
+                    <button onClick={saveMyDraft} className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-lg font-bold hover:bg-[#f7eaf1]">💾 Enregistrer brouillon</button>
                     <button onClick={submitMyAssignment} className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-lg font-bold hover:bg-[#5E0738]">📤 Soumettre à l'admin</button>
                   </div>
 
@@ -345,11 +617,30 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       
       // Charger les assignations
       const assignmentsResponse = await axios.get(`${API_BASE}/user-theme-assignments/`);
-      setAssignments(assignmentsResponse.data);
+      const nextAssignments = assignmentsResponse.data;
+      setAssignments(nextAssignments);
+
+      const currentMarkers = nextAssignments.reduce((acc, assignment) => {
+        const { marker } = getAssignmentSubmissionMeta(assignment);
+        if (marker) acc[String(assignment.id)] = marker;
+        return acc;
+      }, {});
+
+      if (!isSaisisseur) {
+        if (!notificationBootstrapDone) {
+          persistSeenSubmissionMarkers({ ...currentMarkers, ...seenSubmissionMarkers });
+          setNotificationBootstrapDone(true);
+        } else {
+          const hasNewSubmission = Object.entries(currentMarkers).some(([assignmentId, marker]) => seenSubmissionMarkers[assignmentId] !== marker);
+          if (hasNewSubmission) {
+            playAdminNotificationSound();
+          }
+        }
+      }
       
       // Fusionner: ajouter toutes les assignations aux utilisateurs
       const usersWithAssignments = filteredUsers.map(user => {
-        const userAssignments = assignmentsResponse.data.filter(a => a.user === user.id);
+        const userAssignments = nextAssignments.filter(a => a.user === user.id);
         return {
           ...user,
           assignments: userAssignments
@@ -378,6 +669,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       setUserRequests(response.data);
     } catch (error) {
       console.error('Erreur lors du chargement des demandes:', error);
+      alert(error.response?.data?.error || 'Erreur lors du chargement des demandes');
     }
   };
 
@@ -574,7 +866,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   // Fonction pour obtenir les thèmes/sous-thèmes déjà assignés à un utilisateur
   const getAssignedThemes = (userId) => {
     if (!userId) return { themeIds: [], subThemeIds: [] };
-    const userAssignments = assignments.filter(a => a.user === userId);
+    const userAssignments = assignments.filter(a => a.user === userId && a.assignment_archived !== true);
     return {
       themeIds: userAssignments.filter(a => a.theme && !a.sous_theme).map(a => a.theme),
       subThemeIds: userAssignments.filter(a => a.sous_theme).map(a => a.sous_theme)
@@ -586,11 +878,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   // Ne pas afficher un thème si tous ses sous-thèmes sont déjà assignés.
   const getAvailableThemes = () => {
     const globallyAssignedThemeIds = assignments
-      .filter(a => a.theme && !a.sous_theme)
+      .filter(a => a.assignment_archived !== true && a.theme && !a.sous_theme)
       .map(a => a.theme);
     
     const assignedSubThemeIds = assignments
-      .filter(a => a.sous_theme)
+      .filter(a => a.assignment_archived !== true && a.sous_theme)
       .map(a => a.sous_theme);
     
     return themes.filter(t => {
@@ -617,14 +909,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const getAvailableSubThemes = () => {
     if (!selectedTheme) return subThemes;
     const globallyAssignedThemeIds = assignments
-      .filter(a => a.theme && !a.sous_theme)
+      .filter(a => a.assignment_archived !== true && a.theme && !a.sous_theme)
       .map(a => a.theme);
     if (globallyAssignedThemeIds.includes(parseInt(selectedTheme))) {
       return [];
     }
     // Exclure les sous-thèmes assignés à n'importe quel utilisateur
     const assignedSubThemeIds = assignments
-      .filter(a => a.sous_theme)
+      .filter(a => a.assignment_archived !== true && a.sous_theme)
       .map(a => a.sous_theme);
     return subThemes.filter(st => !assignedSubThemeIds.includes(st.id));
   };
@@ -768,6 +1060,34 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
+  const handleArchiveAssignment = async (assignmentId) => {
+    if (!confirm('Archiver cette tâche ? Le compte utilisateur restera actif.')) return;
+
+    try {
+      await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/archive/`);
+      alert('Tâche archivée avec succès');
+      fetchSaisisseurs();
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error('Erreur lors de l\'archivage de la tâche:', error);
+      alert(error.response?.data?.error || 'Erreur lors de l\'archivage de la tâche');
+    }
+  };
+
+  const handleUnarchiveAssignment = async (assignmentId) => {
+    if (!confirm('Désarchiver cette tâche ?')) return;
+
+    try {
+      await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/unarchive/`);
+      alert('Tâche désarchivée avec succès');
+      fetchSaisisseurs();
+      setOpenMenuId(null);
+    } catch (error) {
+      console.error('Erreur lors du désarchivage de la tâche:', error);
+      alert(error.response?.data?.error || 'Erreur lors du désarchivage de la tâche');
+    }
+  };
+
   const handleDeleteAssignment = async (assignmentId) => {
     if (!confirm('Supprimer cette assignation ? Cette action est irréversible.')) return;
     try {
@@ -821,9 +1141,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       setOpenMenuId(null);
       const res = await axios.get(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
       const assignment = res.data;
-      let notesObj = {};
-      try { notesObj = assignment.notes ? JSON.parse(assignment.notes) : {}; } catch (e) { notesObj = { raw: assignment.notes }; }
+      const notesObj = normalizeSubmissionNotes(assignment.notes);
+      markSubmissionAsSeen(assignment);
       setPreviewContent({ assignment, notes: notesObj });
+      setPreviewTablePage(1);
+      setPreviewPageSize(-1);
       setPreviewModalOpen(true);
     } catch (err) {
       console.error('Erreur ouverture soumission:', err);
@@ -834,6 +1156,19 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const getRoleLabel = (role) => {
     return role === 'SAISISSEUR' ? 'Saisisseur' : 'Administrateur';
   };
+
+  const unreadSubmissionCount = assignments.filter((assignment) => {
+    const { marker } = getAssignmentSubmissionMeta(assignment);
+    return marker && seenSubmissionMarkers[String(assignment.id)] !== marker;
+  }).length;
+
+  const submissionNotifications = assignments
+    .map((assignment) => ({
+      assignment,
+      ...getAssignmentSubmissionMeta(assignment),
+    }))
+    .filter((item) => item.marker || item.comment)
+    .sort((a, b) => String(b.submittedAt || '').localeCompare(String(a.submittedAt || '')));
 
   const formatAssignmentDate = (value) => {
     if (!value) return '—';
@@ -856,7 +1191,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border ${
               activeTab === 'users'
                 ? 'bg-[#7A0A4A] text-white border-[#7A0A4A] shadow-[0_8px_18px_rgba(122,10,74,0.35)]'
-                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f1dde8]'
+                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f4e3ed]'
             }`}
           >
             👥 GESTION DES SAISISSEURS
@@ -866,7 +1201,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border ${
               activeTab === 'themes'
                 ? 'bg-[#B03372] text-white border-[#B03372] shadow-[0_8px_18px_rgba(122,10,74,0.28)]'
-                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f1dde8]'
+                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f4e3ed]'
             }`}
           >
             📊 GESTION DES THEMES
@@ -881,18 +1216,27 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <h2 className="text-2xl font-black text-[#7A0A4A]">Gestion des Utilisateurs</h2>
               <div className="space-x-2 flex">
                 <button
+                  onClick={async () => {
+                    await fetchSaisisseurs();
+                    setShowNotificationsModal(true);
+                  }}
+                  className={`relative px-4 py-2 border rounded-xl font-bold shadow-[0_6px_14px_rgba(122,10,74,0.18)] transition ${unreadSubmissionCount > 0 ? 'bg-[#b85282] text-white border-[#991b1b] hover:bg-[#991b1b]' : 'bg-white text-[#7A0A4A] border-[#B03372] hover:bg-[#f7eaf1]'}`}
+                  disabled={loading}
+                  title="Messages reçus des saisisseurs"
+                >
+                  🔔
+                  {unreadSubmissionCount > 0 && (
+                    <span className="absolute -top-2 -right-2 inline-flex items-center justify-center min-w-6 h-6 px-1 rounded-full bg-[#FFD166] text-[#5E0738] text-xs font-black">
+                      {unreadSubmissionCount}
+                    </span>
+                  )}
+                </button>
+                <button
                   onClick={() => setShowAddModal(true)}
                   className="px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
                   disabled={loading}
                 >
                   ➕ Ajouter
-                </button>
-                <button
-                  onClick={() => setShowRequestsModal(true)}
-                  className="px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#faeff5] shadow-[0_6px_14px_rgba(122,10,74,0.18)] transition"
-                  disabled={loading}
-                >
-                  📬 Demandes
                 </button>
             </div>
         </div>
@@ -911,7 +1255,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   setSelectedSubTheme(null);
                   setSubThemes([]);
                 }}
-                className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
+                className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
               >
                 <option value="">-- Sélectionner --</option>
                 {saisisseurs.map(s => (
@@ -927,7 +1271,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 value={selectedTheme || ''}
                 onChange={(e) => handleThemeChange(e.target.value)}
                 disabled={!selectedSaisisseur}
-                className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white disabled:bg-[#f3e8ef] text-[#4d1734] focus:border-[#B03372]"
+                className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold bg-white disabled:bg-[#f3e8ef] text-[#4d1734] focus:border-[#B03372]"
               >
                 <option value="">-- Sélectionner --</option>
                 {getAvailableThemes().map(theme => (
@@ -940,7 +1284,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <select
                 value={selectedSubTheme || ''}
                 onChange={(e) => setSelectedSubTheme(e.target.value || null)}
-                className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white disabled:bg-[#f3e8ef] text-[#4d1734] focus:border-[#B03372]"
+                className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold bg-white disabled:bg-[#f3e8ef] text-[#4d1734] focus:border-[#B03372]"
                 disabled={!selectedTheme}
               >
                 <option value="">-- Aucun --</option>
@@ -996,7 +1340,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     setPendingAssignments([]);
                     setShowAssignmentQueue(false);
                   }}
-                  className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#faeff5] shadow-[0_6px_12px_rgba(122,10,74,0.15)] transition"
+                  className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#f7eaf1] shadow-[0_6px_12px_rgba(122,10,74,0.15)] transition"
                   disabled={loading}
                 >
                   ✕ Annuler
@@ -1034,7 +1378,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     return (
                       <tr
                         key={saisisseur.id}
-                        className={`border-b border-[#f0dce7] transition ${isArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fdf7fa]'}`}
+                        className={`border-b border-[#efdce6] transition ${isArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fcf4f8]'}`}
                       >
                         <td className={`px-6 py-3 font-medium ${isArchived ? 'line-through' : ''}`}>
                           {saisisseur.first_name || saisisseur.username}
@@ -1046,7 +1390,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               {getRoleLabel(saisisseur.role)}
                             </span>
                             {isArchived && (
-                              <span className="px-2 py-1 bg-[#ead8e2] text-[#7A0A4A] rounded text-xs font-bold">Archivé</span>
+                              <span className="px-2 py-1 bg-[#efdce6] text-[#7A0A4A] rounded text-xs font-bold">Archivé</span>
                             )}
                           </div>
                         </td>
@@ -1086,7 +1430,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               setMenuPosition({ top, left });
                               setOpenMenuId(openMenuId === `user-${saisisseur.id}` ? null : `user-${saisisseur.id}`);
                             }}
-                            className="px-3 py-1 bg-[#f4e3ed] hover:bg-[#ebd2df] text-[#7A0A4A] rounded text-sm transition font-bold"
+                            className="px-3 py-1 bg-[#f4e3ed] hover:bg-[#d8b6c8] text-[#7A0A4A] rounded text-sm transition font-bold"
                             title="Actions"
                           >
                             ⋮
@@ -1128,7 +1472,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleDeleteSaisisseur(saisisseur.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#9c1f5a] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#ca5f8f] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
                               >
                                 🗑️ Supprimer
                               </button>
@@ -1175,6 +1519,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     const matchedUser = saisisseurs.find(s => s.id === assignment.user);
                     const userName = assignment.user_name || matchedUser?.first_name || 'Utilisateur';
                     const isUserArchived = assignment.user_is_active === false || matchedUser?.is_active === false;
+                    const isAssignmentArchived = assignment.assignment_archived === true;
+                    const isRowArchived = isUserArchived || isAssignmentArchived;
                     const taskLabel = assignment.sous_theme_nom
                       ? `${assignment.theme_titre ? `${assignment.theme_titre} > ` : ''}${assignment.sous_theme_nom}`
                       : assignment.theme_titre || '—';
@@ -1194,12 +1540,19 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     return (
                       <tr
                         key={assignment.id}
-                        className={`border-b border-[#f0dce7] transition ${isUserArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fdf7fa]'}`}
+                        className={`border-b border-[#efdce6] transition ${isRowArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fcf4f8]'}`}
                       >
-                        <td className={`px-6 py-3 font-medium ${isUserArchived ? 'line-through' : ''}`}>
+                        <td className={`px-6 py-3 font-medium ${isRowArchived ? 'line-through' : ''}`}>
                           {userName}
                         </td>
-                        <td className="px-6 py-3 text-[#6b2949]">{taskLabel}</td>
+                        <td className="px-6 py-3 text-[#6b2949]">
+                          <div className="flex items-center gap-2">
+                            <span>{taskLabel}</span>
+                            {isAssignmentArchived && (
+                              <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-[#efdce6] text-[#7A0A4A]">Archivée</span>
+                            )}
+                          </div>
+                        </td>
                         <td className="px-4 py-3 text-center">
                           <span className={`px-2 py-1 rounded text-xs font-semibold border ${priorityBadge}`}>
                             {assignment.priorite || 'Normale'}
@@ -1207,7 +1560,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-2">
-                            <div className="flex-1 bg-[#f0dce7] rounded-full h-2 overflow-hidden">
+                            <div className="flex-1 bg-[#efdce6] rounded-full h-2 overflow-hidden">
                               <div 
                                 className={`h-full ${progressColor} transition-all`} 
                                 style={{ width: `${progression}%` }}
@@ -1277,7 +1630,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               setMenuPosition({ top, left });
                               setOpenMenuId(openMenuId === `assign-${assignment.id}` ? null : `assign-${assignment.id}`);
                             }}
-                            className="px-3 py-1 bg-[#f4e3ed] hover:bg-[#ebd2df] text-[#7A0A4A] rounded text-sm transition font-bold"
+                            className="px-3 py-1 bg-[#f4e3ed] hover:bg-[#d8b6c8] text-[#7A0A4A] rounded text-sm transition font-bold"
                             title="Actions"
                           >
                             ⋮
@@ -1287,7 +1640,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               <div className="px-4 py-2 text-xs font-bold text-[#7A0A4A] border-b border-[#efdce6]">Changer la priorité</div>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Haute')}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fde8ef] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] flex items-center gap-2 text-sm"
                               >
                                 🔴 Haute
                               </button>
@@ -1317,7 +1670,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleRejectSaisisseur(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fff1f1] text-[#9c1f5a] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fff1f1] text-[#ca5f8f] flex items-center gap-2 text-sm"
                               >
                                 🛠️ Demander des corrections
                               </button>
@@ -1330,25 +1683,25 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               >
                                 🔍 Aperçu de la soumission
                               </button>
-                              {isUserArchived ? (
+                              {isAssignmentArchived ? (
                                 <button
                                   onClick={() => {
-                                    handleUnarchiveSaisisseur(assignment.user);
+                                    handleUnarchiveAssignment(assignment.id);
                                     setOpenMenuId(null);
                                   }}
                                   className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                                 >
-                                  ↩️ Désarchiver
+                                  ↩️ Désarchiver la tâche
                                 </button>
                               ) : (
                                 <button
                                   onClick={() => {
-                                    handleArchiveSaisisseur(assignment.user);
+                                    handleArchiveAssignment(assignment.id);
                                     setOpenMenuId(null);
                                   }}
                                   className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
                                 >
-                                  📦 Archiver
+                                  📦 Archiver la tâche
                                 </button>
                               )}
                               <button
@@ -1356,7 +1709,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleDeleteAssignment(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#9c1f5a] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
+                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#ca5f8f] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
                               >
                                 🗑️ Supprimer
                               </button>
@@ -1401,7 +1754,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 {allThemes.map((theme) => (
                   <React.Fragment key={theme.id}>
                     {/* Ligne Thème */}
-                    <tr className="hover:bg-[#fdf7fa] transition">
+                    <tr className="hover:bg-[#fcf4f8] transition">
                       <td className="px-6 py-4">
                         <button
                           onClick={() => toggleThemeExpansion(theme.id)}
@@ -1468,7 +1821,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     {/* Sous-thèmes (affichés si thème expandé) */}
                     {expandedThemes[theme.id] && theme.sous_themes && theme.sous_themes.length > 0 && (
                       theme.sous_themes.map((subTheme) => (
-                        <tr key={subTheme.id} className="bg-[#fcf4f8] hover:bg-[#f8e8f0] transition">
+                        <tr key={subTheme.id} className="bg-[#fcf4f8] hover:bg-[#f7eaf1] transition">
                           <td className="px-6 py-3"></td>
                           <td className="px-6 py-3 pl-12">
                             <div className="flex items-center">
@@ -1572,7 +1925,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   required
                   value={newSaisisseur.name}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, name: e.target.value })}
-                  className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold focus:border-[#B03372]"
+                  className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold focus:border-[#B03372]"
                   placeholder="Nom et Prénom"
                 />
               </div>
@@ -1583,7 +1936,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   required
                   value={newSaisisseur.email}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, email: e.target.value })}
-                  className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold focus:border-[#B03372]"
+                  className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold focus:border-[#B03372]"
                   placeholder="email@exemple.com"
                 />
               </div>
@@ -1592,7 +1945,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <select
                   value={newSaisisseur.role}
                   onChange={(e) => setNewSaisisseur({ ...newSaisisseur, role: e.target.value })}
-                  className="w-full px-3 py-2 border border-[#cda1b9] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
+                  className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
                 >
                   <option value="SAISISSEUR">Saisisseur</option>
                   <option value="ADMIN">Administrateur</option>
@@ -1608,7 +1961,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-4 py-3 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#faeff5] shadow-[0_6px_12px_rgba(122,10,74,0.16)] transition"
+                  className="flex-1 px-4 py-3 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#f7eaf1] shadow-[0_6px_12px_rgba(122,10,74,0.16)] transition"
                 >
                   ✕ Annuler
                 </button>
@@ -1651,7 +2004,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   </thead>
                   <tbody>
                     {userRequests.map((req) => (
-                      <tr key={req.id} className="border-b border-[#f0dce7] hover:bg-[#fdf7fa] transition">
+                      <tr key={req.id} className="border-b border-[#efdce6] hover:bg-[#fcf4f8] transition">
                         <td className="px-4 py-3 font-medium">{req.requester_name}</td>
                         <td className="px-4 py-3 text-sm text-[#6b2949]">{req.requester_email}</td>
                         <td className="px-4 py-3">
@@ -1695,75 +2048,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               </div>
             )}
 
-        {/* Modal: Aperçu Soumission Saisisseur */}
-        {previewModalOpen && previewContent && (
-          <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl border-2 border-[#d8b6c8] p-6 max-w-4xl w-full max-h-[90vh] overflow-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
-              <div className="flex justify-between items-center mb-4">
-                <h2 className="text-2xl font-bold text-[#7A0A4A]">Aperçu de la soumission — {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}</h2>
-                <button onClick={() => setPreviewModalOpen(false)} className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl">✕</button>
-              </div>
-
-              <div className="space-y-4">
-                <div>
-                  <h3 className="font-bold">Métadonnées</h3>
-                  <pre className="whitespace-pre-wrap text-sm p-3 bg-[#fcf4f8] border border-[#e5c9d7] rounded">{JSON.stringify(previewContent.notes.meta || {}, null, 2)}</pre>
-                </div>
-
-                <div>
-                  <h3 className="font-bold">Graphiques</h3>
-                  {Array.isArray(previewContent.notes.charts) && previewContent.notes.charts.length > 0 ? (
-                    previewContent.notes.charts.map((c, i) => (
-                      <div key={i} className="p-3 bg-white border border-[#e5c9d7] rounded mb-2">
-                        <div className="font-semibold">{c.title || `Graphique ${i+1}`}</div>
-                        <pre className="text-sm whitespace-pre-wrap">{JSON.stringify(c, null, 2)}</pre>
-                      </div>
-                    ))
-                  ) : (
-                    <div className="text-sm text-gray-600">Aucun graphique soumis</div>
-                  )}
-                </div>
-
-                <div>
-                  <h3 className="font-bold">Tableau (aperçu)</h3>
-                  {Array.isArray(previewContent.notes.tables) && previewContent.notes.tables.length > 0 ? (
-                    <div className="overflow-auto border rounded">
-                      <table className="w-full table-auto text-sm">
-                        <thead className="bg-[#f8edf3] text-[#7A0A4A]">
-                          <tr>
-                            {(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
-                              ? previewContent.notes.columns_order
-                              : Object.keys(previewContent.notes.tables[0] || {})
-                            ).slice(0,8).map((h) => (
-                              <th key={h} className="px-2 py-1 text-left">{h}</th>
-                            ))}
-                          </tr>
-                        </thead>
-                        <tbody>
-                          {previewContent.notes.tables.slice(0,6).map((r, idx) => (
-                            <tr key={idx} className="border-t">
-                              {(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
-                                ? previewContent.notes.columns_order
-                                : Object.keys(previewContent.notes.tables[0] || {})
-                              ).slice(0,8).map((h, j) => <td key={`${idx}-${j}`} className="px-2 py-1">{String(r?.[h] ?? '')}</td>)}
-                            </tr>
-                          ))}
-                        </tbody>
-                      </table>
-                    </div>
-                  ) : (
-                    <div className="text-sm text-gray-600">Aucun tableau soumis</div>
-                  )}
-                </div>
-              </div>
-
-              <div className="mt-4 flex justify-end gap-2">
-                <button onClick={() => setPreviewModalOpen(false)} className="px-4 py-2 bg-[#f4e3ed] text-[#7A0A4A] border border-[#d8b6c8] rounded">Fermer</button>
-              </div>
-            </div>
-          </div>
-        )}
-
             <div className="mt-6 flex justify-end gap-2 sticky bottom-0 bg-white pt-4">
               <button
                 onClick={() => setShowRequestsModal(false)}
@@ -1771,6 +2055,453 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               >
                 Fermer
               </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showNotificationsModal && (
+        <div className="fixed inset-0 bg-black bg-opacity-50 flex items-center justify-center z-50 overflow-y-auto">
+          <div className="bg-white rounded-2xl border-2 border-[#d8b6c8] p-6 max-w-4xl w-full my-8 max-h-[90vh] overflow-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
+            <div className="flex justify-between items-center mb-6 sticky top-0 bg-white">
+              <h2 className="text-2xl font-bold text-[#7A0A4A]">🔔 Messages reçus</h2>
+              <button
+                onClick={() => setShowNotificationsModal(false)}
+                className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl"
+              >
+                ✕
+              </button>
+            </div>
+
+            {submissionNotifications.length === 0 ? (
+              <div className="text-center py-8 text-gray-500">
+                Aucun message reçu
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {submissionNotifications.map((item) => {
+                  const matchedUser = saisisseurs.find((user) => user.id === item.assignment.user);
+                  const userName = item.assignment.user_name || matchedUser?.first_name || 'Utilisateur';
+                  const taskLabel = item.assignment.sous_theme_nom
+                    ? `${item.assignment.theme_titre ? `${item.assignment.theme_titre} > ` : ''}${item.assignment.sous_theme_nom}`
+                    : item.assignment.theme_titre || '—';
+                  const isUnread = item.marker && seenSubmissionMarkers[String(item.assignment.id)] !== item.marker;
+
+                  return (
+                    <button
+                      key={item.assignment.id}
+                      type="button"
+                      onClick={async () => {
+                        await handleOpenSubmissionPreview(item.assignment.id);
+                        setShowNotificationsModal(false);
+                      }}
+                      className={`w-full text-left border rounded-xl p-4 transition ${isUnread ? 'border-[#B03372] bg-[#fff7db] hover:bg-[#ffefb3]' : 'border-[#e5c9d7] bg-white hover:bg-[#fcf4f8]'}`}
+                    >
+                      <div className="flex items-start justify-between gap-3">
+                        <div>
+                          <div className="font-bold text-[#7A0A4A]">{userName}</div>
+                          <div className="text-sm text-[#6b2949] mt-1">{taskLabel}</div>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {isUnread && (
+                            <span className="px-2 py-0.5 rounded text-[11px] font-bold bg-[#b85282] text-white">Nouveau</span>
+                          )}
+                          <span className="text-xs text-[#8c4f6a]">{item.submittedAt ? formatAssignmentDate(item.submittedAt) : '—'}</span>
+                        </div>
+                      </div>
+                      <div className="mt-2 text-sm text-[#4d1734] whitespace-pre-wrap">
+                        {item.comment || 'Soumission reçue sans commentaire.'}
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            )}
+
+            <div className="mt-6 flex justify-end gap-2 sticky bottom-0 bg-white pt-4">
+              <button
+                onClick={() => setShowNotificationsModal(false)}
+                className="px-4 py-2 bg-[#7A0A4A] text-white rounded hover:bg-[#5E0738] transition"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: Aperçu Soumission Saisisseur */}
+      {previewModalOpen && previewContent && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl border-2 border-[#d8b6c8] p-6 max-w-4xl w-full max-h-[90vh] overflow-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-2xl font-bold text-[#7A0A4A]">Aperçu de la soumission — {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}</h2>
+              <button onClick={() => setPreviewModalOpen(false)} className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl">✕</button>
+            </div>
+
+            <div className="space-y-5">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
+                  <div className="text-xs text-[#8c4f6a]">Lignes tableau</div>
+                  <div className="text-2xl font-black text-[#7A0A4A]">{Array.isArray(previewContent.notes.tables) ? previewContent.notes.tables.length : 0}</div>
+                </div>
+                <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
+                  <div className="text-xs text-[#8c4f6a]">Colonnes</div>
+                  <div className="text-2xl font-black text-[#7A0A4A]">{(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
+                    ? previewContent.notes.columns_order.length
+                    : Object.keys(previewContent.notes.tables?.[0] || {}).length)}</div>
+                </div>
+                <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
+                  <div className="text-xs text-[#8c4f6a]">Graphiques</div>
+                  <div className="text-2xl font-black text-[#7A0A4A]">{Array.isArray(previewContent.notes.charts) ? previewContent.notes.charts.length : 0}</div>
+                </div>
+              </div>
+
+              {String(previewContent.notes.last_submit_comment || '').trim() !== '' && (
+                <div>
+                  <h3 className="font-bold mb-2">Message du saisisseur</h3>
+                  <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fff7db] text-[#5E0738] whitespace-pre-wrap">
+                    {String(previewContent.notes.last_submit_comment || '').trim()}
+                  </div>
+                </div>
+              )}
+
+              <div>
+                <h3 className="font-bold mb-2">Métadonnées</h3>
+                {Object.entries(previewContent.notes.meta || {}).filter(([, value]) => String(value || '').trim() !== '').length > 0 ? (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                    {Object.entries(previewContent.notes.meta || {}).filter(([, value]) => String(value || '').trim() !== '').map(([key, value]) => (
+                      <div key={key} className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
+                        <div className="text-xs uppercase tracking-wide text-[#8c4f6a]">{key}</div>
+                        <div className="text-sm text-[#4d1734] mt-1 whitespace-pre-wrap">{String(value)}</div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-600">Aucune métadonnée renseignée</div>
+                )}
+              </div>
+
+              <div>
+                <h3 className="font-bold mb-2">Graphiques</h3>
+                {Array.isArray(previewContent.notes.charts) && previewContent.notes.charts.length > 0 ? (
+                  <div className="space-y-2">
+                    {previewContent.notes.charts.map((chart, index) => (
+                      <div key={index} className="border border-[#e5c9d7] rounded-lg p-3 bg-white">
+                        <div className="font-semibold text-[#7A0A4A]">{chart.title || `Graphique ${index + 1}`}</div>
+                        <div className="text-sm text-[#4d1734] mt-1">
+                          Type: {chart.type || '—'} | X: {chart.x || '—'} | Y: {chart.y || '—'}
+                        </div>
+                        {(chart.filter_column || chart.filter_value) && (
+                          <div className="text-xs text-[#8c4f6a] mt-1">
+                            Filtre principal: {chart.filter_column || '—'} = {chart.filter_value || '—'} ({chart.filter_mode || 'include'})
+                          </div>
+                        )}
+                        {Array.isArray(chart.filters) && chart.filters.length > 0 && (
+                          <div className="text-xs text-[#8c4f6a] mt-1">
+                            Filtres additionnels: {chart.filters.map((f) => `${f.column || 'col'}=${f.value || ''}`).join(' | ')}
+                          </div>
+                        )}
+                        <div className="mt-3 h-52 border border-[#efdce6] rounded bg-[#fffafb] p-2">
+                          {(() => {
+                            const previewData = makeChartPreviewData(chart, previewContent.notes);
+                            const isArrayData = Array.isArray(previewData);
+                            const hasData = isArrayData
+                              ? previewData.length > 0
+                              : Boolean(
+                                  (Array.isArray(previewData?.seriesData) && previewData.seriesData.length > 0) ||
+                                  (Array.isArray(previewData?.pieData) && previewData.pieData.length > 0) ||
+                                  (previewData?.scatterSeriesData && Object.keys(previewData.scatterSeriesData).length > 0)
+                                );
+
+                            if (!hasData) {
+                              return <div className="h-full flex items-center justify-center text-sm text-gray-500">Données insuffisantes pour l'aperçu</div>;
+                            }
+
+                            if (chart.type === 'Secteur') {
+                              const pieData = Array.isArray(previewData)
+                                ? previewData
+                                : (previewData?.pieData || []);
+                              return (
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <PieChart>
+                                    <Pie data={pieData} dataKey="value" nameKey="name" outerRadius={70} label>
+                                      {pieData.map((_, idx) => (
+                                        <Cell key={`slice-${idx}`} fill={PREVIEW_CHART_COLORS[idx % PREVIEW_CHART_COLORS.length]} />
+                                      ))}
+                                    </Pie>
+                                    <Tooltip />
+                                    <Legend />
+                                  </PieChart>
+                                </ResponsiveContainer>
+                              );
+                            }
+
+                            if (chart.type === 'Nuage de points') {
+                              if (!Array.isArray(previewData) && previewData?.grouped && previewData?.scatterSeriesData) {
+                                return (
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <ScatterChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                                      <CartesianGrid strokeDasharray="3 3" />
+                                      <XAxis dataKey="x" type="number" />
+                                      <YAxis dataKey="y" type="number" />
+                                      <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                                      <Legend />
+                                      {previewData.groupValues.map((g, idx) => (
+                                        <Scatter
+                                          key={g}
+                                          name={g}
+                                          data={previewData.scatterSeriesData[g] || []}
+                                          fill={PREVIEW_CHART_COLORS[idx % PREVIEW_CHART_COLORS.length]}
+                                        />
+                                      ))}
+                                    </ScatterChart>
+                                  </ResponsiveContainer>
+                                );
+                              }
+
+                              return (
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <ScatterChart margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="x" type="number" />
+                                    <YAxis dataKey="y" type="number" />
+                                    <Tooltip cursor={{ strokeDasharray: '3 3' }} />
+                                    <Scatter data={previewData} fill="#B03372" />
+                                  </ScatterChart>
+                                </ResponsiveContainer>
+                              );
+                            }
+
+                            if (chart.type === 'Courbe' || chart.type === 'Courbes') {
+                              if (!Array.isArray(previewData) && previewData?.grouped && Array.isArray(previewData?.seriesData)) {
+                                return (
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <LineChart data={previewData.seriesData} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                                      <CartesianGrid strokeDasharray="3 3" />
+                                      <XAxis dataKey="name" />
+                                      <YAxis />
+                                      <Tooltip />
+                                      <Legend />
+                                      {previewData.groupValues.map((g, idx) => (
+                                        <Line
+                                          key={g}
+                                          type="monotone"
+                                          dataKey={g}
+                                          stroke={PREVIEW_CHART_COLORS[idx % PREVIEW_CHART_COLORS.length]}
+                                          strokeWidth={2}
+                                          dot={false}
+                                        />
+                                      ))}
+                                    </LineChart>
+                                  </ResponsiveContainer>
+                                );
+                              }
+
+                              return (
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <LineChart data={previewData} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="name" />
+                                    <YAxis />
+                                    <Tooltip />
+                                    <Line type="monotone" dataKey="value" stroke="#7A0A4A" strokeWidth={2} dot={false} />
+                                  </LineChart>
+                                </ResponsiveContainer>
+                              );
+                            }
+
+                            if (!Array.isArray(previewData) && previewData?.grouped && Array.isArray(previewData?.seriesData)) {
+                              return (
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <BarChart data={previewData.seriesData} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                                    <CartesianGrid strokeDasharray="3 3" />
+                                    <XAxis dataKey="name" />
+                                    <YAxis />
+                                    <Tooltip />
+                                    <Legend />
+                                    {previewData.groupValues.map((g, idx) => (
+                                      <Bar key={g} dataKey={g} fill={PREVIEW_CHART_COLORS[idx % PREVIEW_CHART_COLORS.length]} radius={[3, 3, 0, 0]} />
+                                    ))}
+                                  </BarChart>
+                                </ResponsiveContainer>
+                              );
+                            }
+
+                            return (
+                              <ResponsiveContainer width="100%" height="100%">
+                                <BarChart data={previewData} margin={{ top: 8, right: 8, bottom: 8, left: 8 }}>
+                                  <CartesianGrid strokeDasharray="3 3" />
+                                  <XAxis dataKey="name" />
+                                  <YAxis />
+                                  <Tooltip />
+                                  <Bar dataKey="value" fill="#7A0A4A" radius={[4, 4, 0, 0]} />
+                                </BarChart>
+                              </ResponsiveContainer>
+                            );
+                          })()}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="text-sm text-gray-600">Aucun graphique soumis</div>
+                )}
+              </div>
+
+              <div>
+                <h3 className="font-bold mb-2">Tableau (aperçu)</h3>
+                {Array.isArray(previewContent.notes.tables) && previewContent.notes.tables.length > 0 ? (
+                  (() => {
+                    const columns = (Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
+                      ? previewContent.notes.columns_order
+                      : Object.keys(previewContent.notes.tables[0] || {}));
+                    const allRows = previewContent.notes.tables || [];
+                    const pageSize = previewPageSize === -1 ? allRows.length || 1 : previewPageSize;
+                    const totalPages = Math.max(1, Math.ceil(allRows.length / pageSize));
+                    const safePage = Math.min(previewTablePage, totalPages);
+                    const start = (safePage - 1) * pageSize;
+                    const pageRows = allRows.slice(start, start + pageSize);
+
+                    return (
+                      <>
+                        <div className="mb-2 flex items-center justify-between gap-2">
+                          <div className="text-xs text-[#8c4f6a]">Colonnes: {columns.length}</div>
+                          <div className="flex items-center gap-2 text-sm">
+                            <label className="text-[#6b2949]">Lignes par page</label>
+                            <select
+                              value={previewPageSize}
+                              onChange={(e) => {
+                                setPreviewPageSize(Number(e.target.value));
+                                setPreviewTablePage(1);
+                              }}
+                              className="border border-[#d8b6c8] rounded px-2 py-1 bg-white text-[#7A0A4A]"
+                            >
+                              <option value={12}>12</option>
+                              <option value={25}>25</option>
+                              <option value={50}>50</option>
+                              <option value={100}>100</option>
+                              <option value={-1}>Tout afficher</option>
+                            </select>
+                          </div>
+                        </div>
+
+                        <div className="overflow-auto border border-[#e5c9d7] rounded-lg">
+                          <table className="w-full table-auto text-sm">
+                            <thead className="bg-[#f8edf3] text-[#7A0A4A]">
+                              <tr>
+                                {columns.map((header) => (
+                                  <th key={header} className="px-2 py-1 text-left border-b border-[#e5c9d7]">{header}</th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {pageRows.map((row, rowIdx) => (
+                                <tr key={rowIdx} className="border-t border-[#efdce6] odd:bg-white even:bg-[#fcf4f8]">
+                                  {columns.map((header, colIdx) => (
+                                    <td key={`${rowIdx}-${colIdx}`} className="px-2 py-1">{String(row?.[header] ?? '')}</td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        <div className="mt-3 flex items-center justify-between text-sm text-[#6b2949]">
+                          <div>
+                            Lignes {start + 1} à {Math.min(start + pageSize, allRows.length)} sur {allRows.length}
+                          </div>
+                          <div className="flex items-center gap-2">
+                            <button
+                              type="button"
+                              disabled={safePage <= 1}
+                              onClick={() => setPreviewTablePage((p) => Math.max(1, p - 1))}
+                              className={`px-3 py-1 border rounded ${safePage <= 1 ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]'}`}
+                            >
+                              Précédent
+                            </button>
+                            <span className="font-semibold">Page {safePage} / {totalPages}</span>
+                            <button
+                              type="button"
+                              disabled={safePage >= totalPages}
+                              onClick={() => setPreviewTablePage((p) => Math.min(totalPages, p + 1))}
+                              className={`px-3 py-1 border rounded ${safePage >= totalPages ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]'}`}
+                            >
+                              Suivant
+                            </button>
+                          </div>
+                        </div>
+                      </>
+                    );
+                  })()
+                ) : (
+                  <div className="text-sm text-gray-600">Aucun tableau soumis</div>
+                )}
+              </div>
+
+              {/* Configuration Visiteur soumise par le saisisseur */}
+              {previewContent.notes.visitor_config && typeof previewContent.notes.visitor_config === 'object' && (
+                <div>
+                  <h3 className="font-bold mb-2">Configuration Visiteur (soumise par le saisisseur)</h3>
+                  <div className="border border-[#e5c9d7] rounded-lg p-4 bg-[#fcf4f8] space-y-3">
+                    {(() => {
+                      const vc = previewContent.notes.visitor_config;
+                      return (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-[#8c4f6a] mb-1">Colonnes visibles</div>
+                            {Array.isArray(vc.visitor_visible_columns) && vc.visitor_visible_columns.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {vc.visitor_visible_columns.map(c => (
+                                  <span key={c} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{c}</span>
+                                ))}
+                              </div>
+                            ) : <span className="text-sm text-gray-500">Toutes les colonnes</span>}
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-[#8c4f6a] mb-1">Filtres disponibles</div>
+                            {Array.isArray(vc.visitor_filters) && vc.visitor_filters.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {vc.visitor_filters.map(f => (
+                                  <span key={f} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{f}</span>
+                                ))}
+                              </div>
+                            ) : <span className="text-sm text-gray-500">Aucun</span>}
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-[#8c4f6a] mb-1">Colonnes pivot / hiérarchie</div>
+                            {Array.isArray(vc.visitor_pivot_columns) && vc.visitor_pivot_columns.length > 0 ? (
+                              <div className="flex flex-wrap gap-1">
+                                {vc.visitor_pivot_columns.map(c => (
+                                  <span key={c} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{c}</span>
+                                ))}
+                              </div>
+                            ) : <span className="text-sm text-gray-500">Aucune</span>}
+                          </div>
+                          <div>
+                            <div className="text-xs uppercase tracking-wide text-[#8c4f6a] mb-1">Vue par défaut</div>
+                            <span className="text-sm text-[#4d1734]">{vc.visitor_default_view === 'vertical' ? 'Verticale' : 'Horizontale'}</span>
+                          </div>
+                          {vc.visitor_default_filters && Object.keys(vc.visitor_default_filters).length > 0 && (
+                            <div className="md:col-span-2">
+                              <div className="text-xs uppercase tracking-wide text-[#8c4f6a] mb-1">Filtres par défaut</div>
+                              <div className="flex flex-wrap gap-1">
+                                {Object.entries(vc.visitor_default_filters).map(([k, v]) => (
+                                  <span key={k} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{k} = {String(v)}</span>
+                                ))}
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })()}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mt-4 flex justify-end gap-2">
+              <button onClick={() => setPreviewModalOpen(false)} className="px-4 py-2 bg-[#f4e3ed] text-[#7A0A4A] border border-[#d8b6c8] rounded">Fermer</button>
             </div>
           </div>
         </div>
