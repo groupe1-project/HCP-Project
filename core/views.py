@@ -259,13 +259,31 @@ def _normalize_cross_table_to_flat(df_raw):
 
     # Heuristic names for id columns
     id_name_1 = 'Province'
+    second_id_col = None
     id_name_2 = 'Sexe'
     if len(id_cols) >= 2:
-        # If second id column is not gender-like, use generic Dimension
-        second_col_values = [_cell_to_text(v).lower() for v in work.iloc[row_start:, id_cols[1]].tolist()]
-        has_gender_like = any(v in ('masculin', 'feminin', 'féminin', 'total') for v in second_col_values)
-        if not has_gender_like:
+        second_id_col = id_cols[1]
+        second_col_values_raw = [_cell_to_text(v).strip() for v in work.iloc[row_start:, second_id_col].tolist()]
+        second_col_values = [v for v in second_col_values_raw if v]
+        second_col_values_norm = [_normalize_name(v) for v in second_col_values]
+        unique_non_empty = set(second_col_values_norm)
+
+        has_gender_like = any(v in ('masculin', 'feminin', 'féminin', 'total') for v in second_col_values_norm)
+        year_like_count = sum(1 for v in second_col_values if re.fullmatch(r'(19|20)\d{2}', v))
+        has_year_like = bool(second_col_values) and year_like_count >= max(1, int(len(second_col_values) * 0.6))
+        has_informative_values = len(second_col_values) >= 2 and len(unique_non_empty) >= 2
+
+        if has_gender_like:
+            id_name_2 = 'Sexe'
+        elif has_year_like and not year_value:
+            # If year is embedded by row values and not already extracted from header,
+            # reuse this column directly as year.
+            id_name_2 = 'Annee'
+        elif has_informative_values:
             id_name_2 = 'Dimension'
+        else:
+            # Avoid creating an empty/useless extra column.
+            second_id_col = None
 
     last_id_values = {c: '' for c in id_cols}
     records = []
@@ -289,11 +307,12 @@ def _normalize_cross_table_to_flat(df_raw):
 
             rec = {
                 id_name_1: current_ids.get(id_cols[0], ''),
-                'Annee': year_value,
-                id_name_2: current_ids.get(id_cols[1], '') if len(id_cols) > 1 else '',
+                'Annee': current_ids.get(second_id_col, '') if (second_id_col is not None and id_name_2 == 'Annee') else year_value,
                 metric_dimension_name: metric_names.get(c, f'Mesure_{c}'),
                 'Valeur': n,
             }
+            if second_id_col is not None and id_name_2 != 'Annee':
+                rec[id_name_2] = current_ids.get(second_id_col, '')
             records.append(rec)
 
     if not records:
@@ -333,7 +352,16 @@ class InfoBannerView(APIView):
         return [IsAuthenticated()]
 
     def get(self, request):
-        banner, _ = InfoBanner.objects.get_or_create(id=1, defaults={'message': ''})
+        banner, _ = InfoBanner.objects.get_or_create(id=1, defaults={'message': '', 'infos': []})
+
+        # Backward compatibility: if infos is empty but legacy message exists,
+        # expose it as a single info item.
+        infos = banner.infos if isinstance(banner.infos, list) else []
+        if not infos and str(banner.message or '').strip():
+            infos = [{'text': str(banner.message).strip(), 'url': ''}]
+            banner.infos = infos
+            banner.save(update_fields=['infos', 'updated_at'])
+
         serializer = InfoBannerSerializer(banner)
         return Response(serializer.data, status=status.HTTP_200_OK)
 
@@ -341,12 +369,29 @@ class InfoBannerView(APIView):
         if getattr(request.user, 'role', None) != 'ADMIN':
             return Response({'error': 'Accès refusé : seulement les administrateurs peuvent modifier cette info.'}, status=status.HTTP_403_FORBIDDEN)
 
-        message = str(request.data.get('message', '')).strip()
-        if not message:
-            return Response({'error': 'Le message info ne peut pas être vide.'}, status=status.HTTP_400_BAD_REQUEST)
+        raw_infos = request.data.get('infos', None)
+        normalized_infos = []
 
-        banner, _ = InfoBanner.objects.get_or_create(id=1, defaults={'message': message, 'updated_by': request.user})
+        if isinstance(raw_infos, list):
+            for item in raw_infos:
+                text = str((item or {}).get('text', '')).strip()
+                url = str((item or {}).get('url', '')).strip()
+                if not text:
+                    continue
+                normalized_infos.append({'text': text, 'url': url})
+        else:
+            # Legacy support: payload with single message
+            legacy_message = str(request.data.get('message', '')).strip()
+            if legacy_message:
+                normalized_infos = [{'text': legacy_message, 'url': ''}]
+
+        if not normalized_infos:
+            return Response({'error': 'Au moins une information valide est requise.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        message = normalized_infos[0]['text']
+        banner, _ = InfoBanner.objects.get_or_create(id=1, defaults={'message': message, 'infos': normalized_infos, 'updated_by': request.user})
         banner.message = message
+        banner.infos = normalized_infos
         banner.updated_by = request.user
         banner.save()
         return Response(InfoBannerSerializer(banner).data, status=status.HTTP_200_OK)

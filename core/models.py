@@ -229,6 +229,8 @@ class Metadata(models.Model):
 class InfoBanner(models.Model):
     """Message d'information global affiché dans la barre INFOS."""
     message = models.TextField(default="")
+    # Exemple: [{"text": "Publication disponible", "url": "https://..."}]
+    infos = models.JSONField(default=list, blank=True)
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
         CustomUser,

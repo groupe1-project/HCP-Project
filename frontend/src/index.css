@@ -138,3 +138,59 @@ h6 {
 .app-shell .text-\[\#6E001F\] {
 	color: #5B162D !important;
 }
+
+.infos-marquee {
+	overflow: hidden;
+	white-space: nowrap;
+	width: 100%;
+	max-width: 100%;
+	min-width: 0;
+}
+
+.infos-marquee-track {
+	display: inline-flex;
+	align-items: center;
+	min-width: 100%;
+	width: max-content;
+	animation-name: infosMarqueeScroll;
+	animation-timing-function: linear;
+	animation-iteration-count: infinite;
+}
+
+.infos-marquee:hover .infos-marquee-track {
+	animation-play-state: paused;
+}
+
+.infos-marquee-group {
+	display: inline-flex;
+	align-items: center;
+	padding-right: 1.75rem;
+}
+
+.infos-marquee-item {
+	display: inline-flex;
+	align-items: center;
+	padding-right: 2.25rem;
+}
+
+.infos-marquee-link {
+	color: #a12863;
+	text-decoration: none;
+	font-weight: 500;
+	cursor: pointer;
+	transition: color 160ms ease, font-weight 160ms ease;
+}
+
+.infos-marquee-link:hover {
+	color: #d97706;
+	font-weight: 700;
+}
+
+@keyframes infosMarqueeScroll {
+	from {
+		transform: translateX(0);
+	}
+	to {
+		transform: translateX(-50%);
+	}
+}

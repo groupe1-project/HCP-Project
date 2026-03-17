@@ -252,7 +252,7 @@ class InfoBannerSerializer(serializers.ModelSerializer):
 
     class Meta:
         model = InfoBanner
-        fields = ['id', 'message', 'updated_at', 'updated_by', 'updated_by_name']
+        fields = ['id', 'message', 'infos', 'updated_at', 'updated_by', 'updated_by_name']
         read_only_fields = ['updated_at', 'updated_by', 'updated_by_name']
 
 

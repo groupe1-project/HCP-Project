@@ -120,7 +120,8 @@ function App({ forceVisitor = false }) {
   const [expandedCategories, setExpandedCategories] = useState({});
   const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
   const [infoBannerText, setInfoBannerText] = useState("L'ICP du mois de Janvier 2026 est disponible");
-  const [infoBannerDraft, setInfoBannerDraft] = useState('');
+  const [infoBannerItems, setInfoBannerItems] = useState([{ text: "L'ICP du mois de Janvier 2026 est disponible", url: '' }]);
+  const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', url: '' }]);
   const [savingInfoBanner, setSavingInfoBanner] = useState(false);
   const [siteContent, setSiteContent] = useState({
     about_title: 'A propos de la plateforme',
@@ -163,6 +164,21 @@ function App({ forceVisitor = false }) {
     } catch (e) {
       return {};
     }
+  };
+
+  const sanitizeInfoItems = (rawItems) => {
+    if (!Array.isArray(rawItems)) return [];
+    return rawItems
+      .map((item) => {
+        const text = String(item?.text || '').trim();
+        let url = String(item?.url || '').trim();
+        if (!text) return null;
+        if (url && !/^https?:\/\//i.test(url)) {
+          url = `https://${url}`;
+        }
+        return { text, url };
+      })
+      .filter(Boolean);
   };
 
   const getSaisisseurAssignmentForSubTheme = (subThemeId, assignments = saisisseurAssignments) => {
@@ -356,10 +372,16 @@ function App({ forceVisitor = false }) {
     const fetchInfoBanner = async () => {
       try {
         const res = await axios.get(infoBannerApi);
-        const message = String(res?.data?.message || '').trim();
-        if (message) {
-          setInfoBannerText(message);
-          setInfoBannerDraft(message);
+        const payloadInfos = sanitizeInfoItems(res?.data?.infos || []);
+        const fallbackMessage = String(res?.data?.message || '').trim();
+        const normalizedInfos = payloadInfos.length > 0
+          ? payloadInfos
+          : (fallbackMessage ? [{ text: fallbackMessage, url: '' }] : []);
+
+        if (normalizedInfos.length > 0) {
+          setInfoBannerItems(normalizedInfos);
+          setInfoBannerDraftItems(normalizedInfos);
+          setInfoBannerText(normalizedInfos[0].text);
         }
       } catch (err) {
         console.error('Erreur chargement info banner', err);
@@ -1084,18 +1106,20 @@ function App({ forceVisitor = false }) {
   };
 
   const saveInfoBanner = async () => {
-    const msg = (infoBannerDraft || '').trim();
-    if (!msg) {
-      showToast('Le message info ne peut pas etre vide', 'warning');
+    const sanitizedInfos = sanitizeInfoItems(infoBannerDraftItems);
+    if (sanitizedInfos.length === 0) {
+      showToast('Ajoutez au moins une information valide', 'warning');
       return;
     }
 
     try {
       setSavingInfoBanner(true);
-      const res = await axios.put(infoBannerApi, { message: msg });
-      const savedMessage = String(res?.data?.message || msg).trim();
-      setInfoBannerText(savedMessage || msg);
-      setInfoBannerDraft(savedMessage || msg);
+      const res = await axios.put(infoBannerApi, { infos: sanitizedInfos });
+      const savedInfos = sanitizeInfoItems(res?.data?.infos || sanitizedInfos);
+      const nextInfos = savedInfos.length > 0 ? savedInfos : sanitizedInfos;
+      setInfoBannerItems(nextInfos);
+      setInfoBannerDraftItems(nextInfos);
+      setInfoBannerText(nextInfos[0]?.text || '');
       showToast('Information publiee pour les visiteurs', 'success');
     } catch (err) {
       console.error('Erreur sauvegarde info banner', err);
@@ -2929,7 +2953,24 @@ function App({ forceVisitor = false }) {
       }));
     }
     
-    setRows(initialRows);
+    // Préserver les données saisies si la structure n'a pas changé
+    if (rows.length === initialRows.length) {
+      // Garder les lignes existantes (l'utilisateur revient en arrière)
+    } else if (rows.length < initialRows.length) {
+      // Ajouter les nouvelles lignes manquantes en préservant les existantes
+      const merged = [...rows];
+      for (let i = rows.length; i < initialRows.length; i++) {
+        merged.push(initialRows[i]);
+      }
+      setRows(merged);
+    } else {
+      // Réduire le nombre de lignes
+      setRows(rows.slice(0, initialRows.length));
+    }
+    // Si rows est vide (première ouverture), initialiser
+    if (rows.length === 0) {
+      setRows(initialRows);
+    }
     setFormStep(2);
   };
 
@@ -2955,6 +2996,15 @@ function App({ forceVisitor = false }) {
           return;
         }
         seenCategories.add(normalized);
+      }
+    }
+
+    // Valider que tous les sous-thèmes ont un nom
+    for (let i = 0; i < (rows || []).length; i++) {
+      const cleanedSubTheme = String(rows[i]?.sousTheme || '').trim().replace(/\s+/g, ' ');
+      if (!cleanedSubTheme) {
+        alert(`Le nom du sous-thème est requis (ligne ${i + 1})`);
+        return;
       }
     }
 
@@ -3013,6 +3063,7 @@ function App({ forceVisitor = false }) {
       setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
       setThemeImageFile(null);
       setThemeImagePreview('');
+      setRows([]);
     } catch (err) { console.error(err.response?.data || err); alert("Erreur : " + (err.response?.data?.error || err.message)); }
   };
 
@@ -3084,6 +3135,15 @@ function App({ forceVisitor = false }) {
     if (!subTheme?.id) return false;
     return assignedSubThemeIdSet.has(String(subTheme.id));
   };
+
+  const isThemeVisibleForCurrentRole = (theme) => {
+    if (!isSaisisseur) return true;
+    const allSubThemes = [
+      ...(theme.sous_themes || []),
+      ...(theme.categories || []).flatMap(cat => cat.sous_themes || [])
+    ];
+    return allSubThemes.some(st => assignedSubThemeIdSet.has(String(st.id)));
+  };
   const indicatorsSubThemes = themes.flatMap(theme => {
     const directSubThemes = (theme.sous_themes || []).map(st => ({
       ...st,
@@ -3138,7 +3198,7 @@ function App({ forceVisitor = false }) {
 
   // --- RENDU PRINCIPAL (Admin) ---
   return (
-    <div className="app-shell flex min-h-screen bg-[var(--color-bg)] text-[var(--color-text-main)]">
+    <div className="app-shell flex min-h-screen bg-[var(--color-bg)] text-[var(--color-text-main)] overflow-x-hidden">
       
       {/* 1. MENU LATÉRAL */}
       <div className="w-64 bg-[var(--color-surface)] border-r border-[var(--color-border)] flex flex-col shadow-sm">
@@ -3163,13 +3223,13 @@ function App({ forceVisitor = false }) {
       </div>
 
       {/* 2. CONTENU PRINCIPAL */}
-      <div className="flex-1 flex flex-col">
-        <div className="bg-[var(--color-primary)] px-6 py-3 border-b border-[#9b2b64] flex items-center gap-4 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative">
-          <h1 className="text-white text-[28px] md:text-[34px] font-bold text-center tracking-wide leading-tight flex-1">
+      <div className="flex-1 min-w-0 flex flex-col overflow-x-hidden">
+        <div className="bg-[var(--color-primary)] px-4 md:px-6 py-3 border-b border-[#9b2b64] flex items-center gap-4 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative min-w-0">
+          <h1 className="text-white text-[24px] md:text-[32px] font-bold text-center tracking-wide leading-tight flex-1 min-w-0 break-words">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
           </h1>
           {canEdit && (
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 shrink-0">
               <button
                 onClick={() => {
                   const auth = resolveCurrentAuthStorage();
@@ -3190,33 +3250,107 @@ function App({ forceVisitor = false }) {
           )}
         </div>
 
-        <div className="bg-[var(--color-primary)] px-6 py-2 border-b border-[#9b2b64] flex items-center gap-3">
-          <span className="bg-[#a12863] text-white px-4 py-1 font-semibold rounded-xl">INFOS</span>
+        <div className="bg-[var(--color-primary)] px-3 md:px-4 py-2 border-b border-[#9b2b64]">
+          <div className="w-full max-w-[1200px] mx-auto flex items-center gap-3 min-w-0">
+          <span className="bg-[#a12863] text-white px-4 py-1 font-semibold rounded-xl shrink-0">INFOS</span>
           {canEdit && userRole === 'ADMIN' && activeMenu === 'Admin' ? (
-            <div className="flex-1 flex items-center gap-2">
-              <input
-                type="text"
-                value={infoBannerDraft}
-                onChange={(e) => setInfoBannerDraft(e.target.value)}
-                placeholder="Ecrire une information pour les visiteurs..."
-                className="bg-[var(--color-surface)] text-[var(--color-primary)] px-4 py-1.5 flex-1 rounded-xl font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
-              />
-              <button
-                type="button"
-                onClick={saveInfoBanner}
-                disabled={savingInfoBanner}
-                className={`px-4 py-1.5 rounded-xl font-semibold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
-              >
-                {savingInfoBanner ? 'Validation...' : 'Valider'}
-              </button>
+            <div className="flex-1 min-w-0 bg-[var(--color-surface)] rounded-xl border border-[var(--color-border)] p-2 space-y-2">
+              {(infoBannerDraftItems || []).map((item, idx) => (
+                <div key={`info-draft-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
+                  <input
+                    type="text"
+                    value={item?.text || ''}
+                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text: e.target.value } : it))}
+                    placeholder="Texte de l'information"
+                    className="bg-white text-[var(--color-primary)] px-3 py-1.5 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
+                  />
+                  <input
+                    type="text"
+                    value={item?.url || ''}
+                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, url: e.target.value } : it))}
+                    placeholder="Lien (optionnel): https://..."
+                    className="bg-white text-[var(--color-primary)] px-3 py-1.5 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setInfoBannerDraftItems((prev) => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev)}
+                    className="px-3 py-1.5 rounded-lg font-semibold border bg-[#ffe5ef] text-[#8f245e] border-[#e2b5c8] hover:bg-[#ffd5e7]"
+                    title="Supprimer"
+                  >
+                    Suppr
+                  </button>
+                </div>
+              ))}
+              <div className="flex items-center gap-2 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', url: '' }])}
+                  className="px-4 py-1.5 rounded-xl font-semibold border bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]"
+                >
+                  + Ajouter info
+                </button>
+                <button
+                  type="button"
+                  onClick={saveInfoBanner}
+                  disabled={savingInfoBanner}
+                  className={`px-4 py-1.5 rounded-xl font-semibold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
+                >
+                  {savingInfoBanner ? 'Validation...' : 'Valider'}
+                </button>
+              </div>
             </div>
           ) : (
-            <div className="bg-[var(--color-surface)] text-[var(--color-primary)] px-4 py-1.5 flex-1 rounded-xl font-medium border border-[var(--color-border)]">{infoBannerText}</div>
+            <div className="bg-[var(--color-surface)] text-[var(--color-primary)] px-4 py-1.5 flex-1 min-w-0 rounded-xl font-medium border border-[var(--color-border)] overflow-hidden">
+              {(() => {
+                const items = (infoBannerItems && infoBannerItems.length > 0)
+                  ? infoBannerItems
+                  : [{ text: infoBannerText, url: '' }];
+                const duration = Math.max(12, items.length * 4);
+
+                const renderTickerItem = (item, idx, copyIdx) => {
+                  const text = String(item?.text || '').trim();
+                  const url = String(item?.url || '').trim();
+                  if (!text) return null;
+
+                  return (
+                    <div className="infos-marquee-item" key={`info-${copyIdx}-${idx}`}>
+                      {url ? (
+                        <a
+                          href={url}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="infos-marquee-link"
+                          title={url}
+                        >
+                          {text}
+                        </a>
+                      ) : (
+                        <span className="infos-marquee-link">{text}</span>
+                      )}
+                    </div>
+                  );
+                };
+
+                return (
+                  <div className="infos-marquee" role="region" aria-label="Informations">
+                    <div className="infos-marquee-track" style={{ animationDuration: `${duration}s` }}>
+                      <div className="infos-marquee-group">
+                        {items.map((item, idx) => renderTickerItem(item, idx, 1))}
+                      </div>
+                      <div className="infos-marquee-group" aria-hidden="true">
+                        {items.map((item, idx) => renderTickerItem(item, idx, 2))}
+                      </div>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
           )}
+          </div>
         </div>
 
         {formStep !== 4 && activeMenu !== 'Admin' && !isInfoMenu && (
-          <div className={`px-6 bg-[#f4f5f7] border-b border-[var(--color-border)] ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
+          <div className={`px-3 md:px-4 bg-[#f4f5f7] border-b border-[var(--color-border)] max-w-[1200px] w-full mx-auto ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
             {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
               <div className="flex items-center gap-2">
                 <button
@@ -3241,7 +3375,7 @@ function App({ forceVisitor = false }) {
                   formStep === 3 ? 'Rechercher un sous-thème...' : 
                   'Barre de recherche'
                 } 
-                className="w-full pl-12 pr-4 py-3 border border-[#9d9d9d] rounded-none bg-[#f2f2f2] text-[#545454] outline-none focus:border-[#B03372]"
+                className="w-full pl-12 pr-4 py-3 border border-[#9d9d9d] rounded-none bg-white text-[#545454] outline-none focus:border-[#B03372]"
                 value={
                   activeMenu === 'Indicateurs' ? searchIndicateur :
                   formStep === 0 ? searchTheme : 
@@ -3458,7 +3592,7 @@ function App({ forceVisitor = false }) {
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
               <div className="grid grid-cols-3 gap-2">
-                {visibleThemes.filter(t => t.titre.toLowerCase().includes(searchTheme.toLowerCase())).map((t, i) => (
+                {visibleThemes.filter(t => t.titre.toLowerCase().includes(searchTheme.toLowerCase())).filter(t => isThemeVisibleForCurrentRole(t)).map((t, i) => (
                   <div 
                     key={t.id} 
                     onClick={() => { 
@@ -3484,7 +3618,7 @@ function App({ forceVisitor = false }) {
                     )}
                     <div className="flex items-center justify-between gap-3">
                       <div className="flex items-center gap-3 min-w-0">
-                        {isVisitor && t.theme_image && (
+                        {t.theme_image && (
                           <img
                             src={t.theme_image}
                             alt={t.titre}
@@ -3862,7 +3996,7 @@ function App({ forceVisitor = false }) {
                  </select>
                </div>
                <div className="flex justify-end gap-4 mt-10">
-                 <button onClick={() => { setFormStep(0); setThemeImageFile(null); setThemeImagePreview(''); }} className="bg-[#f28a8a] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Annuler</button>
+                 <button onClick={() => { setFormStep(0); setThemeImageFile(null); setThemeImagePreview(''); setRows([]); }} className="bg-[#f28a8a] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Annuler</button>
                  <button onClick={goToTable} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Suivant ➡</button>
                </div>
              </div>
