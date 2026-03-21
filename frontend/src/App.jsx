@@ -32,22 +32,22 @@ const LangSelector = ({ t, i18n }) => {
     <div ref={ref} className="relative">
       <button
         onClick={() => setOpen(o => !o)}
-        className="flex items-center gap-1 bg-[var(--color-primary-hover)] hover:bg-[#4A062E] text-white font-semibold py-2 px-3 rounded-xl border border-[#7A0A4A] text-sm"
+        className="h-9 px-3 flex items-center gap-1 bg-[#7A0A4A] hover:bg-[#5E0738] text-white font-semibold rounded-md border border-[#B84C83] text-xs"
       >
         {t('language')} <span className="text-xs">▾</span>
       </button>
       {open && (
-        <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl min-w-[120px] overflow-hidden" style={{zIndex: 9999}}>
+        <div className={`absolute ${i18n.language === 'ar' ? 'left-0' : 'right-0'} mt-1 bg-[#fffaf2] border border-[#B84C83] rounded-md shadow-lg min-w-[122px] overflow-hidden`} style={{zIndex: 9999}}>
           <button
             onClick={() => { i18n.changeLanguage('fr'); setOpen(false); }}
-            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${i18n.language === 'fr' ? 'font-bold text-[#7A0A4A]' : 'text-gray-700'}`}
+            className={`w-full text-left px-3 py-2 text-xs hover:bg-[#f7e8cf] flex items-center gap-2 ${i18n.language === 'fr' ? 'font-bold text-[#7A0A4A]' : 'text-[#6B3150]'}`}
           >
             {i18n.language === 'fr' && <span>✔</span>}
             Français
           </button>
           <button
             onClick={() => { i18n.changeLanguage('ar'); setOpen(false); }}
-            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${i18n.language === 'ar' ? 'font-bold text-[#7A0A4A]' : 'text-gray-700'}`}
+            className={`w-full text-left px-3 py-2 text-xs hover:bg-[#f7e8cf] flex items-center gap-2 ${i18n.language === 'ar' ? 'font-bold text-[#7A0A4A]' : 'text-[#6B3150]'}`}
           >
             {i18n.language === 'ar' && <span>✔</span>}
             عربية
@@ -197,6 +197,8 @@ function App({ forceVisitor = false }) {
   const [searchTheme, setSearchTheme] = useState('');
   const [searchSubTheme, setSearchSubTheme] = useState('');
   const [searchIndicateur, setSearchIndicateur] = useState('');
+  const [visitorHeaderSearch, setVisitorHeaderSearch] = useState('');
+  const [showVisitorHeaderSearch, setShowVisitorHeaderSearch] = useState(false);
   const [useCategories, setUseCategories] = useState(false);
   const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
   const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
@@ -278,6 +280,48 @@ function App({ forceVisitor = false }) {
   const getThemeDisplayTitle = (theme) => getLocalizedValue(theme, 'titre', 'titre_ar');
   const getCategoryDisplayName = (category) => getLocalizedValue(category, 'nom', 'nom_ar');
   const getSubThemeDisplayName = (subTheme) => getLocalizedValue(subTheme, 'nom', 'nom_ar');
+  const headerSearchTerm = String(visitorHeaderSearch || '').trim().toLowerCase();
+  const visitorSubThemeSearchResults = (() => {
+    if (!isVisitor || !headerSearchTerm) return [];
+
+    const byId = new Map();
+    (themes || []).forEach((theme) => {
+      const themeTitleFr = String(theme?.titre || '').trim();
+      const themeTitleAr = String(theme?.titre_ar || '').trim();
+
+      const pushCandidate = (subTheme, category = null) => {
+        if (!subTheme?.id) return;
+
+        const subNameFr = String(subTheme?.nom || '').trim();
+        const subNameAr = String(subTheme?.nom_ar || '').trim();
+        const catNameFr = String(category?.nom || '').trim();
+        const catNameAr = String(category?.nom_ar || '').trim();
+        const haystack = `${subNameFr} ${subNameAr} ${themeTitleFr} ${themeTitleAr} ${catNameFr} ${catNameAr}`.toLowerCase();
+        if (!haystack.includes(headerSearchTerm)) return;
+
+        const key = String(subTheme.id);
+        if (byId.has(key)) return;
+        byId.set(key, {
+          subThemeId: subTheme.id,
+          themeId: theme.id,
+          categoryId: category?.id || null,
+          subNameFr,
+          subNameAr,
+          themeTitleFr,
+          themeTitleAr,
+          catNameFr,
+          catNameAr,
+        });
+      };
+
+      (theme?.sous_themes || []).forEach((st) => pushCandidate(st, null));
+      (theme?.categories || []).forEach((cat) => {
+        (cat?.sous_themes || []).forEach((st) => pushCandidate(st, cat));
+      });
+    });
+
+    return Array.from(byId.values()).slice(0, 10);
+  })();
   const metadataFieldConfigs = [
     { key: 'definition_text', labelKey: 'meta_definition', multiline: true },
     { key: 'unite_text', labelKey: 'meta_unit', multiline: true },
@@ -1167,6 +1211,36 @@ function App({ forceVisitor = false }) {
       setSelectedSubTheme(buildDraftSubTheme(sub));
     }
   };
+
+  const openVisitorSubThemeFromHeader = async (result) => {
+    if (!result?.themeId || !result?.subThemeId) return;
+
+    try {
+      const res = await axios.get(themesApiBase);
+      const freshTheme = (res.data || []).find((t) => String(t.id) === String(result.themeId));
+      if (!freshTheme) return;
+
+      const subFromRoot = (freshTheme.sous_themes || []).find((s) => String(s.id) === String(result.subThemeId));
+      const categoryMatch = (freshTheme.categories || []).find((cat) => (cat.sous_themes || []).some((s) => String(s.id) === String(result.subThemeId)));
+      const subFromCategory = categoryMatch ? (categoryMatch.sous_themes || []).find((s) => String(s.id) === String(result.subThemeId)) : null;
+      const freshSubTheme = subFromRoot || subFromCategory;
+      if (!freshSubTheme) return;
+
+      setSelectedTheme(freshTheme);
+      setSelectedCategorie(categoryMatch || null);
+      setSelectedVisitorCategoryId(categoryMatch ? String(categoryMatch.id) : 'all');
+      setExpandedCategories({});
+      setActiveMenu('Themes');
+      selectSubTheme(freshSubTheme);
+      setSavedCharts(freshSubTheme.charts_config || []);
+      setFormStep(4);
+      setVisitorHeaderSearch('');
+      setShowVisitorHeaderSearch(false);
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
   const handleLogin = () => {
     setIsAuthenticated(true);
     // refresh userRole from stored auth_context
@@ -3680,14 +3754,66 @@ function App({ forceVisitor = false }) {
 
       {/* 2. CONTENU PRINCIPAL */}
       <div className="flex-1 min-w-0 h-screen flex flex-col overflow-hidden">
-        <div className="bg-[var(--color-primary)] px-4 md:px-6 py-3 border-b border-[#9b2b64] flex items-center gap-4 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative min-w-0">
-          <h1 className="text-white text-[24px] md:text-[32px] font-bold text-center tracking-wide leading-tight flex-1 min-w-0 break-words">
+        <div className={`bg-[var(--color-primary)] px-4 md:px-6 py-3 border-b border-[#9b2b64] flex items-center gap-3 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative min-w-0 ${isVisitor ? 'min-h-[64px]' : ''}`}>
+          <h1 className={`text-white font-bold text-center tracking-wide leading-tight ${isVisitor ? 'text-[18px] md:text-[24px] w-full px-8 md:px-0 md:absolute md:left-1/2 md:-translate-x-1/2 md:w-[min(62vw,820px)] pointer-events-none break-words' : 'text-[24px] md:text-[32px] flex-1 min-w-0 break-words'}`}>
             {i18n.language === 'ar' ? 'قاعدة المعطيات الجهوية لبني ملال-خنيفرة' : 'Base de Données Région Béni Mellal-Khénifra'}
           </h1>
-          {/* Language selector (visitor only) */}
+          {/* Header search + language selector (visitor only) */}
           {isVisitor && (
-            <div className="relative shrink-0" style={{zIndex: 200}}>
-              <LangSelector t={t} i18n={i18n} />
+            <div className="flex items-center gap-2 shrink-0 min-w-0" style={{zIndex: 200}}>
+              <div
+                className="relative w-[150px] md:w-[210px]"
+                onFocus={() => setShowVisitorHeaderSearch(true)}
+                onBlur={(e) => {
+                  if (!e.currentTarget.contains(e.relatedTarget)) {
+                    setShowVisitorHeaderSearch(false);
+                  }
+                }}
+              >
+                <input
+                  type="text"
+                  dir={isArabicVisitor ? 'rtl' : 'ltr'}
+                  value={visitorHeaderSearch}
+                  onChange={(e) => setVisitorHeaderSearch(e.target.value)}
+                  placeholder={isArabicVisitor ? 'ابحث عن موضوع فرعي...' : 'Rechercher un sous-theme...'}
+                  className={`w-full h-9 text-sm ${isArabicVisitor ? 'pr-9 pl-3 text-right' : 'pl-9 pr-3 text-left'} bg-[#fffaf2] border border-[#B84C83] text-[#6B3150] rounded-md outline-none focus:border-[#7A0A4A]`}
+                />
+                <span className={`absolute ${isArabicVisitor ? 'right-3' : 'left-3'} top-1/2 -translate-y-1/2 text-[#7A0A4A]`}>⌕</span>
+
+                {showVisitorHeaderSearch && headerSearchTerm && (
+                  <div className={`absolute ${isArabicVisitor ? 'left-0' : 'right-0'} mt-1 w-full bg-[#fffaf2] border border-[#B84C83] rounded-md shadow-lg max-h-72 overflow-y-auto`}>
+                    {visitorSubThemeSearchResults.length > 0 ? (
+                      visitorSubThemeSearchResults.map((result) => {
+                        const subLabel = isArabicVisitor ? (result.subNameAr || result.subNameFr) : (result.subNameFr || result.subNameAr);
+                        const themeLabel = isArabicVisitor ? (result.themeTitleAr || result.themeTitleFr) : (result.themeTitleFr || result.themeTitleAr);
+                        const catLabel = isArabicVisitor ? (result.catNameAr || result.catNameFr) : (result.catNameFr || result.catNameAr);
+
+                        return (
+                          <button
+                            key={`visitor-search-${result.subThemeId}`}
+                            type="button"
+                            onClick={() => openVisitorSubThemeFromHeader(result)}
+                            className={`w-full px-3 py-2 border-b border-[#E7C8DA] last:border-b-0 hover:bg-[#f7e8cf] ${isArabicVisitor ? 'text-right' : 'text-left'}`}
+                          >
+                            <div className="font-semibold text-[#6E001F] truncate">{subLabel}</div>
+                            <div className="text-xs text-[#7A0A4A] truncate">
+                              {catLabel ? `${themeLabel} - ${catLabel}` : themeLabel}
+                            </div>
+                          </button>
+                        );
+                      })
+                    ) : (
+                      <div className={`px-3 py-2 text-sm text-[#7A0A4A] ${isArabicVisitor ? 'text-right' : 'text-left'}`}>
+                        {isArabicVisitor ? 'لا توجد نتائج' : 'Aucun resultat'}
+                      </div>
+                    )}
+                  </div>
+                )}
+              </div>
+
+              <div className="relative shrink-0">
+                <LangSelector t={t} i18n={i18n} />
+              </div>
             </div>
           )}
           {canEdit && (
