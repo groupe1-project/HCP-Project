@@ -32,9 +32,10 @@ class SousThemeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SousTheme
         fields = [
-            'id', 'nom', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns_order', 'columns', 'charts_config',
+            'id', 'nom', 'nom_ar', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns_order', 'columns', 'charts_config',
             # Métadonnées éditables côté front
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
+            'definition_text_ar', 'unite_text_ar', 'indication_text_ar', 'source_text_ar', 'periodicite_text_ar', 'couverture_text_ar',
             # Nouveaux champs
             'niveau_geo', 'type_unite', 'est_sommable', 'filtres_disponibles'
             , 'visitor_visible_columns', 'visitor_filters', 'visitor_default_filters', 'visitor_pivot_columns', 'visitor_default_view'
@@ -136,7 +137,7 @@ class CategorieSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Categorie
-        fields = ['id', 'nom', 'ordre', 'theme', 'sous_themes', 'is_visible']
+        fields = ['id', 'nom', 'nom_ar', 'ordre', 'theme', 'sous_themes', 'is_visible']
 
 class ThemeSerializer(serializers.ModelSerializer):
     # Relation vers les sous-thèmes
@@ -149,6 +150,7 @@ class ThemeSerializer(serializers.ModelSerializer):
         fields = [
             'id', 
             'titre', 
+            'titre_ar',
             'theme_image',
             'ordre', 
             'is_visible', 
@@ -161,7 +163,14 @@ class ThemeSerializer(serializers.ModelSerializer):
             'unite_text',
             'indication_text',
             'source_text',
-            'periodicite_text'
+            'periodicite_text',
+            'couverture_text',
+            'definition_text_ar',
+            'unite_text_ar',
+            'indication_text_ar',
+            'source_text_ar',
+            'periodicite_text_ar',
+            'couverture_text_ar'
         ]
 
     def validate_titre(self, value):
@@ -265,12 +274,18 @@ class SiteContentSerializer(serializers.ModelSerializer):
             'id',
             'about_title',
             'about_text',
+            'about_title_ar',
+            'about_text_ar',
             'contact_title',
+            'contact_title_ar',
             'contact_email',
             'contact_phone',
             'contact_address',
+            'contact_address_ar',
             'contact_hours',
+            'contact_hours_ar',
             'useful_links',
+            'useful_links_ar',
             'updated_at',
             'updated_by',
             'updated_by_name',
@@ -279,10 +294,16 @@ class SiteContentSerializer(serializers.ModelSerializer):
         extra_kwargs = {
             'about_title': {'required': False, 'allow_blank': True},
             'about_text': {'required': False, 'allow_blank': True},
+            'about_title_ar': {'required': False, 'allow_blank': True},
+            'about_text_ar': {'required': False, 'allow_blank': True},
             'contact_title': {'required': False, 'allow_blank': True},
+            'contact_title_ar': {'required': False, 'allow_blank': True},
             'contact_email': {'required': False, 'allow_blank': True},
             'contact_phone': {'required': False, 'allow_blank': True},
             'contact_address': {'required': False, 'allow_blank': True},
+            'contact_address_ar': {'required': False, 'allow_blank': True},
             'contact_hours': {'required': False, 'allow_blank': True},
+            'contact_hours_ar': {'required': False, 'allow_blank': True},
             'useful_links': {'required': False},
+            'useful_links_ar': {'required': False},
         }

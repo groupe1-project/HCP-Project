@@ -12,8 +12,10 @@
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
     "axios": "^1.13.4",
+    "i18next": "^25.10.2",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "react-i18next": "^16.6.0",
     "recharts": "^3.7.0"
   },
   "devDependencies": {

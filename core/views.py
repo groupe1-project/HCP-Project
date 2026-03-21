@@ -358,8 +358,21 @@ class InfoBannerView(APIView):
         # expose it as a single info item.
         infos = banner.infos if isinstance(banner.infos, list) else []
         if not infos and str(banner.message or '').strip():
-            infos = [{'text': str(banner.message).strip(), 'url': ''}]
+            infos = [{'text': str(banner.message).strip(), 'text_ar': '', 'url': ''}]
             banner.infos = infos
+            banner.save(update_fields=['infos', 'updated_at'])
+
+        normalized_infos = []
+        for item in infos:
+            text = str((item or {}).get('text', '')).strip()
+            text_ar = str((item or {}).get('text_ar', '')).strip()
+            url = str((item or {}).get('url', '')).strip()
+            if not text:
+                continue
+            normalized_infos.append({'text': text, 'text_ar': text_ar, 'url': url})
+
+        if normalized_infos != infos:
+            banner.infos = normalized_infos
             banner.save(update_fields=['infos', 'updated_at'])
 
         serializer = InfoBannerSerializer(banner)
@@ -375,15 +388,16 @@ class InfoBannerView(APIView):
         if isinstance(raw_infos, list):
             for item in raw_infos:
                 text = str((item or {}).get('text', '')).strip()
+                text_ar = str((item or {}).get('text_ar', '')).strip()
                 url = str((item or {}).get('url', '')).strip()
                 if not text:
                     continue
-                normalized_infos.append({'text': text, 'url': url})
+                normalized_infos.append({'text': text, 'text_ar': text_ar, 'url': url})
         else:
             # Legacy support: payload with single message
             legacy_message = str(request.data.get('message', '')).strip()
             if legacy_message:
-                normalized_infos = [{'text': legacy_message, 'url': ''}]
+                normalized_infos = [{'text': legacy_message, 'text_ar': '', 'url': ''}]
 
         if not normalized_infos:
             return Response({'error': 'Au moins une information valide est requise.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -413,15 +427,28 @@ class SiteContentView(APIView):
                 'la visualisation des indicateurs et la diffusion d\'informations fiables pour '
                 'l\'aide à la décision publique.'
             ),
+            'about_title_ar': 'حول المنصة',
+            'about_text_ar': (
+                'تُيسر المنصة الجهوية للمندوبية السامية للتخطيط الولوج إلى الإحصائيات الترابية، '
+                'وعرض المؤشرات، ونشر معلومات موثوقة لدعم اتخاذ القرار العمومي.'
+            ),
             'contact_title': 'Contact',
+            'contact_title_ar': 'اتصل بنا',
             'contact_email': 'contact@hcp.ma',
             'contact_phone': '+212 5 23 00 00 00',
             'contact_address': 'Direction Régionale HCP\nBéni Mellal - Khénifra',
+            'contact_address_ar': 'المديرية الجهوية للمندوبية السامية للتخطيط\nبني ملال - خنيفرة',
             'contact_hours': 'Lundi - Vendredi, 08:30 - 16:30',
+            'contact_hours_ar': 'الاثنين - الجمعة، 08:30 - 16:30',
             'useful_links': [
                 {'label': 'Haut-Commissariat au Plan', 'url': 'https://www.hcp.ma'},
                 {'label': 'Portail du Gouvernement', 'url': 'https://www.maroc.ma'},
                 {'label': 'Open Data Maroc', 'url': 'https://www.data.gov.ma'},
+            ],
+            'useful_links_ar': [
+                {'label': 'المندوبية السامية للتخطيط', 'url': 'https://www.hcp.ma'},
+                {'label': 'البوابة الرسمية للحكومة', 'url': 'https://www.maroc.ma'},
+                {'label': 'البيانات المفتوحة - المغرب', 'url': 'https://www.data.gov.ma'},
             ],
         }
 
@@ -859,6 +886,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
         try:
             # 1. Récupération et création du Thème
             titre = ' '.join(str(request.data.get('titre') or '').strip().split())
+            titre_ar = ' '.join(str(request.data.get('titre_ar') or '').strip().split())
             if not titre:
                 return Response({'error': 'Le titre du thème est requis.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -887,6 +915,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             
             nouveau_theme = Theme.objects.create(
                 titre=titre,
+                titre_ar=titre_ar or '',
                 theme_image=theme_image_value,
                 is_visible=is_visible
             )
@@ -899,6 +928,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 cat_index = 0
                 while f'categories[{cat_index}][nom]' in request.data:
                     cat_nom = ' '.join(str(request.data.get(f'categories[{cat_index}][nom]') or '').strip().split())
+                    cat_nom_ar = ' '.join(str(request.data.get(f'categories[{cat_index}][nom_ar]') or '').strip().split())
                     cat_ordre = request.data.get(f'categories[{cat_index}][ordre]', cat_index)
                     if cat_nom and cat_nom.strip():
                         normalized_cat_nom = _normalize_name(cat_nom)
@@ -908,6 +938,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
 
                         cat_obj = Categorie.objects.create(
                             nom=cat_nom,
+                            nom_ar=cat_nom_ar or '',
                             theme=nouveau_theme,
                             ordre=int(cat_ordre),
                             is_visible=is_visible
@@ -921,6 +952,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             index = 0
             while f'lignes[{index}][sousTheme]' in request.data:
                 nom_st = ' '.join(str(request.data.get(f'lignes[{index}][sousTheme]') or '').strip().split())
+                nom_st_ar = ' '.join(str(request.data.get(f'lignes[{index}][sousTheme_ar]') or '').strip().split())
                 if not nom_st:
                     return Response({'error': f'Le nom du sous-thème est requis (ligne {index + 1}).'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -945,6 +977,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 # Création du Sous-Thème avec les métadonnées pré-remplies et le même statut que le thème
                 st_obj = SousTheme.objects.create(
                     nom=nom_st, 
+                    nom_ar=nom_st_ar or '',
                     theme=nouveau_theme,
                     categorie=categorie_obj,
                     indication_text=libelle_ind or '',
@@ -1352,7 +1385,10 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
                 meta = notes_obj.get('meta') if isinstance(notes_obj.get('meta'), dict) else {}
                 advanced_config = notes_obj.get('advancedConfig') if isinstance(notes_obj.get('advancedConfig'), dict) else {}
 
-                for field in ['definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text']:
+                for field in [
+                    'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
+                    'definition_text_ar', 'unite_text_ar', 'indication_text_ar', 'source_text_ar', 'periodicite_text_ar', 'couverture_text_ar',
+                ]:
                     if field in meta:
                         setattr(sous_theme, field, meta.get(field))
 

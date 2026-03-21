@@ -1,4 +1,5 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
+import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
 import * as XLSX from 'xlsx-js-style';
@@ -7,10 +8,10 @@ import AdministratorsPage from './AdministratorsPage';
 import ChartModal from './components/ChartModal';
 
 // --- COMPOSANTS DE STYLE ---
-const SidebarButton = ({ label, onClick, active }) => (
+const SidebarButton = ({ label, onClick, active, centered = false }) => (
   <button 
     onClick={onClick}
-    className={`w-full py-3 px-5 text-left font-semibold border-b border-[var(--color-border)] transition-colors uppercase tracking-wide ${
+    className={`w-full py-3 px-5 ${centered ? 'text-center' : 'text-left'} font-semibold border-b border-[var(--color-border)] transition-colors uppercase tracking-wide ${
       active ? 'bg-[#f1dec0] text-[var(--color-primary)] shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-primary)] hover:bg-[#f7e8cf]'
     }`}
   >
@@ -18,7 +19,84 @@ const SidebarButton = ({ label, onClick, active }) => (
   </button>
 );
 
+// --- LANGUAGE SELECTOR ---
+const LangSelector = ({ t, i18n }) => {
+  const [open, setOpen] = React.useState(false);
+  const ref = React.useRef(null);
+  React.useEffect(() => {
+    const handler = (e) => { if (ref.current && !ref.current.contains(e.target)) setOpen(false); };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, []);
+  return (
+    <div ref={ref} className="relative">
+      <button
+        onClick={() => setOpen(o => !o)}
+        className="flex items-center gap-1 bg-[var(--color-primary-hover)] hover:bg-[#4A062E] text-white font-semibold py-2 px-3 rounded-xl border border-[#7A0A4A] text-sm"
+      >
+        {t('language')} <span className="text-xs">▾</span>
+      </button>
+      {open && (
+        <div className="absolute right-0 mt-1 bg-white border border-gray-200 rounded-xl shadow-xl min-w-[120px] overflow-hidden" style={{zIndex: 9999}}>
+          <button
+            onClick={() => { i18n.changeLanguage('fr'); setOpen(false); }}
+            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${i18n.language === 'fr' ? 'font-bold text-[#7A0A4A]' : 'text-gray-700'}`}
+          >
+            {i18n.language === 'fr' && <span>✔</span>}
+            Français
+          </button>
+          <button
+            onClick={() => { i18n.changeLanguage('ar'); setOpen(false); }}
+            className={`w-full text-left px-4 py-2 text-sm hover:bg-gray-50 flex items-center gap-2 ${i18n.language === 'ar' ? 'font-bold text-[#7A0A4A]' : 'text-gray-700'}`}
+          >
+            {i18n.language === 'ar' && <span>✔</span>}
+            عربية
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 function App({ forceVisitor = false }) {
+  const { t, i18n } = useTranslation();
+  const createMetadataState = () => ({
+    definition_text: '',
+    definition_text_ar: '',
+    unite_text: '',
+    unite_text_ar: '',
+    indication_text: '',
+    indication_text_ar: '',
+    source_text: '',
+    source_text_ar: '',
+    periodicite_text: '',
+    periodicite_text_ar: '',
+    couverture_text: '',
+    couverture_text_ar: '',
+  });
+
+  // --- RTL + language restriction (visitor only) ---
+  useEffect(() => {
+    const pathname = (typeof window !== 'undefined' && window.location.pathname)
+      ? window.location.pathname.toLowerCase()
+      : '/';
+    const isVisitorRoute = forceVisitor || pathname === '/visiteur' || pathname.startsWith('/visiteur/');
+
+    if (!isVisitorRoute && i18n.language !== 'fr') {
+      i18n.changeLanguage('fr');
+    }
+
+    const effectiveLang = isVisitorRoute ? i18n.language : 'fr';
+    document.documentElement.dir = effectiveLang === 'ar' ? 'rtl' : 'ltr';
+    document.documentElement.lang = effectiveLang;
+
+    try {
+      if (isVisitorRoute) {
+        localStorage.setItem('app_lang', i18n.language);
+      }
+    } catch {}
+  }, [i18n.language, forceVisitor]);
+
   // --- AUTHENTIFICATION (toujours appelé en premier) ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
@@ -40,7 +118,7 @@ function App({ forceVisitor = false }) {
   const [selectedTheme, setSelectedTheme] = useState(null);
   const [selectedSubTheme, setSelectedSubTheme] = useState(null);
   const [selectedCategorie, setSelectedCategorie] = useState(null);
-  const [themeData, setThemeData] = useState({ titre: '', nbSousThemes: 1, statut: 'Public' });
+  const [themeData, setThemeData] = useState({ titre: '', titre_ar: '', nbSousThemes: 1, statut: 'Public' });
   const [themeImageFile, setThemeImageFile] = useState(null);
   const [themeImagePreview, setThemeImagePreview] = useState('');
   const [openThemeMenu, setOpenThemeMenu] = useState(null);
@@ -56,15 +134,16 @@ function App({ forceVisitor = false }) {
   const [showActionModal, setShowActionModal] = useState(false);
   const [actionModalType, setActionModalType] = useState('rename');
   const [actionModalValue, setActionModalValue] = useState('');
+  const [actionModalValueAr, setActionModalValueAr] = useState('');
   const [actionModalThemeId, setActionModalThemeId] = useState(null);
   const [actionModalCategorieId, setActionModalCategorieId] = useState(null);
   const [rows, setRows] = useState([]);
   const [assignedSubThemes, setAssignedSubThemes] = useState([]);
   const [saisisseurAssignments, setSaisisseurAssignments] = useState([]);
   const [showThemeMeta, setShowThemeMeta] = useState(false);
-  const [themeMeta, setThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
+  const [themeMeta, setThemeMeta] = useState(createMetadataState);
   const [showSubThemeMeta, setShowSubThemeMeta] = useState(false);
-  const [subThemeMeta, setSubThemeMeta] = useState({ definition_text: '', unite_text: '', indication_text: '', source_text: '', periodicite_text: '', couverture_text: '' });
+  const [subThemeMeta, setSubThemeMeta] = useState(createMetadataState);
   const [showAdvancedConfig, setShowAdvancedConfig] = useState(false);
   const [advancedConfig, setAdvancedConfig] = useState({ niveau_geo: null, type_unite: '', est_sommable: true, filtres_disponibles: [] });
   const [advancedConfigFiltersText, setAdvancedConfigFiltersText] = useState('');
@@ -121,33 +200,45 @@ function App({ forceVisitor = false }) {
   const [useCategories, setUseCategories] = useState(false);
   const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
   const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
-  const [categoryNames, setCategoryNames] = useState([{ nom: '', nbSousThemes: 1 }]);
+  const [categoryNames, setCategoryNames] = useState([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
   const [expandedCategories, setExpandedCategories] = useState({});
   const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
   const [infoBannerText, setInfoBannerText] = useState("L'ICP du mois de Janvier 2026 est disponible");
-  const [infoBannerItems, setInfoBannerItems] = useState([{ text: "L'ICP du mois de Janvier 2026 est disponible", url: '' }]);
-  const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', url: '' }]);
+  const [infoBannerItems, setInfoBannerItems] = useState([{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', url: '' }]);
+  const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', text_ar: '', url: '' }]);
   const [showInfoBannerEditor, setShowInfoBannerEditor] = useState(false);
   const [savingInfoBanner, setSavingInfoBanner] = useState(false);
   const [siteContent, setSiteContent] = useState({
     about_title: 'A propos de la plateforme',
     about_text: '',
+    about_title_ar: 'حول المنصة',
+    about_text_ar: '',
     contact_title: 'Contact',
+    contact_title_ar: 'اتصل بنا',
     contact_email: '',
     contact_phone: '',
     contact_address: '',
+    contact_address_ar: '',
     contact_hours: '',
+    contact_hours_ar: '',
     useful_links: [],
+    useful_links_ar: [],
   });
   const [siteContentDraft, setSiteContentDraft] = useState({
     about_title: 'A propos de la plateforme',
     about_text: '',
+    about_title_ar: 'حول المنصة',
+    about_text_ar: '',
     contact_title: 'Contact',
+    contact_title_ar: 'اتصل بنا',
     contact_email: '',
     contact_phone: '',
     contact_address: '',
+    contact_address_ar: '',
     contact_hours: '',
+    contact_hours_ar: '',
     useful_links: [],
+    useful_links_ar: [],
   });
   const [savingSiteContent, setSavingSiteContent] = useState(false);
 
@@ -165,6 +256,8 @@ function App({ forceVisitor = false }) {
   const infoBannerApi = 'http://127.0.0.1:8000/api/info-banner/';
   const siteContentApi = 'http://127.0.0.1:8000/api/site-content/';
   const isInfoMenu = ['Contact', 'APropos', 'LiensUtiles'].includes(activeMenu);
+  const isArabicVisitor = isVisitor && i18n.language === 'ar';
+  const localeCode = isArabicVisitor ? 'ar-MA' : 'fr-FR';
 
   const parseAssignmentNotes = (rawNotes) => {
     try {
@@ -174,17 +267,99 @@ function App({ forceVisitor = false }) {
     }
   };
 
+  const getLocalizedValue = (item, frKey, arKey) => {
+    if (!item) return '';
+    if (isArabicVisitor) {
+      return item?.[arKey] || item?.[frKey] || '';
+    }
+    return item?.[frKey] || '';
+  };
+
+  const getThemeDisplayTitle = (theme) => getLocalizedValue(theme, 'titre', 'titre_ar');
+  const getCategoryDisplayName = (category) => getLocalizedValue(category, 'nom', 'nom_ar');
+  const getSubThemeDisplayName = (subTheme) => getLocalizedValue(subTheme, 'nom', 'nom_ar');
+  const metadataFieldConfigs = [
+    { key: 'definition_text', labelKey: 'meta_definition', multiline: true },
+    { key: 'unite_text', labelKey: 'meta_unit', multiline: true },
+    { key: 'periodicite_text', labelKey: 'meta_periodicity', multiline: true },
+    { key: 'indication_text', labelKey: 'meta_indication', multiline: true },
+    { key: 'source_text', labelKey: 'meta_source', multiline: true },
+    { key: 'couverture_text', labelKey: 'meta_coverage', multiline: true },
+  ];
+
+  const getLocalizedMetadataValue = (item, key) => getLocalizedValue(item, key, `${key}_ar`);
+
+  const buildMetadataState = (item) => metadataFieldConfigs.reduce((acc, field) => {
+    acc[field.key] = item?.[field.key] || '';
+    acc[`${field.key}_ar`] = item?.[`${field.key}_ar`] || '';
+    return acc;
+  }, createMetadataState());
+
+  const getExportViewLabel = (view) => {
+    if (view === 'horizontal') return t('export_view_horizontal');
+    if (view === 'vertical') return t('export_view_vertical');
+    return t('export_view_flat');
+  };
+
+  const formatLocalizedNumber = (value, options = {}) => new Intl.NumberFormat(localeCode, options).format(value);
+
+  const renderMetadataViewer = (metaState) => (
+    <div className="space-y-4">
+      {metadataFieldConfigs.map(({ key, labelKey, multiline }) => {
+        const value = getLocalizedMetadataValue(metaState, key);
+        return (
+          <div key={key}>
+            <div className="font-semibold text-[#23354a]">{t(labelKey)}</div>
+            <div className={`mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 ${multiline ? 'whitespace-pre-wrap' : ''}`}>{value || '—'}</div>
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  const renderMetadataEditor = (metaState, setMetaState) => (
+    <div className="space-y-4">
+      {metadataFieldConfigs.map(({ key, labelKey }) => (
+        <div key={key} className="space-y-2">
+          <div className="font-semibold">{t(labelKey)}</div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-gray-600">{t('french_label')}</div>
+              <textarea
+                placeholder={`${t(labelKey)} (${t('french_label')})`}
+                className="mt-1 w-full p-2 border-2 border-black rounded min-h-[100px]"
+                value={metaState[key]}
+                onChange={e => setMetaState({ ...metaState, [key]: e.target.value })}
+              />
+            </div>
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-gray-600">{t('arabic_label')}</div>
+              <textarea
+                placeholder={`${t(labelKey)} (${t('arabic_label')})`}
+                className="mt-1 w-full p-2 border-2 border-black rounded min-h-[100px]"
+                dir="rtl"
+                value={metaState[`${key}_ar`]}
+                onChange={e => setMetaState({ ...metaState, [`${key}_ar`]: e.target.value })}
+              />
+            </div>
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+
   const sanitizeInfoItems = (rawItems) => {
     if (!Array.isArray(rawItems)) return [];
     return rawItems
       .map((item) => {
         const text = String(item?.text || '').trim();
+        const text_ar = String(item?.text_ar || '').trim();
         let url = String(item?.url || '').trim();
         if (!text) return null;
         if (url && !/^https?:\/\//i.test(url)) {
           url = `https://${url}`;
         }
-        return { text, url };
+        return { text, text_ar, url };
       })
       .filter(Boolean);
   };
@@ -266,11 +441,17 @@ function App({ forceVisitor = false }) {
       charts: savedCharts || [],
       meta: {
         definition_text: selectedSubTheme?.definition_text || '',
+        definition_text_ar: selectedSubTheme?.definition_text_ar || '',
         unite_text: selectedSubTheme?.unite_text || '',
+        unite_text_ar: selectedSubTheme?.unite_text_ar || '',
         indication_text: selectedSubTheme?.indication_text || '',
+        indication_text_ar: selectedSubTheme?.indication_text_ar || '',
         source_text: selectedSubTheme?.source_text || '',
+        source_text_ar: selectedSubTheme?.source_text_ar || '',
         periodicite_text: selectedSubTheme?.periodicite_text || '',
+        periodicite_text_ar: selectedSubTheme?.periodicite_text_ar || '',
         couverture_text: selectedSubTheme?.couverture_text || '',
+        couverture_text_ar: selectedSubTheme?.couverture_text_ar || '',
       },
       visitor_defaults: selectedSubTheme?.visitor_default_filters || modalVisitorDefaultFilters || {},
       advancedConfig: {
@@ -395,7 +576,7 @@ function App({ forceVisitor = false }) {
         const fallbackMessage = String(res?.data?.message || '').trim();
         const normalizedInfos = payloadInfos.length > 0
           ? payloadInfos
-          : (fallbackMessage ? [{ text: fallbackMessage, url: '' }] : []);
+          : (fallbackMessage ? [{ text: fallbackMessage, text_ar: '', url: '' }] : []);
 
         if (normalizedInfos.length > 0) {
           setInfoBannerItems(normalizedInfos);
@@ -417,12 +598,18 @@ function App({ forceVisitor = false }) {
         const payload = {
           about_title: String(res?.data?.about_title || 'A propos de la plateforme'),
           about_text: String(res?.data?.about_text || ''),
+          about_title_ar: String(res?.data?.about_title_ar || 'حول المنصة'),
+          about_text_ar: String(res?.data?.about_text_ar || ''),
           contact_title: String(res?.data?.contact_title || 'Contact'),
+          contact_title_ar: String(res?.data?.contact_title_ar || 'اتصل بنا'),
           contact_email: String(res?.data?.contact_email || ''),
           contact_phone: String(res?.data?.contact_phone || ''),
           contact_address: String(res?.data?.contact_address || ''),
+          contact_address_ar: String(res?.data?.contact_address_ar || ''),
           contact_hours: String(res?.data?.contact_hours || ''),
+          contact_hours_ar: String(res?.data?.contact_hours_ar || ''),
           useful_links: Array.isArray(res?.data?.useful_links) ? res.data.useful_links : [],
+          useful_links_ar: Array.isArray(res?.data?.useful_links_ar) ? res.data.useful_links_ar : [],
         };
         setSiteContent(payload);
         setSiteContentDraft(payload);
@@ -1146,17 +1333,24 @@ function App({ forceVisitor = false }) {
       const payload = {
         ...siteContentDraft,
         useful_links: sanitizeUsefulLinks(siteContentDraft.useful_links),
+        useful_links_ar: sanitizeUsefulLinks(siteContentDraft.useful_links_ar),
       };
       const res = await axios.put(siteContentApi, payload);
       const saved = {
         about_title: String(res?.data?.about_title || payload.about_title || 'A propos de la plateforme'),
         about_text: String(res?.data?.about_text || payload.about_text || ''),
+        about_title_ar: String(res?.data?.about_title_ar || payload.about_title_ar || 'حول المنصة'),
+        about_text_ar: String(res?.data?.about_text_ar || payload.about_text_ar || ''),
         contact_title: String(res?.data?.contact_title || payload.contact_title || 'Contact'),
+        contact_title_ar: String(res?.data?.contact_title_ar || payload.contact_title_ar || 'اتصل بنا'),
         contact_email: String(res?.data?.contact_email || payload.contact_email || ''),
         contact_phone: String(res?.data?.contact_phone || payload.contact_phone || ''),
         contact_address: String(res?.data?.contact_address || payload.contact_address || ''),
+        contact_address_ar: String(res?.data?.contact_address_ar || payload.contact_address_ar || ''),
         contact_hours: String(res?.data?.contact_hours || payload.contact_hours || ''),
+        contact_hours_ar: String(res?.data?.contact_hours_ar || payload.contact_hours_ar || ''),
         useful_links: Array.isArray(res?.data?.useful_links) ? res.data.useful_links : payload.useful_links,
+        useful_links_ar: Array.isArray(res?.data?.useful_links_ar) ? res.data.useful_links_ar : payload.useful_links_ar,
       };
       setSiteContent(saved);
       setSiteContentDraft(saved);
@@ -1356,7 +1550,7 @@ function App({ forceVisitor = false }) {
     return categoriesInTheme.some(cat => normalizeEntityName(cat.nom) === normalized && Number(cat.id) !== Number(excludeCategoryId));
   };
 
-  const renameTheme = async (id, newName) => {
+  const renameTheme = async (id, newName, newNameAr = '') => {
     const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom du thème est requis');
@@ -1367,7 +1561,7 @@ function App({ forceVisitor = false }) {
       return;
     }
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: cleanedName });
+      await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: cleanedName, titre_ar: String(newNameAr || '').trim() });
       alert('Thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1375,7 +1569,7 @@ function App({ forceVisitor = false }) {
     } catch (err) { console.error(err); alert(err.response?.data?.titre?.[0] || err.response?.data?.error || 'Erreur lors du renommage'); }
   };
 
-  const addSubTheme = async (themeId, name, categorieId = null) => {
+  const addSubTheme = async (themeId, name, categorieId = null, nameAr = '') => {
     const cleanedName = String(name || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom du sous-thème est requis');
@@ -1387,7 +1581,7 @@ function App({ forceVisitor = false }) {
     }
     try {
       const theme = themes.find(t => t.id === themeId);
-      const payload = { nom: cleanedName };
+      const payload = { nom: cleanedName, nom_ar: String(nameAr || '').trim() };
       if (categorieId) {
         payload.categorie = categorieId;
         // Si on ajoute à une catégorie, hériter la visibilité de la catégorie
@@ -1408,7 +1602,7 @@ function App({ forceVisitor = false }) {
     } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors de l\'ajout du sous-thème'); }
   };
 
-  const addCategorie = async (themeId, name) => {
+  const addCategorie = async (themeId, name, nameAr = '') => {
     const cleanedName = String(name || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom de la catégorie est requis');
@@ -1422,7 +1616,7 @@ function App({ forceVisitor = false }) {
       const theme = themes.find(t => t.id === themeId);
       const ordre = theme?.categories?.length || 0;
       // Ensure the new category inherits the theme's visibility status
-      const payload = { nom: cleanedName, theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
+      const payload = { nom: cleanedName, nom_ar: String(nameAr || '').trim(), theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
       await axios.post('http://127.0.0.1:8000/api/categories/', payload);
       alert('Catégorie ajoutée');
       const themesRes = await axios.get(themesApiBase);
@@ -1432,7 +1626,45 @@ function App({ forceVisitor = false }) {
     } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors de l\'ajout de la catégorie'); }
   };
 
-  const renameSubTheme = async (id, newName) => {
+  const renameCategorie = async (categorieId, newName, newNameAr = '') => {
+    const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
+    if (!cleanedName) {
+      alert('Le nom de la catégorie est requis');
+      return;
+    }
+
+    const parentTheme = (themes || []).find((t) => (t.categories || []).some((c) => Number(c.id) === Number(categorieId)));
+    const parentThemeId = parentTheme?.id;
+
+    if (parentThemeId && hasDuplicateCategoryNameInTheme(parentThemeId, cleanedName, categorieId)) {
+      alert('Cette catégorie existe déjà dans ce thème.');
+      return;
+    }
+
+    try {
+      await axios.patch(`http://127.0.0.1:8000/api/categories/${categorieId}/`, {
+        nom: cleanedName,
+        nom_ar: String(newNameAr || '').trim(),
+      });
+      alert('Catégorie renommée');
+
+      const themesRes = await axios.get(themesApiBase);
+      setThemes(themesRes.data);
+      if (selectedTheme) {
+        const fresh = themesRes.data.find((t) => t.id === selectedTheme.id);
+        if (fresh) setSelectedTheme(fresh);
+        if (selectedCategorie && fresh) {
+          const freshCat = fresh.categories?.find((c) => c.id === selectedCategorie.id);
+          if (freshCat) setSelectedCategorie(freshCat);
+        }
+      }
+    } catch (err) {
+      console.error(err);
+      alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors du renommage de la catégorie');
+    }
+  };
+
+  const renameSubTheme = async (id, newName, newNameAr = '') => {
     const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom du sous-thème est requis');
@@ -1447,7 +1679,7 @@ function App({ forceVisitor = false }) {
       return;
     }
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: cleanedName });
+      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: cleanedName, nom_ar: String(newNameAr || '').trim() });
       alert('Sous-thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -2076,12 +2308,12 @@ function App({ forceVisitor = false }) {
   const getExportMetadataEntries = () => {
     if (!selectedSubTheme) return [];
     const raw = [
-      ['Définition', selectedSubTheme.definition_text],
-      ['Unité', selectedSubTheme.unite_text],
-      ['Périodicité', selectedSubTheme.periodicite_text],
-      ['Indication', selectedSubTheme.indication_text],
-      ['Source', selectedSubTheme.source_text],
-      ['Couverture', selectedSubTheme.couverture_text],
+      [t('meta_definition'), getLocalizedMetadataValue(selectedSubTheme, 'definition_text')],
+      [t('meta_unit'), getLocalizedMetadataValue(selectedSubTheme, 'unite_text')],
+      [t('meta_periodicity'), getLocalizedMetadataValue(selectedSubTheme, 'periodicite_text')],
+      [t('meta_indication'), getLocalizedMetadataValue(selectedSubTheme, 'indication_text')],
+      [t('meta_source'), getLocalizedMetadataValue(selectedSubTheme, 'source_text')],
+      [t('meta_coverage'), getLocalizedMetadataValue(selectedSubTheme, 'couverture_text')],
     ];
     return raw.filter(([, v]) => v !== null && v !== undefined && String(v).trim() !== '');
   };
@@ -2102,7 +2334,7 @@ function App({ forceVisitor = false }) {
 
   const exportTableCSV = () => {
     const snapshot = getExportSnapshot();
-    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert('Aucun tableau à exporter');
+    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert(t('no_table_to_export'));
     const header = snapshot.headers.map(escapeCSVCell).join(',');
     const lines = (snapshot.rows || []).map(r => r.map(escapeCSVCell).join(','));
     const csv = [header, ...lines].join('\n');
@@ -2112,7 +2344,7 @@ function App({ forceVisitor = false }) {
 
   const exportTableTXT = () => {
     const snapshot = getExportSnapshot();
-    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert('Aucun tableau à exporter');
+    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert(t('no_table_to_export'));
     const lines = [
       snapshot.headers.join('\t'),
       ...(snapshot.rows || []).map(r => r.map(v => String(v ?? '')).join('\t')),
@@ -2124,12 +2356,12 @@ function App({ forceVisitor = false }) {
 
   const exportTableXLSX = () => {
     const snapshot = getExportSnapshot();
-    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert('Aucun tableau à exporter');
+    if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert(t('no_table_to_export'));
 
     const metadata = getExportMetadataEntries();
     const aoa = [];
     const merges = [];
-    const title = `Sous-thème: ${selectedSubTheme?.nom || ''} (${snapshot.view})`;
+    const title = t('export_subtheme_title', { name: getSubThemeDisplayName(selectedSubTheme), view: getExportViewLabel(snapshot.view) });
     aoa.push([title]);
     if (metadata.length > 0) {
       aoa.push([]);
@@ -3126,6 +3358,7 @@ function App({ forceVisitor = false }) {
           for (let i = 0; i < cat.nbSousThemes; i++) {
             initialRows.push({
               sousTheme: '', 
+              sousTheme_ar: '',
               unite: '', 
               definition: '', 
               indicateur: '', 
@@ -3141,6 +3374,7 @@ function App({ forceVisitor = false }) {
       // Mode sans catégories (ancien comportement)
       initialRows = Array.from({ length: themeData.nbSousThemes }, () => ({
         sousTheme: '', 
+        sousTheme_ar: '',
         unite: '', 
         definition: '', 
         indicateur: '', 
@@ -3220,6 +3454,7 @@ function App({ forceVisitor = false }) {
 
     const formData = new FormData();
     formData.append('titre', cleanedThemeTitle);
+    formData.append('titre_ar', String(themeData.titre_ar || '').trim());
     formData.append('statut', themeData.statut);
     if (themeImageFile) formData.append('theme_image', themeImageFile);
     
@@ -3228,6 +3463,7 @@ function App({ forceVisitor = false }) {
       formData.append('use_categories', 'true');
       categoryNames.filter(c => c.nom.trim()).forEach((cat, idx) => {
         formData.append(`categories[${idx}][nom]`, cat.nom);
+        formData.append(`categories[${idx}][nom_ar]`, String(cat.nom_ar || '').trim());
         formData.append(`categories[${idx}][ordre]`, idx);
       });
     }
@@ -3235,6 +3471,7 @@ function App({ forceVisitor = false }) {
     rows.forEach((row, i) => {
       const cleanedSubTheme = String(row.sousTheme || '').trim().replace(/\s+/g, ' ');
       formData.append(`lignes[${i}][sousTheme]`, cleanedSubTheme);
+      formData.append(`lignes[${i}][sousTheme_ar]`, String(row.sousTheme_ar || '').trim());
       formData.append(`lignes[${i}][unite]`, row.unite);
       formData.append(`lignes[${i}][indicateur]`, row.indicateur);
       formData.append(`lignes[${i}][definition]`, row.definition);
@@ -3258,9 +3495,10 @@ function App({ forceVisitor = false }) {
       alert("Enregistré !");
       setFormStep(0);
       setUseCategories(false);
-      setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
+      setCategoryNames([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
       setThemeImageFile(null);
       setThemeImagePreview('');
+      setThemeData({ titre: '', titre_ar: '', nbSousThemes: 1, statut: 'Public' });
       setRows([]);
     } catch (err) { console.error(err.response?.data || err); alert("Erreur : " + (err.response?.data?.error || err.message)); }
   };
@@ -3362,14 +3600,17 @@ function App({ forceVisitor = false }) {
     const directSubThemes = (theme.sous_themes || []).map(st => ({
       ...st,
       theme_titre: theme.titre,
+      theme_titre_ar: theme.titre_ar,
       theme_id: theme.id
     }));
     const categorySubThemes = (theme.categories || []).flatMap(cat =>
       (cat.sous_themes || []).map(st => ({
         ...st,
         theme_titre: theme.titre,
+        theme_titre_ar: theme.titre_ar,
         theme_id: theme.id,
-        categorie_nom: cat.nom
+        categorie_nom: cat.nom,
+        categorie_nom_ar: cat.nom_ar
       }))
     );
 
@@ -3419,16 +3660,17 @@ function App({ forceVisitor = false }) {
         <div className="p-4 bg-[var(--color-surface)] border-b border-[var(--color-border)] flex flex-col items-center min-h-[210px]">
           <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
-        <div className="bg-[#f9fafb] text-[var(--color-text-main)] py-2 px-4 font-semibold text-center border-b border-[var(--color-border)]">Menu</div>
-        <SidebarButton label="Thèmes" active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
-        <SidebarButton label="Indicateurs" active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
-        <SidebarButton label="A propos" active={activeMenu === 'APropos'} onClick={() => { setActiveMenu('APropos'); setFormStep(0); }} />
-        <SidebarButton label="Contact" active={activeMenu === 'Contact'} onClick={() => { setActiveMenu('Contact'); setFormStep(0); }} />
-        <SidebarButton label="Liens utiles" active={activeMenu === 'LiensUtiles'} onClick={() => { setActiveMenu('LiensUtiles'); setFormStep(0); }} />
+        <div className="bg-[#f9fafb] text-[var(--color-text-main)] py-2 px-4 font-semibold text-center border-b border-[var(--color-border)]">{t('menu')}</div>
+        <SidebarButton label={t('nav_themes')} centered={isVisitor} active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
+        <SidebarButton label={t('nav_indicators')} centered={isVisitor} active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
+        <SidebarButton label={t('nav_about')} centered={isVisitor} active={activeMenu === 'APropos'} onClick={() => { setActiveMenu('APropos'); setFormStep(0); }} />
+        <SidebarButton label={t('nav_contact')} centered={isVisitor} active={activeMenu === 'Contact'} onClick={() => { setActiveMenu('Contact'); setFormStep(0); }} />
+        <SidebarButton label={t('nav_links')} centered={isVisitor} active={activeMenu === 'LiensUtiles'} onClick={() => { setActiveMenu('LiensUtiles'); setFormStep(0); }} />
         {canEdit && (
           <>
             <SidebarButton
-              label={isSaisisseur ? 'Espace saisisseur' : 'Espace admin'}
+              label={isSaisisseur ? t('nav_saisisseur') : t('nav_admin')}
+              centered={isVisitor}
               active={activeMenu === (isSaisisseur ? 'Saisisseur' : 'Admin')}
               onClick={() => { setActiveMenu(isSaisisseur ? 'Saisisseur' : 'Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null); }}
             />
@@ -3440,8 +3682,14 @@ function App({ forceVisitor = false }) {
       <div className="flex-1 min-w-0 h-screen flex flex-col overflow-hidden">
         <div className="bg-[var(--color-primary)] px-4 md:px-6 py-3 border-b border-[#9b2b64] flex items-center gap-4 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative min-w-0">
           <h1 className="text-white text-[24px] md:text-[32px] font-bold text-center tracking-wide leading-tight flex-1 min-w-0 break-words">
-            Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
+            {i18n.language === 'ar' ? 'قاعدة المعطيات الجهوية لبني ملال-خنيفرة' : 'Base de Données Région Béni Mellal-Khénifra'}
           </h1>
+          {/* Language selector (visitor only) */}
+          {isVisitor && (
+            <div className="relative shrink-0" style={{zIndex: 200}}>
+              <LangSelector t={t} i18n={i18n} />
+            </div>
+          )}
           {canEdit && (
             <div className="flex items-center gap-2 shrink-0">
               <button
@@ -3452,13 +3700,13 @@ function App({ forceVisitor = false }) {
                 }}
                 className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold py-2 px-3 rounded-xl border border-[#b84c83]"
               >
-                Parametres
+                {t('settings')}
               </button>
               <button
                 onClick={handleLogout}
                 className="bg-[var(--color-primary-hover)] hover:bg-[#4A062E] text-white font-semibold py-2 px-3 rounded-xl border border-[#7A0A4A]"
               >
-                Deconnexion
+                {t('logout')}
               </button>
             </div>
           )}
@@ -3466,7 +3714,7 @@ function App({ forceVisitor = false }) {
 
         <div className="bg-[var(--color-primary)] px-3 md:px-4 py-2 border-b border-[#9b2b64]">
           <div className="w-full max-w-[1200px] mx-auto flex items-center gap-3 min-w-0">
-          <span className="bg-[#a12863] text-white px-4 py-1 font-semibold rounded-xl shrink-0">INFOS</span>
+          <span className="bg-[#a12863] text-white px-4 py-1 font-semibold rounded-xl shrink-0">{t('infos')}</span>
           {canEdit && userRole === 'ADMIN' && activeMenu === 'Admin' ? (
             <div className="flex-1 min-w-0 bg-[var(--color-surface)] rounded-xl border border-[var(--color-border)] px-4 py-1.5 flex items-center justify-between gap-3">
               <span className="text-[var(--color-primary)] font-medium truncate">
@@ -3477,7 +3725,7 @@ function App({ forceVisitor = false }) {
                 onClick={() => setShowInfoBannerEditor(true)}
                 className="px-4 py-1 rounded-xl font-semibold border bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e] shrink-0"
               >
-                Gerer les infos
+                {t('manage_infos')}
               </button>
             </div>
           ) : (
@@ -3489,7 +3737,7 @@ function App({ forceVisitor = false }) {
                 const duration = Math.max(12, items.length * 4);
 
                 const renderTickerItem = (item, idx, copyIdx) => {
-                  const text = String(item?.text || '').trim();
+                  const text = String((isVisitor && i18n.language === 'ar') ? (item?.text_ar || item?.text || '') : (item?.text || '')).trim();
                   const url = String(item?.url || '').trim();
                   if (!text) return null;
 
@@ -3543,7 +3791,7 @@ function App({ forceVisitor = false }) {
                   ‹
                 </button>
                 <h2 className="bg-[#7A0A4A] text-white px-7 py-2 rounded-xl border border-[#B03372] font-bold shadow-md uppercase tracking-wide text-[28px] md:text-[30px] leading-tight">
-                  {selectedCategorie ? `${selectedTheme.titre} - ${selectedCategorie.nom}` : `${selectedTheme.titre}`}
+                  {selectedCategorie ? `${getThemeDisplayTitle(selectedTheme)} - ${getCategoryDisplayName(selectedCategorie)}` : `${getThemeDisplayTitle(selectedTheme)}`}
                 </h2>
               </div>
             )}
@@ -3551,10 +3799,10 @@ function App({ forceVisitor = false }) {
               <input 
                 type="text" 
                 placeholder={
-                  activeMenu === 'Themes' && formStep === 0 ? 'Rechercher un thème...' : 
-                  activeMenu === 'Indicateurs' ? 'Rechercher un indicateur...' :
-                  formStep === 3 ? 'Rechercher un sous-thème...' : 
-                  'Barre de recherche'
+                  activeMenu === 'Themes' && formStep === 0 ? t('search_theme') : 
+                  activeMenu === 'Indicateurs' ? t('search_indicator') :
+                  formStep === 3 ? t('search_subtheme') : 
+                  t('search_generic')
                 } 
                 className="w-full pl-12 pr-4 py-3 border border-[#9d9d9d] rounded-none bg-white text-[#545454] outline-none focus:border-[#B03372]"
                 value={
@@ -3582,8 +3830,8 @@ function App({ forceVisitor = false }) {
             <div className="relative min-h-[400px]">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 {indicatorsSubThemes.filter(st => 
-                  st.nom.toLowerCase().includes(searchIndicateur.toLowerCase()) ||
-                  st.theme_titre.toLowerCase().includes(searchIndicateur.toLowerCase())
+                  getSubThemeDisplayName(st).toLowerCase().includes(searchIndicateur.toLowerCase()) ||
+                  String((isVisitor && i18n.language === 'ar') ? (st.theme_titre_ar || st.theme_titre || '') : (st.theme_titre || '')).toLowerCase().includes(searchIndicateur.toLowerCase())
                 ).map((st, i) => (
                   <div 
                     key={st.id} 
@@ -3608,8 +3856,8 @@ function App({ forceVisitor = false }) {
                     {st.archived && (
                       <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                     )}
-                    <div className="text-xs opacity-80 mb-1 uppercase tracking-wide">{st.theme_titre}</div>
-                    <div className="text-[20px] leading-tight mt-1">{st.nom}</div>
+                    <div className="text-xs opacity-80 mb-1 uppercase tracking-wide">{(isVisitor && i18n.language === 'ar') ? (st.theme_titre_ar || st.theme_titre) : st.theme_titre}</div>
+                    <div className="text-[20px] leading-tight mt-1">{getSubThemeDisplayName(st)}</div>
                     {canEdit && (
                       <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${st.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                     )}
@@ -3627,7 +3875,11 @@ function App({ forceVisitor = false }) {
           {activeMenu === 'APropos' && (
             <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
               <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
-                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">{siteContent.about_title || 'A propos de la plateforme'}</h2>
+                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">
+                  {(isVisitor && i18n.language === 'ar')
+                    ? (siteContent.about_title_ar || siteContent.about_title || t('about_default'))
+                    : (siteContent.about_title || t('about_default'))}
+                </h2>
                 {canEdit && userRole === 'ADMIN' ? (
                   <div className="space-y-4">
                     <input
@@ -3643,18 +3895,37 @@ function App({ forceVisitor = false }) {
                       className="w-full min-h-[220px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
                       placeholder="Texte de presentation visible pour les visiteurs"
                     />
+                    <input
+                      type="text"
+                      value={siteContentDraft.about_title_ar || ''}
+                      onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, about_title_ar: e.target.value }))}
+                      className="w-full p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                      placeholder="عنوان صفحة حول (عربي)"
+                      dir="rtl"
+                    />
+                    <textarea
+                      value={siteContentDraft.about_text_ar || ''}
+                      onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, about_text_ar: e.target.value }))}
+                      className="w-full min-h-[220px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                      placeholder="نص صفحة حول للزوار (عربي)"
+                      dir="rtl"
+                    />
                     <div className="flex justify-end">
                       <button
                         onClick={saveSiteContent}
                         disabled={savingSiteContent}
                         className={`px-5 py-2 rounded-xl font-semibold border ${savingSiteContent ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]'}`}
                       >
-                        {savingSiteContent ? 'Enregistrement...' : 'Enregistrer'}
+                        {savingSiteContent ? t('saving') : t('save')}
                       </button>
                     </div>
                   </div>
                 ) : (
-                  <div className="leading-8 text-[#243447] whitespace-pre-wrap">{siteContent.about_text || 'Le contenu A propos sera bientot disponible.'}</div>
+                  <div className="leading-8 text-[#243447] whitespace-pre-wrap">
+                    {(isVisitor && i18n.language === 'ar')
+                      ? (siteContent.about_text_ar || siteContent.about_text || t('about_coming_soon'))
+                      : (siteContent.about_text || t('about_coming_soon'))}
+                  </div>
                 )}
               </div>
             </div>
@@ -3663,30 +3934,37 @@ function App({ forceVisitor = false }) {
           {activeMenu === 'Contact' && (
             <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
               <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
-                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">{siteContent.contact_title || 'Contact'}</h2>
+                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">
+                  {(isVisitor && i18n.language === 'ar')
+                    ? (siteContent.contact_title_ar || siteContent.contact_title || t('contact_default'))
+                    : (siteContent.contact_title || t('contact_default'))}
+                </h2>
                 {canEdit && userRole === 'ADMIN' ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <input type="text" value={siteContentDraft.contact_title || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_title: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Titre de la page Contact" />
+                    <input type="text" value={siteContentDraft.contact_title_ar || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_title_ar: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="عنوان صفحة اتصل بنا (عربي)" dir="rtl" />
                     <input type="email" value={siteContentDraft.contact_email || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_email: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Email de contact" />
                     <input type="text" value={siteContentDraft.contact_phone || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_phone: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Telephone" />
                     <input type="text" value={siteContentDraft.contact_hours || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_hours: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Horaires" />
+                    <input type="text" value={siteContentDraft.contact_hours_ar || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_hours_ar: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="ساعات العمل (عربي)" dir="rtl" />
                     <textarea value={siteContentDraft.contact_address || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_address: e.target.value }))} className="md:col-span-2 min-h-[120px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Adresse postale" />
+                    <textarea value={siteContentDraft.contact_address_ar || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_address_ar: e.target.value }))} className="md:col-span-2 min-h-[120px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="العنوان البريدي (عربي)" dir="rtl" />
                     <div className="md:col-span-2 flex justify-end">
                       <button
                         onClick={saveSiteContent}
                         disabled={savingSiteContent}
                         className={`px-5 py-2 rounded-xl font-semibold border ${savingSiteContent ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]'}`}
                       >
-                        {savingSiteContent ? 'Enregistrement...' : 'Enregistrer'}
+                        {savingSiteContent ? t('saving') : t('save')}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[#243447]">
-                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Email</div><div>{siteContent.contact_email || 'contact@hcp.ma'}</div></div>
-                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Telephone</div><div>{siteContent.contact_phone || '-'}</div></div>
-                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Adresse</div><div className="whitespace-pre-wrap">{siteContent.contact_address || '-'}</div></div>
-                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">Horaires</div><div>{siteContent.contact_hours || '-'}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('email')}</div><div>{siteContent.contact_email || 'contact@hcp.ma'}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('phone')}</div><div>{siteContent.contact_phone || '-'}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('address')}</div><div className="whitespace-pre-wrap">{(isVisitor && i18n.language === 'ar') ? (siteContent.contact_address_ar || siteContent.contact_address || '-') : (siteContent.contact_address || '-')}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('hours')}</div><div>{(isVisitor && i18n.language === 'ar') ? (siteContent.contact_hours_ar || siteContent.contact_hours || '-') : (siteContent.contact_hours || '-')}</div></div>
                   </div>
                 )}
               </div>
@@ -3696,9 +3974,10 @@ function App({ forceVisitor = false }) {
           {activeMenu === 'LiensUtiles' && (
             <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
               <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
-                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">Liens utiles</h2>
+                <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">{t('useful_links')}</h2>
                 {canEdit && userRole === 'ADMIN' ? (
                   <div className="space-y-3">
+                    <div className="text-sm font-semibold text-[#7A0A4A]">Français</div>
                     {(siteContentDraft.useful_links || []).map((link, idx) => (
                       <div key={`link-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1.4fr_auto] gap-2 items-center">
                         <input
@@ -3732,26 +4011,71 @@ function App({ forceVisitor = false }) {
                         </button>
                       </div>
                     ))}
+                    <div className="pt-2 text-sm font-semibold text-[#7A0A4A]" dir="rtl">العربية</div>
+                    {(siteContentDraft.useful_links_ar || []).map((link, idx) => (
+                      <div key={`link-ar-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1.4fr_auto] gap-2 items-center">
+                        <input
+                          type="text"
+                          value={link?.label || ''}
+                          onChange={(e) => setSiteContentDraft((prev) => {
+                            const next = [...(prev.useful_links_ar || [])];
+                            next[idx] = { ...(next[idx] || {}), label: e.target.value };
+                            return { ...prev, useful_links_ar: next };
+                          })}
+                          placeholder="العنوان"
+                          className="p-2 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                          dir="rtl"
+                        />
+                        <input
+                          type="text"
+                          value={link?.url || ''}
+                          onChange={(e) => setSiteContentDraft((prev) => {
+                            const next = [...(prev.useful_links_ar || [])];
+                            next[idx] = { ...(next[idx] || {}), url: e.target.value };
+                            return { ...prev, useful_links_ar: next };
+                          })}
+                          placeholder="https://example.ma"
+                          className="p-2 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links_ar: (prev.useful_links_ar || []).filter((_, i) => i !== idx) }))}
+                          className="px-3 py-2 rounded-xl border border-red-300 text-red-700 hover:bg-red-50"
+                        >
+                          Supprimer
+                        </button>
+                      </div>
+                    ))}
                     <div className="flex flex-wrap gap-2 justify-between">
-                      <button
-                        type="button"
-                        onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links: [...(prev.useful_links || []), { label: '', url: '' }] }))}
-                        className="px-4 py-2 rounded-xl border border-[#CCB47F] bg-[#f8f3e7] text-[#7A0A4A] font-semibold hover:bg-[#f2e9d2]"
-                      >
-                        + Ajouter un lien
-                      </button>
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links: [...(prev.useful_links || []), { label: '', url: '' }] }))}
+                          className="px-4 py-2 rounded-xl border border-[#CCB47F] bg-[#f8f3e7] text-[#7A0A4A] font-semibold hover:bg-[#f2e9d2]"
+                        >
+                          {t('add_link')} (FR)
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links_ar: [...(prev.useful_links_ar || []), { label: '', url: '' }] }))}
+                          className="px-4 py-2 rounded-xl border border-[#CCB47F] bg-[#f8f3e7] text-[#7A0A4A] font-semibold hover:bg-[#f2e9d2]"
+                          dir="rtl"
+                        >
+                          إضافة رابط (AR)
+                        </button>
+                      </div>
                       <button
                         onClick={saveSiteContent}
                         disabled={savingSiteContent}
                         className={`px-5 py-2 rounded-xl font-semibold border ${savingSiteContent ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#7A0A4A] text-white border-[#B03372] hover:bg-[#5E0738]'}`}
                       >
-                        {savingSiteContent ? 'Enregistrement...' : 'Enregistrer'}
+                        {savingSiteContent ? t('saving') : t('save')}
                       </button>
                     </div>
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {(siteContent.useful_links || []).map((link, idx) => (
+                    {((isVisitor && i18n.language === 'ar') ? (siteContent.useful_links_ar || siteContent.useful_links || []) : (siteContent.useful_links || [])).map((link, idx) => (
                       <a
                         key={`pub-link-${idx}`}
                         href={link?.url}
@@ -3772,42 +4096,56 @@ function App({ forceVisitor = false }) {
           {/* ÉTAPE 0 : GRILLE DES THÈMES */}
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
-              <div className="grid grid-cols-3 gap-2">
-                {visibleThemes.filter(t => t.titre.toLowerCase().includes(searchTheme.toLowerCase())).filter(t => isThemeVisibleForCurrentRole(t)).map((t, i) => (
-                  <div 
-                    key={t.id} 
-                    onClick={() => { 
-                      if (!t.categories || t.categories.length === 0) {
+              <div className={isVisitor ? 'grid grid-cols-3 gap-4' : 'grid grid-cols-3 gap-2'}>
+                {visibleThemes.filter(t => getThemeDisplayTitle(t).toLowerCase().includes(searchTheme.toLowerCase())).filter(t => isThemeVisibleForCurrentRole(t)).map((t, i) => (
+                  isVisitor ? (
+                    // VERSION VISITEUR : LAYOUT HORIZONTAL AMÉLIORÉ
+                    <div 
+                      key={t.id} 
+                      onClick={() => { 
+                        if (!t.categories || t.categories.length === 0) {
+                          setSelectedTheme(t);
+                          setSelectedCategorie(null);
+                          setSelectedVisitorCategoryId('all');
+                          setExpandedCategories({});
+                          setFormStep(3);
+                          return;
+                        }
+
                         setSelectedTheme(t);
                         setSelectedCategorie(null);
                         setSelectedVisitorCategoryId('all');
                         setExpandedCategories({});
                         setFormStep(3);
-                        return;
-                      }
-
-                      setSelectedTheme(t);
-                      setSelectedCategorie(null);
-                      setSelectedVisitorCategoryId('all');
-                      setExpandedCategories({});
-                      setFormStep(3);
-                    }}
-                    className={`cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md relative text-[#6E001F] transition-transform hover:scale-[1.01] min-h-[132px] ${t.archived ? 'bg-gray-600 line-through opacity-80 text-white' : (t.id === maxId ? 'bg-[#D89253]' : 'bg-[#E6A76A]')}`}
-                  >
-                    {t.archived && (
-                      <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
-                    )}
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="flex items-center gap-3 min-w-0">
-                        {t.theme_image && (
+                      }}
+                      className={`cursor-pointer p-5 rounded-lg border-2 shadow-md relative transition-all duration-300 hover:shadow-xl hover:scale-[1.02] flex items-center gap-4 min-h-[160px] ${t.archived ? 'bg-gray-500 opacity-75 border-gray-600' : 'bg-gradient-to-r from-[#E6A76A] to-[#D09150] border-[#B8845C]'}`}
+                    >
+                      {t.archived && (
+                        <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded text-xs font-bold">🚫</div>
+                      )}
+                      
+                      {/* IMAGE À GAUCHE */}
+                      {t.theme_image && (
+                        <div className="flex-shrink-0">
                           <img
                             src={t.theme_image}
-                            alt={t.titre}
-                            className="w-16 h-16 object-contain shrink-0"
+                            alt={getThemeDisplayTitle(t)}
+                            className="w-20 h-20 object-contain drop-shadow-md"
                           />
-                        )}
-                        <span className="uppercase tracking-wide text-[18px] md:text-[20px] leading-snug font-semibold">{`${String(i + 1).padStart(2, '0')}-${t.titre}`}</span>
+                        </div>
+                      )}
+                      
+                      {/* NUMÉRO ET TITRE À DROITE */}
+                      <div className="flex-1 min-w-0">
+                        <div className={`font-extrabold text-2xl mb-1 ${t.archived ? 'text-white' : 'text-[#5E0738]'}`}>
+                          {String(i + 1).padStart(2, '0')}
+                        </div>
+                        <h3 className={`uppercase tracking-wide font-semibold leading-snug break-words ${t.archived ? 'text-white line-through' : 'text-[#3F2A1F]'}`} style={{fontSize: '14px'}}>
+                          {getThemeDisplayTitle(t)}
+                        </h3>
                       </div>
+
+                      {/* FLECHE POUR MENU DÉROULANT DES CATÉGORIES */}
                       {t.categories && t.categories.length > 0 && (
                         <button 
                           onClick={(e) => { 
@@ -3822,13 +4160,70 @@ function App({ forceVisitor = false }) {
                             setCategorieMenuPos({ left, top });
                             setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
                           }}
-                          className="text-[#7A0A4A] hover:text-[#5E0738] text-lg leading-none px-1 py-0.5"
+                          className="text-[#7A0A4A] hover:text-[#5E0738] text-lg leading-none px-1 py-0.5 flex-shrink-0"
                           aria-label="Choisir une catégorie"
                         >
                           ▾
                         </button>
                       )}
                     </div>
+                  ) : (
+                    // VERSION ADMIN : DESIGN ORIGINAL INCHANGÉ
+                    <div 
+                      key={t.id} 
+                      onClick={() => { 
+                        if (!t.categories || t.categories.length === 0) {
+                          setSelectedTheme(t);
+                          setSelectedCategorie(null);
+                          setSelectedVisitorCategoryId('all');
+                          setExpandedCategories({});
+                          setFormStep(3);
+                          return;
+                        }
+
+                        setSelectedTheme(t);
+                        setSelectedCategorie(null);
+                        setSelectedVisitorCategoryId('all');
+                        setExpandedCategories({});
+                        setFormStep(3);
+                      }}
+                      className={`cursor-pointer p-4 rounded-sm border border-[#9A4A2A] shadow-md relative text-[#6E001F] transition-transform hover:scale-[1.01] min-h-[132px] ${t.archived ? 'bg-gray-600 line-through opacity-80 text-white' : (t.id === maxId ? 'bg-[#D89253]' : 'bg-[#E6A76A]')}`}
+                    >
+                      {t.archived && (
+                        <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
+                      )}
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="flex items-center gap-3 min-w-0">
+                          {t.theme_image && (
+                            <img
+                              src={t.theme_image}
+                              alt={getThemeDisplayTitle(t)}
+                              className="w-16 h-16 object-contain shrink-0"
+                            />
+                          )}
+                          <span className="uppercase tracking-wide text-[18px] md:text-[20px] leading-snug font-semibold">{`${String(i + 1).padStart(2, '0')}-${getThemeDisplayTitle(t)}`}</span>
+                        </div>
+                        {t.categories && t.categories.length > 0 && (
+                          <button 
+                            onClick={(e) => { 
+                              e.stopPropagation();
+                              const rect = e.currentTarget.getBoundingClientRect();
+                              const menuHeight = 200;
+                              const menuWidth = 256; // w-64
+                              const spaceBelow = window.innerHeight - rect.bottom;
+                              const spaceRight = window.innerWidth - rect.left;
+                              const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
+                              const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                              setCategorieMenuPos({ left, top });
+                              setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
+                            }}
+                            className="text-[#7A0A4A] hover:text-[#5E0738] text-lg leading-none px-1 py-0.5"
+                            aria-label="Choisir une catégorie"
+                          >
+                            ▾
+                          </button>
+                        )}
+                      </div>
                     <div className="flex mt-4 gap-2">
                       {canEdit && userRole === 'ADMIN' && (
                         <button onClick={(e) => { 
@@ -3869,6 +4264,7 @@ function App({ forceVisitor = false }) {
                       <div className={`absolute bottom-3 right-3 w-5 h-5 rounded-full border border-black ${t.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
                     )}
                   </div>
+                  )
                 ))}
               </div>
               {canEdit && userRole === 'ADMIN' && (
@@ -3876,7 +4272,7 @@ function App({ forceVisitor = false }) {
                   onClick={() => setFormStep(1)}
                   className="fixed bottom-10 right-10 bg-[#B03372] hover:bg-[#7A0A4A] text-white font-bold py-4 px-8 rounded-sm border border-[#B03372] shadow-[4px_4px_0px_0px_rgba(0,0,0,0.35)]"
                 >
-                  Ajouter un thème
+                  {t('add_theme')}
                 </button>
               )}
 
@@ -3914,15 +4310,17 @@ function App({ forceVisitor = false }) {
 
               {openCategorieMenu && (
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: categorieMenuPos.left, top: categorieMenuPos.top, zIndex: 9999 }} key={`cat-menu-${openCategorieMenu}-${themes.find(x => x.id === openCategorieMenu)?.categories?.length || 0}`}>
-                  <div className="w-[min(22rem,92vw)] bg-[#fffdf9] rounded-xl shadow-[0_16px_28px_rgba(94,7,56,0.28)] border border-[#B03372] max-h-96 overflow-y-auto">
-                    <div className="px-4 py-3 text-sm font-bold text-white bg-gradient-to-r from-[#7A0A4A] to-[#B03372]">Choisir une catégorie</div>
+                  <div className={isVisitor ? 'w-[min(16rem,86vw)] bg-[#9F2F76] rounded-none shadow-none border border-[#86285F] max-h-96 overflow-y-auto' : 'w-[min(22rem,92vw)] bg-[#fffdf9] rounded-xl shadow-[0_16px_28px_rgba(94,7,56,0.28)] border border-[#B03372] max-h-96 overflow-y-auto'}>
+                    {!isVisitor && (
+                      <div className="px-4 py-3 text-sm font-bold text-white bg-gradient-to-r from-[#7A0A4A] to-[#B03372]">Choisir une catégorie</div>
+                    )}
                     {(() => {
                       const currentTheme = themes.find(x => x.id === openCategorieMenu);
                       if (!currentTheme || !currentTheme.categories) return null;
                       return currentTheme.categories.sort((a, b) => a.ordre - b.ordre).map(cat => {
                         const isActiveCat = String(selectedCategorie?.id) === String(cat.id);
                         return (
-                        <div key={cat.id} className={`px-3 py-2 border-b border-[#efd5e5] last:border-b-0 transition-colors flex items-center gap-2 justify-between ${isActiveCat ? 'bg-[#f8ebf2]' : 'hover:bg-[#fdf1f7]'}`}>
+                        <div key={cat.id} className={`last:border-b-0 transition-colors flex items-center gap-2 justify-between ${isVisitor ? `px-3 py-2 border-b border-[#C1649B] ${isActiveCat ? 'bg-[#84265F]' : 'hover:bg-[#AE4D88]'}` : `px-3 py-2 border-b border-[#efd5e5] ${isActiveCat ? 'bg-[#f8ebf2]' : 'hover:bg-[#fdf1f7]'}`}`}>
                           <button 
                             onClick={(e) => { 
                               e.stopPropagation();
@@ -3932,30 +4330,54 @@ function App({ forceVisitor = false }) {
                               setOpenCategorieMenu(null);
                               setFormStep(3);
                             }}
-                            className="flex-1 text-left flex items-center gap-2"
+                            className={isVisitor ? 'flex-1 text-left flex items-center' : 'flex-1 text-left flex items-center gap-2'}
                           >
-                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
-                              <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                            </svg>
-                            <span className={`font-semibold truncate ${isActiveCat ? 'text-[#5E0738]' : 'text-[#6E001F]'}`}>{cat.nom}</span>
-                            <span className={`ml-auto text-xs ${isActiveCat ? 'text-[#7A0A4A]' : 'text-gray-500'}`}>({cat.sous_themes?.length || 0})</span>
+                            {!isVisitor && (
+                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="shrink-0">
+                                <path d="M9 3H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                <path d="M20 3h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1V4a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                <path d="M9 14H4a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                <path d="M20 14h-5a1 1 0 00-1 1v5a1 1 0 001 1h5a1 1 0 001-1v-5a1 1 0 00-1-1z" stroke="#7A0A4A" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                              </svg>
+                            )}
+                            <span className={`font-semibold truncate ${isVisitor ? (isActiveCat ? 'text-white' : 'text-[#FFE8F5]') : (isActiveCat ? 'text-[#5E0738]' : 'text-[#6E001F]')}`}>{getCategoryDisplayName(cat)}</span>
+                            {!isVisitor && (
+                              <span className={`ml-auto text-xs ${isActiveCat ? 'text-[#7A0A4A]' : 'text-gray-500'}`}>({cat.sous_themes?.length || 0})</span>
+                            )}
                           </button>
                           {canEdit && userRole === 'ADMIN' && (
-                            <button
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                deleteCategorie(cat.id);
-                              }}
-                              className="p-1 hover:bg-red-100 rounded transition-colors text-red-600"
-                              title="Supprimer cette catégorie"
-                            >
-                              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-                                <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M10 7V4a1 1 0 011-1h2a1 1 0 011 1v3m-6 0h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
-                              </svg>
-                            </button>
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  setActionModalType('rename_categorie');
+                                  setActionModalValue(cat?.nom || '');
+                                  setActionModalValueAr(cat?.nom_ar || '');
+                                  setActionModalThemeId(cat.id);
+                                  setShowActionModal(true);
+                                  setOpenCategorieMenu(null);
+                                }}
+                                className="p-1 hover:bg-amber-100 rounded transition-colors text-amber-700"
+                                title="Renommer cette catégorie"
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                  <path d="M3 21v-3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                  <path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                              </button>
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  deleteCategorie(cat.id);
+                                }}
+                                className="p-1 hover:bg-red-100 rounded transition-colors text-red-600"
+                                title="Supprimer cette catégorie"
+                              >
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+                                  <path d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6M10 7V4a1 1 0 011-1h2a1 1 0 011 1v3m-6 0h12" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"/>
+                                </svg>
+                              </button>
+                            </div>
                           )}
                         </div>
                       );});
@@ -3968,7 +4390,7 @@ function App({ forceVisitor = false }) {
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: actionMenuPos.left, top: actionMenuPos.top, zIndex: 9999 }}>
                   <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
                     <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
-                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('rename'); setActionModalValue(t?.titre || ''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('rename'); setActionModalValue(t?.titre || ''); setActionModalValueAr(t?.titre_ar || ''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Renommer
                     </button>
@@ -3984,7 +4406,7 @@ function App({ forceVisitor = false }) {
                         Supprimer l'image du thème
                       </button>
                     )}
-                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalValueAr(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Ajouter un sous-thème
                     </button>
@@ -3996,6 +4418,7 @@ function App({ forceVisitor = false }) {
                             e.stopPropagation(); 
                             setActionModalType('add_categorie'); 
                             setActionModalValue(''); 
+                            setActionModalValueAr(''); 
                             setActionModalThemeId(openActionMenu); 
                             setShowActionModal(true); 
                             setOpenActionMenu(null); 
@@ -4036,7 +4459,15 @@ function App({ forceVisitor = false }) {
                <div className="flex items-center gap-6">
                  <label className="text-xl w-64 font-bold">Titre du thème*</label>
                  <input type="text" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none" 
+                   value={themeData.titre || ''}
                    onChange={e => setThemeData({...themeData, titre: e.target.value})} />
+               </div>
+
+               <div className="flex items-center gap-6">
+                 <label className="text-xl w-64 font-bold">Titre du thème (AR)</label>
+                 <input type="text" dir="rtl" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
+                   value={themeData.titre_ar || ''}
+                   onChange={e => setThemeData({...themeData, titre_ar: e.target.value})} />
                </div>
 
                <div className="flex items-center gap-6">
@@ -4098,7 +4529,7 @@ function App({ forceVisitor = false }) {
                    checked={useCategories}
                    onChange={e => {
                      setUseCategories(e.target.checked);
-                     if (!e.target.checked) setCategoryNames([{ nom: '', nbSousThemes: 1 }]);
+                     if (!e.target.checked) setCategoryNames([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
                    }}
                    className="w-6 h-6 cursor-pointer"
                  />
@@ -4109,7 +4540,7 @@ function App({ forceVisitor = false }) {
                    <div className="flex justify-between items-center">
                      <label className="text-lg font-bold">Configuration des catégories</label>
                      <button 
-                       onClick={() => setCategoryNames([...categoryNames, { nom: '', nbSousThemes: 1 }])}
+                       onClick={() => setCategoryNames([...categoryNames, { nom: '', nom_ar: '', nbSousThemes: 1 }])}
                        className="bg-green-500 text-white px-3 py-1 rounded-md font-bold hover:bg-green-600"
                      >
                        + Ajouter une catégorie
@@ -4130,6 +4561,18 @@ function App({ forceVisitor = false }) {
                              }}
                              className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
                              placeholder={`Nom de la catégorie ${idx + 1}`}
+                           />
+                           <input 
+                             type="text" 
+                             dir="rtl"
+                             value={cat.nom_ar || ''}
+                             onChange={e => {
+                               const newCats = [...categoryNames];
+                               newCats[idx].nom_ar = e.target.value;
+                               setCategoryNames(newCats);
+                             }}
+                             className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
+                             placeholder={`الاسم العربي للفئة ${idx + 1}`}
                            />
                            <div className="flex items-center gap-2">
                              <label className="font-semibold whitespace-nowrap">Sous-thèmes:</label>
@@ -4199,7 +4642,7 @@ function App({ forceVisitor = false }) {
                        <table className="w-full border-collapse">
                          <thead className="bg-gray-50">
                            <tr className="border-b border-black">
-                             {['Sous - thème*', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
+                             {['Sous - thème*', 'Sous-thème (AR)', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
                                <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
                              ))}
                            </tr>
@@ -4210,6 +4653,7 @@ function App({ forceVisitor = false }) {
                              return (
                                <tr key={globalIdx} className="border-b border-black">
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme} onChange={e => {const r = [...rows]; r[globalIdx].sousTheme = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" dir="rtl" className="w-full outline-none text-xs" value={row.sousTheme_ar || ''} onChange={e => {const r = [...rows]; r[globalIdx].sousTheme_ar = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.unite} onChange={e => {const r = [...rows]; r[globalIdx].unite = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.definition} onChange={e => {const r = [...rows]; r[globalIdx].definition = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.indicateur} onChange={e => {const r = [...rows]; r[globalIdx].indicateur = e.target.value; setRows(r);}} /></td>
@@ -4236,7 +4680,7 @@ function App({ forceVisitor = false }) {
                    <table className="w-full border-collapse">
                      <thead className="bg-gray-50">
                        <tr className="border-b border-black">
-                         {['Sous - thème*', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
+                         {['Sous - thème*', 'Sous-thème (AR)', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
                            <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
                          ))}
                        </tr>
@@ -4245,6 +4689,7 @@ function App({ forceVisitor = false }) {
                        {rows.map((row, i) => (
                          <tr key={i} className="border-b border-black">
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme} onChange={e => {const r = [...rows]; r[i].sousTheme = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" dir="rtl" className="w-full outline-none text-xs" value={row.sousTheme_ar || ''} onChange={e => {const r = [...rows]; r[i].sousTheme_ar = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.unite} onChange={e => {const r = [...rows]; r[i].unite = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.definition} onChange={e => {const r = [...rows]; r[i].definition = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.indicateur} onChange={e => {const r = [...rows]; r[i].indicateur = e.target.value; setRows(r);}} /></td>
@@ -4327,7 +4772,7 @@ function App({ forceVisitor = false }) {
                 // Affichage d'une seule catégorie
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {selectedCategorie.sous_themes
-                    ?.filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                    ?.filter(st => getSubThemeDisplayName(st).toLowerCase().includes(searchSubTheme.toLowerCase()))
                     .filter(st => isSubThemeVisibleForCurrentRole(st))
                     .map((st, i) => (
                     <div 
@@ -4350,7 +4795,7 @@ function App({ forceVisitor = false }) {
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
                       <div className="text-[20px] leading-tight">
-                        <span>{st.nom}</span>
+                        <span>{getSubThemeDisplayName(st)}</span>
                       </div>
                       {canEdit && userRole === 'ADMIN' && (
                         <div className="flex justify-center gap-2 mt-4 text-black">
@@ -4402,7 +4847,7 @@ function App({ forceVisitor = false }) {
                         className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center gap-2 ${selectedVisitorCategoryId === 'all' ? 'bg-[#7A0A4A] text-white border-[#B03372]' : 'bg-[#7A0A4A] text-white/90 border-[#A85A84] hover:bg-[#5E0738]'}`}
                       >
                         <span className="text-[12px]">⏷</span>
-                        <span>Tous</span>
+                        <span>{t('all')}</span>
                       </button>
                       {selectedTheme.categories
                         .slice()
@@ -4415,7 +4860,7 @@ function App({ forceVisitor = false }) {
                           >
                             <span className="flex items-center gap-2 min-w-0">
                               <span className="text-[12px] shrink-0">⏷</span>
-                              <span className="truncate">{cat.nom}</span>
+                              <span className="truncate">{getCategoryDisplayName(cat)}</span>
                             </span>
                             <span className="text-[12px] opacity-90">↗</span>
                           </button>
@@ -4428,7 +4873,7 @@ function App({ forceVisitor = false }) {
                       {(() => {
                         const sortedCats = (selectedTheme.categories || []).slice().sort((a, b) => a.ordre - b.ordre);
                         const allSubThemes = sortedCats.flatMap(cat =>
-                          (cat.sous_themes || []).map(st => ({ ...st, category_id: cat.id, category_name: cat.nom }))
+                          (cat.sous_themes || []).map(st => ({ ...st, category_id: cat.id, category_name: cat.nom, category_name_ar: cat.nom_ar }))
                         );
                         const scopedSubThemes = String(selectedVisitorCategoryId) === 'all'
                           ? allSubThemes
@@ -4440,7 +4885,7 @@ function App({ forceVisitor = false }) {
                         });
 
                         return Array.from(byId.values())
-                          .filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                          .filter(st => getSubThemeDisplayName(st).toLowerCase().includes(searchSubTheme.toLowerCase()))
                           .filter(st => isSubThemeVisibleForCurrentRole(st))
                           .map((st, i) => (
                             <div
@@ -4462,9 +4907,9 @@ function App({ forceVisitor = false }) {
                               {st.archived && (
                                 <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                               )}
-                              <div className="text-sm opacity-80 mb-2">{st.category_name}</div>
+                              <div className="text-sm opacity-80 mb-2">{(isVisitor && i18n.language === 'ar') ? (st.category_name_ar || st.category_name) : st.category_name}</div>
                               <div className="text-[20px] leading-tight">
-                                <span>{st.nom}</span>
+                                <span>{getSubThemeDisplayName(st)}</span>
                               </div>
                               {canEdit && userRole === 'ADMIN' && (
                                 <div className="flex justify-center gap-2 mt-4 text-black">
@@ -4597,7 +5042,7 @@ function App({ forceVisitor = false }) {
                     &#8249;
                   </button>
                   <h3 className={`${isVisitor ? 'bg-[#7A0A4A] text-white border border-[#B03372]' : 'bg-[#F2E9D2] text-[#134f70] border border-[#CCB47F]'} px-6 py-2 rounded-xl font-bold text-base shadow-sm`}>
-                    {selectedSubTheme.nom}
+                    {getSubThemeDisplayName(selectedSubTheme)}
                   </h3>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
@@ -4643,7 +5088,7 @@ function App({ forceVisitor = false }) {
                     </button>
                   )}
 
-                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta({ definition_text: selectedSubTheme.definition_text || '', unite_text: selectedSubTheme.unite_text || '', indication_text: selectedSubTheme.indication_text || '', source_text: selectedSubTheme.source_text || '', periodicite_text: selectedSubTheme.periodicite_text || '', couverture_text: selectedSubTheme.couverture_text || '' }); setShowSubThemeMeta(true); }} className={`${isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#134f70] border-[#CCB47F] hover:bg-[#f3f3f3]'} px-4 py-2 rounded-xl border font-bold shadow-sm`}>Métadonnées</button>
+                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta(buildMetadataState(selectedSubTheme)); setShowSubThemeMeta(true); }} className={`${isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#134f70] border-[#CCB47F] hover:bg-[#f3f3f3]'} px-4 py-2 rounded-xl border font-bold shadow-sm`}>{t('metadata')}</button>
                   {/* Saisisseur: Enregistrer / Envoyer au admin */}
                   {isSaisisseur && (
                     <>
@@ -4730,14 +5175,14 @@ function App({ forceVisitor = false }) {
                     onClick={() => setActiveDataTab('tableau')}
                     className={`px-6 py-2 rounded-lg font-bold text-sm tracking-wide transition-colors ${activeDataTab === 'tableau' ? (isVisitor ? 'bg-[#7A0A4A] text-white border border-[#b74a86]' : 'bg-[#7A0A4A] text-white border border-[#5E0738]') : (isVisitor ? 'text-[#5E0738] hover:bg-[#f3f3f3]' : 'text-[#5E0738] hover:bg-[#f3f3f3]')}`}
                   >
-                    TABLEAU
+                    {t('tab_table')}
                   </button>
                   <button
                     type="button"
                     onClick={() => setActiveDataTab('graphes')}
                     className={`px-6 py-2 rounded-lg font-bold text-sm tracking-wide transition-colors ${activeDataTab === 'graphes' ? (isVisitor ? 'bg-[#7A0A4A] text-white border border-[#b74a86]' : 'bg-[#7A0A4A] text-white border border-[#5E0738]') : (isVisitor ? 'text-[#5E0738] hover:bg-[#f3f3f3]' : 'text-[#5E0738] hover:bg-[#f3f3f3]')}`}
                   >
-                    GRAPHES
+                    {t('tab_charts')}
                   </button>
                 </div>
               </div>
@@ -4748,7 +5193,7 @@ function App({ forceVisitor = false }) {
                 {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
                 {filtersForRender && filtersForRender.length > 0 && (
                   <div className={`${isVisitor ? 'bg-white border-[#B88FA4]' : 'bg-white border-[#CCB47F]'} border rounded-lg p-3 space-y-3 w-fit shadow-sm`}>
-                    <h3 className={`font-bold text-sm ${isVisitor ? 'text-[#5E0738]' : 'text-blue-900'}`}>🔍 Filtres Disponibles</h3>
+                    <h3 className={`font-bold text-sm ${isVisitor ? 'text-[#5E0738]' : 'text-blue-900'}`}>🔍 {t('filters_available')}</h3>
                     <div className="flex flex-wrap gap-3">
                       {filtersForRender.map(filterCol => (
                         <div key={filterCol} className="relative">
@@ -4769,9 +5214,9 @@ function App({ forceVisitor = false }) {
                           >
                             {(() => {
                               const cur = dynamicFilters[filterCol];
-                              if (Array.isArray(cur) && cur.length > 0) return `${cur.length} sélectionné(s)`;
+                              if (Array.isArray(cur) && cur.length > 0) return t('selected_count', { count: cur.length });
                               if (cur && !Array.isArray(cur)) return String(cur);
-                              return '-- Tous --';
+                              return t('all_option');
                             })()}
                           </button>
 
@@ -4803,7 +5248,7 @@ function App({ forceVisitor = false }) {
                                 })}
                               </div>
                               <div className="flex justify-between items-center gap-2 mt-3">
-                                <div className="text-xs text-gray-600">{getUniqueValuesForColumn(filterCol).length} option(s)</div>
+                                <div className="text-xs text-gray-600">{t('options_count', { count: getUniqueValuesForColumn(filterCol).length })}</div>
                                 <div className="flex gap-2">
                                   <button
                                     type="button"
@@ -4814,8 +5259,8 @@ function App({ forceVisitor = false }) {
                                       setDynamicFilters(prev => ({ ...prev, [filterCol]: Array.from(s) }));
                                       setOpenFilter(null);
                                     }}
-                                  >Appliquer</button>
-                                  <button type="button" className="px-3 py-1.5 bg-gray-100 rounded-md text-xs" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>Fermer</button>
+                                  >{t('apply')}</button>
+                                  <button type="button" className="px-3 py-1.5 bg-gray-100 rounded-md text-xs" onClick={(e) => { e.stopPropagation(); setOpenFilter(null); }}>{t('close')}</button>
                                   <button
                                     type="button"
                                     className="px-3 py-1.5 bg-red-500 text-white rounded-md text-xs"
@@ -4825,7 +5270,7 @@ function App({ forceVisitor = false }) {
                                       setDynamicFilters(prev => ({ ...prev, [filterCol]: [] }));
                                       setOpenFilter(null);
                                     }}
-                                  >Effacer</button>
+                                  >{t('clear')}</button>
                                 </div>
                               </div>
                             </div>
@@ -4841,12 +5286,12 @@ function App({ forceVisitor = false }) {
                     <button
                       onClick={() => setVisitorTableView('horizontal')}
                       className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'horizontal' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')}`}
-                    >Vue horizontale</button>
+                    >{t('horizontal_view')}</button>
                     <button
                       onClick={() => canVisitorVerticalView && setVisitorTableView('vertical')}
                       disabled={!canVisitorVerticalView}
                       className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'vertical' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >Vue verticale</button>
+                    >{t('vertical_view')}</button>
                   </div>
                 )}
 
@@ -4854,9 +5299,9 @@ function App({ forceVisitor = false }) {
                   {isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' ? (
                     <>
                       <div className="sticky top-0 z-20 bg-white border-b border-[#CCB47F] px-4 py-2 text-xs text-[#3F2A1F] font-medium">
-                        <span>{(visitorVerticalMatrix.rows || []).length} ligne(s)</span>
+                        <span>{t('row_count', { count: (visitorVerticalMatrix.rows || []).length })}</span>
                         <span className="mx-2">•</span>
-                        <span>{(visitorVerticalMatrix.hierarchyCols || []).length} niveau(x) hiérarchique(s)</span>
+                        <span>{t('hierarchy_count', { count: (visitorVerticalMatrix.hierarchyCols || []).length })}</span>
                       </div>
                       <table className="w-full border-collapse text-sm">
                         <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
@@ -4895,14 +5340,14 @@ function App({ forceVisitor = false }) {
                               if (val === null || val === undefined || val === '') return '—';
                               if (typeof val === 'number') {
                                 return Number.isInteger(val)
-                                  ? val.toLocaleString('fr-FR')
-                                  : val.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                                  ? formatLocalizedNumber(val)
+                                  : formatLocalizedNumber(val, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
                               }
                               const n = Number(String(val).replace(/,/g, '.'));
                               if (!Number.isNaN(n)) {
                                 return Number.isInteger(n)
-                                  ? n.toLocaleString('fr-FR')
-                                  : n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                                  ? formatLocalizedNumber(n)
+                                  : formatLocalizedNumber(n, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
                               }
                               return String(val);
                             };
@@ -4963,13 +5408,13 @@ function App({ forceVisitor = false }) {
                   ) : isVisitor && visitorMatrix?.canPivot ? (
                     <>
                       <div className="sticky top-0 z-20 bg-white border-b border-[#CCB47F] px-4 py-2 text-xs text-[#3F2A1F] font-medium">
-                        <span>{(visitorMatrix.rows || []).length} ligne(s)</span>
+                        <span>{t('row_count', { count: (visitorMatrix.rows || []).length })}</span>
                         <span className="mx-2">•</span>
-                        <span>{(visitorMatrix.periods || []).length} période(s)</span>
+                        <span>{t('period_count', { count: (visitorMatrix.periods || []).length })}</span>
                         {visitorMatrix.periods?.length > 0 && (
                           <>
                             <span className="mx-2">•</span>
-                            <span>Dernière période: <strong>{visitorMatrix.periods[visitorMatrix.periods.length - 1]}</strong></span>
+                            <span>{t('latest_period', { value: visitorMatrix.periods[visitorMatrix.periods.length - 1] })}</span>
                           </>
                         )}
                       </div>
@@ -4992,14 +5437,14 @@ function App({ forceVisitor = false }) {
                             if (val === null || val === undefined || val === '') return '—';
                             if (typeof val === 'number') {
                               return Number.isInteger(val)
-                                ? val.toLocaleString('fr-FR')
-                                : val.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                                ? formatLocalizedNumber(val)
+                                : formatLocalizedNumber(val, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
                             }
                             const n = Number(String(val).replace(/,/g, '.'));
                             if (!Number.isNaN(n)) {
                               return Number.isInteger(n)
-                                ? n.toLocaleString('fr-FR')
-                                : n.toLocaleString('fr-FR', { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+                                ? formatLocalizedNumber(n)
+                                : formatLocalizedNumber(n, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
                             }
                             return String(val);
                           };
@@ -5047,7 +5492,7 @@ function App({ forceVisitor = false }) {
                                   <td key={`${row.key}-${col}`} rowSpan={span} className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
                                     <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{value}</span>
                                     {isTotalCell && colIndex === groupCols.length - 1 && (
-                                      <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#7A0A4A] text-white uppercase tracking-wide">Total</span>
+                                      <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#7A0A4A] text-white uppercase tracking-wide">{t('total')}</span>
                                     )}
                                   </td>
                                 );
@@ -5112,7 +5557,7 @@ function App({ forceVisitor = false }) {
                 </div>
                 <div className="flex flex-wrap gap-4 items-center justify-between">
                   <button onClick={() => setShowAll(!showAll)} className="bg-[#9E6F2F] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
-                    {showAll ? "Réduire le tableau" : (isVisitor ? "Afficher plus de lignes" : "Afficher tout le tableau")}
+                    {showAll ? t('reduce_table') : (isVisitor ? t('show_more_rows') : t('show_all_table'))}
                   </button>
 
                   {canEdit && (userRole === 'ADMIN' || isSaisisseur) && (
@@ -5120,9 +5565,9 @@ function App({ forceVisitor = false }) {
                   )}
 
                   <div className="flex gap-2">
-                    <button onClick={exportTableXLSX} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">Exporter XLSX</button>
-                    <button onClick={exportTableCSV} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">Exporter CSV</button>
-                    <button onClick={exportTableTXT} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">Exporter TXT</button>
+                    <button onClick={exportTableXLSX} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">{t('export_xlsx')}</button>
+                    <button onClick={exportTableCSV} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">{t('export_csv')}</button>
+                    <button onClick={exportTableTXT} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">{t('export_txt')}</button>
                   </div>
                 </div>
               </div>
@@ -5575,70 +6020,16 @@ function App({ forceVisitor = false }) {
          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
            <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
              <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
-               <h2 className="text-lg font-bold text-center">Métadonnées</h2>
+               <h2 className="text-lg font-bold text-center">{t('metadata')}</h2>
              </div>
              <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
-               {isVisitor ? (
-                 <div className="space-y-4">
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Définition</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{subThemeMeta.definition_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Unité</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.unite_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Périodicité</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.periodicite_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Indication</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{subThemeMeta.indication_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Source</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.source_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Couverture</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{subThemeMeta.couverture_text || '—'}</div>
-                   </div>
-                 </div>
-               ) : (
-                 <div className="space-y-4">
-                   <div>
-                     <div className="font-semibold">Définition</div>
-                     <textarea placeholder="Définition" className="mt-2 w-full p-2 border-2 border-black rounded min-h-[120px]" value={subThemeMeta.definition_text} onChange={e => setSubThemeMeta({...subThemeMeta, definition_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Unité</div>
-                     <textarea placeholder="Unité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.unite_text} onChange={e => setSubThemeMeta({...subThemeMeta, unite_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Périodicité</div>
-                     <textarea placeholder="Périodicité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.periodicite_text} onChange={e => setSubThemeMeta({...subThemeMeta, periodicite_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Indication</div>
-                     <textarea placeholder="Indication" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.indication_text} onChange={e => setSubThemeMeta({...subThemeMeta, indication_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Source</div>
-                     <textarea placeholder="Source" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.source_text} onChange={e => setSubThemeMeta({...subThemeMeta, source_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Couverture</div>
-                     <textarea placeholder="Couverture" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={subThemeMeta.couverture_text} onChange={e => setSubThemeMeta({...subThemeMeta, couverture_text: e.target.value})} />
-                   </div>
-                 </div>
-               )}
+               {isVisitor ? renderMetadataViewer(subThemeMeta) : renderMetadataEditor(subThemeMeta, setSubThemeMeta)}
 
               
              </div>
              <div className="flex gap-4 mt-4 px-4 pb-4">
-               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-[#7A0A4A] text-white py-2 rounded-lg font-bold">Fermer</button>
-               {!isVisitor && <button onClick={saveSubThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">Enregistrer</button>}
+               <button onClick={() => setShowSubThemeMeta(false)} className="flex-1 bg-[#7A0A4A] text-white py-2 rounded-lg font-bold">{t('close')}</button>
+               {!isVisitor && <button onClick={saveSubThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">{t('save')}</button>}
              </div>
            </div>
          </div>
@@ -5647,68 +6038,14 @@ function App({ forceVisitor = false }) {
          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
            <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
              <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
-               <h2 className="text-lg font-bold text-center">Métadonnées</h2>
+               <h2 className="text-lg font-bold text-center">{t('metadata')}</h2>
              </div>
              <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
-               {isVisitor ? (
-                 <div className="space-y-4">
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Définition</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{themeMeta.definition_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Unité</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.unite_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Périodicité</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.periodicite_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Indication</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700 whitespace-pre-wrap">{themeMeta.indication_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Source</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.source_text || '—'}</div>
-                   </div>
-                   <div>
-                     <div className="font-semibold text-[#23354a]">Couverture</div>
-                     <div className="mt-2 bg-[#fbfdff] p-3 rounded text-gray-700">{themeMeta.couverture_text || '—'}</div>
-                   </div>
-                 </div>
-               ) : (
-                 <div className="space-y-4">
-                   <div>
-                     <div className="font-semibold">Définition</div>
-                     <textarea placeholder="Définition" className="mt-2 w-full p-2 border-2 border-black rounded min-h-[120px]" value={themeMeta.definition_text} onChange={e => setThemeMeta({...themeMeta, definition_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Unité</div>
-                     <textarea placeholder="Unité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.unite_text} onChange={e => setThemeMeta({...themeMeta, unite_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Périodicité</div>
-                     <textarea placeholder="Périodicité" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.periodicite_text} onChange={e => setThemeMeta({...themeMeta, periodicite_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Indication</div>
-                     <textarea placeholder="Indication" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.indication_text} onChange={e => setThemeMeta({...themeMeta, indication_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Source</div>
-                     <textarea placeholder="Source" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.source_text} onChange={e => setThemeMeta({...themeMeta, source_text: e.target.value})} />
-                   </div>
-                   <div>
-                     <div className="font-semibold">Couverture</div>
-                     <textarea placeholder="Couverture" className="mt-2 w-full p-2 border-2 border-black rounded h-20" value={themeMeta.couverture_text} onChange={e => setThemeMeta({...themeMeta, couverture_text: e.target.value})} />
-                   </div>
-                 </div>
-               )}
+               {isVisitor ? renderMetadataViewer(themeMeta) : renderMetadataEditor(themeMeta, setThemeMeta)}
              </div>
              <div className="flex gap-4 mt-4 px-4 pb-4">
-               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-[#7A0A4A] text-white py-2 rounded-lg font-bold">Fermer</button>
-               {!isVisitor && <button onClick={saveThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">Enregistrer</button>}
+               <button onClick={() => setShowThemeMeta(false)} className="flex-1 bg-[#7A0A4A] text-white py-2 rounded-lg font-bold">{t('close')}</button>
+               {!isVisitor && <button onClick={saveThemeMeta} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-lg font-bold">{t('save')}</button>}
              </div>
            </div>
          </div>
@@ -6000,7 +6337,7 @@ function App({ forceVisitor = false }) {
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subActionMenuPos.left, top: subActionMenuPos.top, zIndex: 9999 }}>
           <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
-            <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); setActionModalType('rename_subtheme'); setActionModalValue(st?.nom || ''); setActionModalThemeId(openSubActionMenu); setShowActionModal(true); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+            <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); setActionModalType('rename_subtheme'); setActionModalValue(st?.nom || ''); setActionModalValueAr(st?.nom_ar || ''); setActionModalThemeId(openSubActionMenu); setShowActionModal(true); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               Renommer
             </button>
@@ -6043,8 +6380,9 @@ function App({ forceVisitor = false }) {
       {showActionModal && (
         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : actionModalType === 'add_categorie' ? 'Ajouter une catégorie' : 'Ajouter un sous-thème'}</h2>
-            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} placeholder={actionModalType === 'rename' ? 'Nouveau nom du thème' : actionModalType === 'rename_subtheme' ? 'Nouveau nom du sous-thème' : actionModalType === 'add_categorie' ? 'Nom de la catégorie' : 'Nom du sous-thème'} />
+            <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : actionModalType === 'rename_categorie' ? 'Renommer la catégorie' : actionModalType === 'add_categorie' ? 'Ajouter une catégorie' : 'Ajouter un sous-thème'}</h2>
+            <input className="w-full p-2 border-2 border-black rounded mb-3" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} placeholder={actionModalType === 'rename' ? 'Nouveau nom du thème' : actionModalType === 'rename_subtheme' ? 'Nouveau nom du sous-thème' : actionModalType === 'rename_categorie' ? 'Nouveau nom de la catégorie' : actionModalType === 'add_categorie' ? 'Nom de la catégorie' : 'Nom du sous-thème'} />
+            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValueAr} onChange={e => setActionModalValueAr(e.target.value)} placeholder={actionModalType === 'rename' ? 'الاسم العربي للموضوع' : actionModalType === 'rename_subtheme' ? 'الاسم العربي للموضوع الفرعي' : actionModalType === 'rename_categorie' ? 'الاسم العربي للفئة' : actionModalType === 'add_categorie' ? 'الاسم العربي للفئة' : 'الاسم العربي للموضوع الفرعي'} dir="rtl" />
             
             {actionModalType === 'add_subtheme' && (() => {
               const currentTheme = themes.find(t => t.id === actionModalThemeId);
@@ -6069,22 +6407,25 @@ function App({ forceVisitor = false }) {
             })()}
             
             <div className="flex gap-4">
-              <button onClick={() => { setShowActionModal(false); setActionModalCategorieId(null); }} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={() => { setShowActionModal(false); setActionModalCategorieId(null); setActionModalValueAr(''); }} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
               <button onClick={async () => {
                 const cleanedModalValue = String(actionModalValue || '').trim().replace(/\s+/g, ' ');
+                const cleanedModalValueAr = String(actionModalValueAr || '').trim().replace(/\s+/g, ' ');
                 if (!cleanedModalValue) { alert('Le nom est requis'); return; }
-                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, cleanedModalValue); }
-                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, cleanedModalValue); }
-                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, cleanedModalValue); }
+                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
+                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
+                else if (actionModalType === 'rename_categorie') { await renameCategorie(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
+                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
                 else { 
                   const currentTheme = themes.find(t => t.id === actionModalThemeId);
                   if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0 && !actionModalCategorieId) {
                     return alert('Veuillez sélectionner une catégorie');
                   }
-                  await addSubTheme(actionModalThemeId, cleanedModalValue, actionModalCategorieId); 
+                  await addSubTheme(actionModalThemeId, cleanedModalValue, actionModalCategorieId, cleanedModalValueAr); 
                 }
                 setShowActionModal(false);
                 setActionModalCategorieId(null);
+                setActionModalValueAr('');
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Valider</button>
             </div>
           </div>
@@ -6107,19 +6448,27 @@ function App({ forceVisitor = false }) {
 
             <div className="space-y-3">
               {(infoBannerDraftItems || []).map((item, idx) => (
-                <div key={`info-editor-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
+                <div key={`info-editor-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_auto] gap-2">
                   <input
                     type="text"
                     value={item?.text || ''}
                     onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text: e.target.value } : it))}
-                    placeholder="Texte de l'information"
+                    placeholder="Titre FR de l'information"
+                    className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
+                  />
+                  <input
+                    type="text"
+                    value={item?.text_ar || ''}
+                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text_ar: e.target.value } : it))}
+                    placeholder="عنوان المعلومة بالعربية"
+                    dir="rtl"
                     className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
                   />
                   <input
                     type="text"
                     value={item?.url || ''}
                     onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, url: e.target.value } : it))}
-                    placeholder="Lien (optionnel): https://..."
+                    placeholder="Lien partagé (optionnel): https://..."
                     className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
                   />
                   <button
@@ -6137,7 +6486,7 @@ function App({ forceVisitor = false }) {
             <div className="flex flex-wrap items-center justify-end gap-2 mt-5">
               <button
                 type="button"
-                onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', url: '' }])}
+                onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', text_ar: '', url: '' }])}
                 className="px-4 py-2 rounded-xl font-semibold border bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]"
               >
                 + Ajouter info
