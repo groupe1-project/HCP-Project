@@ -84,6 +84,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [selectedMyAssignment, setSelectedMyAssignment] = useState(null);
   const [myProgression, setMyProgression] = useState(0);
   const [myComment, setMyComment] = useState('');
+
+  const getAdminAuthConfig = () => {
+    const adminToken = localStorage.getItem('auth_token_admin');
+    return adminToken ? { headers: { Authorization: `Token ${adminToken}` } } : {};
+  };
   
   // Charger les utilisateurs au montage
   useEffect(() => {
@@ -91,7 +96,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     try {
       const token = isSaisisseur
         ? (localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token'))
-        : (localStorage.getItem('auth_token_admin') || localStorage.getItem('auth_token'));
+        : localStorage.getItem('auth_token_admin');
       if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
     } catch (e) {}
 
@@ -609,14 +614,15 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
   const fetchSaisisseurs = async () => {
     try {
+      const adminConfig = getAdminAuthConfig();
       // Charger les utilisateurs
-      const usersResponse = await axios.get(`${API_BASE}/users/`);
+      const usersResponse = await axios.get(`${API_BASE}/users/`, adminConfig);
       const filteredUsers = usersResponse.data.filter(user => 
         user.role === 'SAISISSEUR'
       );
       
       // Charger les assignations
-      const assignmentsResponse = await axios.get(`${API_BASE}/user-theme-assignments/`);
+      const assignmentsResponse = await axios.get(`${API_BASE}/user-theme-assignments/`, adminConfig);
       const nextAssignments = assignmentsResponse.data;
       setAssignments(nextAssignments);
 
@@ -655,7 +661,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
   const fetchThemes = async () => {
     try {
-      const response = await axios.get(`${API_BASE}/themes/`);
+      const response = await axios.get(`${API_BASE}/themes/`, getAdminAuthConfig());
       setThemes(response.data);
       setAllThemes(response.data); // Pour la gestion des thèmes
     } catch (error) {
@@ -665,11 +671,15 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
   const fetchUserRequests = async () => {
     try {
-      const response = await axios.get(`${API_BASE}/user-requests/`);
+      const adminConfig = getAdminAuthConfig();
+      if (!adminConfig.headers) return;
+      const response = await axios.get(`${API_BASE}/user-requests/`, adminConfig);
       setUserRequests(response.data);
     } catch (error) {
       console.error('Erreur lors du chargement des demandes:', error);
-      alert(error.response?.data?.error || 'Erreur lors du chargement des demandes');
+      if (error.response?.status !== 403) {
+        alert(error.response?.data?.error || 'Erreur lors du chargement des demandes');
+      }
     }
   };
 

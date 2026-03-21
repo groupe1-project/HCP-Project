@@ -30,7 +30,10 @@ function App({ forceVisitor = false }) {
   // --- ÉTATS (toujours déclarés, même s'ils ne sont pas utilisés si non authentifié) ---
   const [activeMenu, setActiveMenu] = useState(() => {
     if (typeof window === 'undefined') return 'Themes';
-    return localStorage.getItem('activeMenu') || 'Themes';
+    const stored = localStorage.getItem('activeMenu') || 'Themes';
+    const p = window.location.pathname.toLowerCase();
+    if ((p === '/admin' || p.startsWith('/admin/')) && stored === 'Saisisseur') return 'Admin';
+    return stored;
   });
   const [formStep, setFormStep] = useState(0); 
   const [themes, setThemes] = useState([]);
@@ -122,6 +125,7 @@ function App({ forceVisitor = false }) {
   const [infoBannerText, setInfoBannerText] = useState("L'ICP du mois de Janvier 2026 est disponible");
   const [infoBannerItems, setInfoBannerItems] = useState([{ text: "L'ICP du mois de Janvier 2026 est disponible", url: '' }]);
   const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', url: '' }]);
+  const [showInfoBannerEditor, setShowInfoBannerEditor] = useState(false);
   const [savingInfoBanner, setSavingInfoBanner] = useState(false);
   const [siteContent, setSiteContent] = useState({
     about_title: 'A propos de la plateforme',
@@ -150,8 +154,10 @@ function App({ forceVisitor = false }) {
   const pathHasVisiteur = pathname === '/visiteur' || pathname.startsWith('/visiteur/');
   const pathHasSaisisseur = pathname === '/saisisseur' || pathname.startsWith('/saisisseur/');
   const pathHasAdmin = pathname === '/admin' || pathname.startsWith('/admin/');
+  const pathLooksLikeSaisisseurUser = pathname !== '/' && !pathHasSaisisseur && !pathHasVisiteur && !pathHasAdmin && !pathname.includes('.');
+  const isSaisisseurRoute = pathHasSaisisseur || pathLooksLikeSaisisseurUser;
   const isVisitor = forceVisitor || pathHasVisiteur;
-  const isSaisisseur = pathHasSaisisseur || (userRole === 'SAISISSEUR' && isAuthenticated);
+  const isSaisisseur = isSaisisseurRoute || (userRole === 'SAISISSEUR' && isAuthenticated);
   const canEdit = isAuthenticated && !isVisitor;
   const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
   const infoBannerApi = 'http://127.0.0.1:8000/api/info-banner/';
@@ -324,25 +330,33 @@ function App({ forceVisitor = false }) {
   };
 
   useEffect(() => {
-    // Select token/user info based on stored auth_context (preferred) or current path
+    // Select token/user info based on current route first to avoid cross-tab context takeover.
     try {
-      const authContext = localStorage.getItem('auth_context');
+      const storedContext = localStorage.getItem('auth_context') || '';
       let token = null;
       let role = '';
+      let resolvedContext = '';
 
-      if (authContext === 'admin') {
-        token = localStorage.getItem('auth_token_admin');
-        role = localStorage.getItem('user_role_admin') || '';
-      } else if (authContext === 'saisisseur') {
+      if (isVisitor) {
+        resolvedContext = '';
+      } else if (isSaisisseurRoute) {
+        resolvedContext = 'saisisseur';
         token = localStorage.getItem('auth_token_saisisseur');
         role = localStorage.getItem('user_role_saisisseur') || '';
       } else if (pathHasAdmin) {
+        resolvedContext = 'admin';
         token = localStorage.getItem('auth_token_admin');
         role = localStorage.getItem('user_role_admin') || '';
-      } else if (pathHasSaisisseur) {
+      } else if (storedContext === 'saisisseur') {
+        resolvedContext = 'saisisseur';
         token = localStorage.getItem('auth_token_saisisseur');
         role = localStorage.getItem('user_role_saisisseur') || '';
+      } else if (storedContext === 'admin') {
+        resolvedContext = 'admin';
+        token = localStorage.getItem('auth_token_admin');
+        role = localStorage.getItem('user_role_admin') || '';
       } else {
+        resolvedContext = 'default';
         token = localStorage.getItem('auth_token');
         role = localStorage.getItem('user_role') || '';
       }
@@ -352,14 +366,17 @@ function App({ forceVisitor = false }) {
         setIsAuthenticated(true);
       } else {
         delete axios.defaults.headers.common['Authorization'];
+        setIsAuthenticated(false);
       }
+
+      setAuthContext(resolvedContext);
       setUserRole(role);
     } catch (e) {
       console.error('Erreur lors de l\'initialisation du token', e);
     } finally {
       setAuthLoading(false);
     }
-  }, []);
+  }, [isVisitor, isSaisisseurRoute, pathHasAdmin]);
 
   useEffect(() => {
     // Always reopen step-4 on the table tab when a subtheme is opened.
@@ -415,10 +432,14 @@ function App({ forceVisitor = false }) {
     fetchSiteContent();
   }, []);
 
-  // Keep axios Authorization header in sync with the current auth_context
+  // Keep axios Authorization header in sync with route-resolved context
   useEffect(() => {
     try {
-      const ctx = authContext || localStorage.getItem('auth_context');
+      let ctx = authContext || localStorage.getItem('auth_context');
+      if (isSaisisseurRoute) ctx = 'saisisseur';
+      else if (pathHasAdmin) ctx = 'admin';
+      else if (isVisitor) ctx = '';
+
       let token = null;
       if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
       else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
@@ -429,13 +450,21 @@ function App({ forceVisitor = false }) {
     } catch (e) {
       console.error('Erreur sync auth header', e);
     }
-  }, [authContext]);
+  }, [authContext, isSaisisseurRoute, pathHasAdmin, isVisitor]);
 
   // When user switches menu or path, prefer the matching auth context if a token exists.
   useEffect(() => {
     try {
-      // If activeMenu explicitly Saisisseur, prefer saisisseur context
-      if (activeMenu === 'Saisisseur' || pathHasSaisisseur) {
+      // Route takes strict priority.
+      if (pathHasAdmin) {
+        if (localStorage.getItem('auth_token_admin')) {
+          localStorage.setItem('auth_context', 'admin');
+          setAuthContext('admin');
+          return;
+        }
+      }
+
+      if (isSaisisseurRoute) {
         if (localStorage.getItem('auth_token_saisisseur')) {
           localStorage.setItem('auth_context', 'saisisseur');
           setAuthContext('saisisseur');
@@ -443,8 +472,16 @@ function App({ forceVisitor = false }) {
         }
       }
 
-      // If activeMenu explicitly Admin, prefer admin context
-      if (activeMenu === 'Admin' || pathHasAdmin) {
+      // Use active menu as hint only when route is ambiguous.
+      if (!pathHasAdmin && !isSaisisseurRoute && activeMenu === 'Saisisseur') {
+        if (localStorage.getItem('auth_token_saisisseur')) {
+          localStorage.setItem('auth_context', 'saisisseur');
+          setAuthContext('saisisseur');
+          return;
+        }
+      }
+
+      if (!pathHasAdmin && !isSaisisseurRoute && activeMenu === 'Admin') {
         if (localStorage.getItem('auth_token_admin')) {
           localStorage.setItem('auth_context', 'admin');
           setAuthContext('admin');
@@ -454,7 +491,7 @@ function App({ forceVisitor = false }) {
     } catch (e) {
       // ignore
     }
-  }, [activeMenu, pathHasSaisisseur, pathHasAdmin]);
+  }, [activeMenu, isSaisisseurRoute, pathHasAdmin]);
 
   // Enforce and persist role-based active menu so saisisseur reste sur son espace après refresh
   useEffect(() => {
@@ -834,51 +871,7 @@ function App({ forceVisitor = false }) {
     }
   }, [selectedSubTheme, isVisitor]);
 
-  // Initialize per-chart visitor filters state from savedCharts (defaults)
-  useEffect(() => {
-    try {
-      // If the user navigated to /admin or /saisisseur and a token for that context exists,
-      // prefer to set the authContext accordingly so subsequent requests use the right token.
-      if (pathHasAdmin && localStorage.getItem('auth_token_admin')) {
-        setAuthContext('admin');
-      } else if (pathHasSaisisseur && localStorage.getItem('auth_token_saisisseur')) {
-        setAuthContext('saisisseur');
-      }
-
-      const ctx = authContext || localStorage.getItem('auth_context');
-      let token = null;
-      let role = '';
-
-      if (ctx === 'admin') {
-        token = localStorage.getItem('auth_token_admin');
-        role = localStorage.getItem('user_role_admin') || '';
-      } else if (ctx === 'saisisseur') {
-        token = localStorage.getItem('auth_token_saisisseur');
-        role = localStorage.getItem('user_role_saisisseur') || '';
-      } else if (pathHasAdmin) {
-        token = localStorage.getItem('auth_token_admin');
-        role = localStorage.getItem('user_role_admin') || '';
-      } else if (pathHasSaisisseur) {
-        token = localStorage.getItem('auth_token_saisisseur');
-        role = localStorage.getItem('user_role_saisisseur') || '';
-      } else {
-        token = localStorage.getItem('auth_token');
-        role = localStorage.getItem('user_role') || '';
-      }
-
-      if (token && !isVisitor) {
-        axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-        setIsAuthenticated(true);
-      } else {
-        delete axios.defaults.headers.common['Authorization'];
-      }
-      setUserRole(role);
-    } catch (e) {
-      console.error("Erreur lors de l'initialisation du token", e);
-    } finally {
-      setAuthLoading(false);
-    }
-  }, [authContext]);
+  // Keep chart-level visitor filters initialized from saved charts.
   
   // --- HELPER FUNCTIONS ---
   const getTableRows = (sub) => {
@@ -1032,15 +1025,14 @@ function App({ forceVisitor = false }) {
 
   const resolveCurrentAuthStorage = () => {
     let ctx = '';
-    try {
-      ctx = localStorage.getItem('auth_context') || '';
-    } catch (e) {
-      ctx = '';
-    }
-
-    if (!ctx) {
-      if (isSaisisseur) ctx = 'saisisseur';
-      else if (pathHasAdmin || userRole === 'ADMIN') ctx = 'admin';
+    if (isSaisisseurRoute || isSaisisseur || userRole === 'SAISISSEUR') ctx = 'saisisseur';
+    else if (pathHasAdmin || userRole === 'ADMIN') ctx = 'admin';
+    else {
+      try {
+        ctx = localStorage.getItem('auth_context') || '';
+      } catch (e) {
+        ctx = '';
+      }
     }
 
     if (ctx === 'saisisseur') {
@@ -1120,6 +1112,7 @@ function App({ forceVisitor = false }) {
       setInfoBannerItems(nextInfos);
       setInfoBannerDraftItems(nextInfos);
       setInfoBannerText(nextInfos[0]?.text || '');
+      setShowInfoBannerEditor(false);
       showToast('Information publiee pour les visiteurs', 'success');
     } catch (err) {
       console.error('Erreur sauvegarde info banner', err);
@@ -2192,13 +2185,21 @@ function App({ forceVisitor = false }) {
   const fetchThemes = async () => {
     try {
       const url = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
-      // Determine which token to use for this fetch to ensure correct filtering for saisisseur
+      // Route is authoritative; avoid stale cross-tab auth_context.
       let token = null;
       try {
-        const ctx = authContext || localStorage.getItem('auth_context');
-        if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
-        else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
-        else token = localStorage.getItem('auth_token');
+        if (isVisitor) {
+          token = null;
+        } else if (pathHasAdmin) {
+          token = localStorage.getItem('auth_token_admin');
+        } else if (isSaisisseurRoute) {
+          token = localStorage.getItem('auth_token_saisisseur');
+        } else {
+          const ctx = authContext || localStorage.getItem('auth_context');
+          if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
+          else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
+          else token = localStorage.getItem('auth_token');
+        }
       } catch (e) { token = localStorage.getItem('auth_token'); }
 
       const res = await axios.get(url, token ? { headers: { Authorization: `Token ${token}` } } : {});
@@ -3130,6 +3131,14 @@ function App({ forceVisitor = false }) {
     );
   }, [saisisseurAssignments]);
 
+  const assignedThemeIdSet = React.useMemo(() => {
+    return new Set(
+      (saisisseurAssignments || [])
+        .filter((a) => a && a.theme && a.assignment_archived !== true)
+        .map((a) => String(a.theme))
+    );
+  }, [saisisseurAssignments]);
+
   const isSubThemeVisibleForCurrentRole = (subTheme) => {
     if (!isSaisisseur) return true;
     if (!subTheme?.id) return false;
@@ -3138,11 +3147,19 @@ function App({ forceVisitor = false }) {
 
   const isThemeVisibleForCurrentRole = (theme) => {
     if (!isSaisisseur) return true;
+    if (assignedThemeIdSet.has(String(theme?.id))) return true;
+
     const allSubThemes = [
       ...(theme.sous_themes || []),
       ...(theme.categories || []).flatMap(cat => cat.sous_themes || [])
     ];
-    return allSubThemes.some(st => assignedSubThemeIdSet.has(String(st.id)));
+    if (allSubThemes.some(st => assignedSubThemeIdSet.has(String(st.id)))) return true;
+
+    const themeTitle = String(theme?.titre || '').trim().toLowerCase();
+    if (!themeTitle) return false;
+    return (saisisseurAssignments || []).some(
+      (a) => a && a.assignment_archived !== true && String(a.theme_titre || '').trim().toLowerCase() === themeTitle
+    );
   };
   const indicatorsSubThemes = themes.flatMap(theme => {
     const directSubThemes = (theme.sous_themes || []).map(st => ({
@@ -3198,10 +3215,10 @@ function App({ forceVisitor = false }) {
 
   // --- RENDU PRINCIPAL (Admin) ---
   return (
-    <div className="app-shell flex min-h-screen bg-[var(--color-bg)] text-[var(--color-text-main)] overflow-x-hidden">
+    <div className="app-shell flex h-screen bg-[var(--color-bg)] text-[var(--color-text-main)] overflow-hidden">
       
       {/* 1. MENU LATÉRAL */}
-      <div className="w-64 bg-[var(--color-surface)] border-r border-[var(--color-border)] flex flex-col shadow-sm">
+      <div className="w-64 h-screen shrink-0 sticky top-0 bg-[var(--color-surface)] border-r border-[var(--color-border)] flex flex-col shadow-sm overflow-y-auto">
         <div className="p-4 bg-[var(--color-surface)] border-b border-[var(--color-border)] flex flex-col items-center min-h-[210px]">
           <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
@@ -3223,7 +3240,7 @@ function App({ forceVisitor = false }) {
       </div>
 
       {/* 2. CONTENU PRINCIPAL */}
-      <div className="flex-1 min-w-0 flex flex-col overflow-x-hidden">
+      <div className="flex-1 min-w-0 h-screen flex flex-col overflow-hidden">
         <div className="bg-[var(--color-primary)] px-4 md:px-6 py-3 border-b border-[#9b2b64] flex items-center gap-4 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative min-w-0">
           <h1 className="text-white text-[24px] md:text-[32px] font-bold text-center tracking-wide leading-tight flex-1 min-w-0 break-words">
             Base de Données Région Béni Mellal-Khénifra قاعدة البيانات الاحصائية لجهة بني ملال خنيفرة
@@ -3254,50 +3271,17 @@ function App({ forceVisitor = false }) {
           <div className="w-full max-w-[1200px] mx-auto flex items-center gap-3 min-w-0">
           <span className="bg-[#a12863] text-white px-4 py-1 font-semibold rounded-xl shrink-0">INFOS</span>
           {canEdit && userRole === 'ADMIN' && activeMenu === 'Admin' ? (
-            <div className="flex-1 min-w-0 bg-[var(--color-surface)] rounded-xl border border-[var(--color-border)] p-2 space-y-2">
-              {(infoBannerDraftItems || []).map((item, idx) => (
-                <div key={`info-draft-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
-                  <input
-                    type="text"
-                    value={item?.text || ''}
-                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text: e.target.value } : it))}
-                    placeholder="Texte de l'information"
-                    className="bg-white text-[var(--color-primary)] px-3 py-1.5 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
-                  />
-                  <input
-                    type="text"
-                    value={item?.url || ''}
-                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, url: e.target.value } : it))}
-                    placeholder="Lien (optionnel): https://..."
-                    className="bg-white text-[var(--color-primary)] px-3 py-1.5 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
-                  />
-                  <button
-                    type="button"
-                    onClick={() => setInfoBannerDraftItems((prev) => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev)}
-                    className="px-3 py-1.5 rounded-lg font-semibold border bg-[#ffe5ef] text-[#8f245e] border-[#e2b5c8] hover:bg-[#ffd5e7]"
-                    title="Supprimer"
-                  >
-                    Suppr
-                  </button>
-                </div>
-              ))}
-              <div className="flex items-center gap-2 justify-end">
-                <button
-                  type="button"
-                  onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', url: '' }])}
-                  className="px-4 py-1.5 rounded-xl font-semibold border bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]"
-                >
-                  + Ajouter info
-                </button>
-                <button
-                  type="button"
-                  onClick={saveInfoBanner}
-                  disabled={savingInfoBanner}
-                  className={`px-4 py-1.5 rounded-xl font-semibold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
-                >
-                  {savingInfoBanner ? 'Validation...' : 'Valider'}
-                </button>
-              </div>
+            <div className="flex-1 min-w-0 bg-[var(--color-surface)] rounded-xl border border-[var(--color-border)] px-4 py-1.5 flex items-center justify-between gap-3">
+              <span className="text-[var(--color-primary)] font-medium truncate">
+                {sanitizeInfoItems(infoBannerItems).length} info(s) configuree(s)
+              </span>
+              <button
+                type="button"
+                onClick={() => setShowInfoBannerEditor(true)}
+                className="px-4 py-1 rounded-xl font-semibold border bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e] shrink-0"
+              >
+                Gerer les infos
+              </button>
             </div>
           ) : (
             <div className="bg-[var(--color-surface)] text-[var(--color-primary)] px-4 py-1.5 flex-1 min-w-0 rounded-xl font-medium border border-[var(--color-border)] overflow-hidden">
@@ -3394,7 +3378,7 @@ function App({ forceVisitor = false }) {
         )}
         {formStep === 4 && <div className="h-5" />}
 
-        <div className="px-8 pt-3 pb-10 flex-1 bg-white">
+        <div className="px-8 pt-3 pb-10 flex-1 min-h-0 overflow-y-auto bg-white">
           
           {/* GRILLE DES INDICATEURS (TOUS LES SOUS-THÈMES) */}
           {activeMenu === 'Indicateurs' && (
@@ -5007,7 +4991,7 @@ function App({ forceVisitor = false }) {
                     }
 
                     return (
-                      <div key={chart.id} className="border-4 border-orange-400 p-6 rounded-2xl bg-white shadow-lg relative">
+                      <div key={chart.id} className="border-2 border-[#d6b978] p-5 md:p-6 rounded-2xl bg-[#fffdfa] shadow-[0_10px_24px_rgba(17,24,39,0.08)] relative">
                         {canEdit && (
                           <div className="absolute top-4 right-4 flex gap-2">
                             <button onClick={() => openEditModal(chart)} className="bg-blue-500 text-white px-3 py-1 rounded border border-black text-xs font-bold shadow">Modifier</button>
@@ -5017,15 +5001,17 @@ function App({ forceVisitor = false }) {
                         
                         {/* Visitor-visible filters controls (only shown when configured) */}
                         {visitorFiltersList && visitorFiltersList.length > 0 && (
-                          <div className="mb-4 p-3 bg-gray-50 border-2 border-dashed rounded inline-grid gap-3">
+                          <div className="mb-4 p-3 bg-[#fff8ef] border border-[#e5cf9d] rounded-xl inline-block max-w-full">
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Filtres du graphe</div>
+                            <div className="flex flex-wrap items-center gap-2">
                             {(visitorFiltersList || []).map((vf, idx) => {
                               const col = (typeof vf === 'string') ? vf : (vf && vf.column) || '';
                               const currentVal = (chartVisitorFilters[chart.id] || {})[col] || (vf && vf.default) || '';
                               return (
-                                <div key={`${chart.id}-vf-${idx}`} className="flex items-center gap-2">
-                                  <label className="font-bold text-sm">{col || 'Colonne'}</label>
+                                <div key={`${chart.id}-vf-${idx}`} className="flex items-center gap-1.5">
+                                  <label className="font-semibold text-xs text-[#4d1734] shrink-0">{col || 'Colonne'}</label>
                                   <select
-                                    className="p-2 border-2 border-gray-300 rounded bg-white"
+                                    className="min-w-[140px] max-w-[220px] px-2.5 py-1.5 border border-[#d3b883] rounded-md bg-white text-[#4d1734] text-sm font-medium outline-none focus:border-[#7A0A4A] focus:ring-1 focus:ring-[#f0d6e4]"
                                     value={currentVal}
                                     onChange={e => {
                                       const newMap = { ...(chartVisitorFilters || {}) };
@@ -5040,14 +5026,15 @@ function App({ forceVisitor = false }) {
                                 </div>
                               );
                             })}
+                            </div>
                           </div>
                         )}
 
                         {chart.title && (
-                          <h3 className="text-lg font-bold text-center mb-2">{chart.title}</h3>
+                          <h3 className="text-2xl md:text-[30px] font-extrabold text-center mb-3 text-[#4d1734]">{chart.title}</h3>
                         )}
 
-                        <div className="h-64 w-full mt-4">
+                        <div className="h-64 w-full mt-4 bg-white border border-[#eedab0] rounded-xl p-2">
                           <ResponsiveContainer width="100%" height="100%">
                             {chart.type === 'Histogramme' ? (
                               multiSeries ? (
@@ -5170,8 +5157,8 @@ function App({ forceVisitor = false }) {
                           </ResponsiveContainer>
                         </div>
                         {chart.mesure && (
-                          <div className="mt-4 p-3 bg-blue-50 border-l-4 border-blue-500 italic text-sm text-gray-700">
-                            <strong>Note :</strong> {chart.mesure}
+                          <div className="mt-4 px-4 py-3 bg-[#f7f8fb] border border-[#d8dee9] rounded-lg text-sm text-[#4b5563] italic">
+                            {chart.mesure}
                           </div>
                         )}
                       </div>
@@ -5894,6 +5881,70 @@ function App({ forceVisitor = false }) {
                 setShowActionModal(false);
                 setActionModalCategorieId(null);
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Valider</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Settings modal */}
+      {showInfoBannerEditor && (
+        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 12000, backgroundColor: 'rgba(0,0,0,0.22)' }}>
+          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[82vh] overflow-y-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
+            <div className="flex items-center justify-between gap-4 mb-4">
+              <h2 className="text-2xl font-bold text-[#1a5d85]">Gestion des infos</h2>
+              <button
+                onClick={() => setShowInfoBannerEditor(false)}
+                className="px-3 py-1 rounded-lg border border-gray-300 bg-gray-100 hover:bg-gray-200 font-semibold"
+              >
+                Fermer
+              </button>
+            </div>
+
+            <div className="space-y-3">
+              {(infoBannerDraftItems || []).map((item, idx) => (
+                <div key={`info-editor-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto] gap-2">
+                  <input
+                    type="text"
+                    value={item?.text || ''}
+                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text: e.target.value } : it))}
+                    placeholder="Texte de l'information"
+                    className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
+                  />
+                  <input
+                    type="text"
+                    value={item?.url || ''}
+                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, url: e.target.value } : it))}
+                    placeholder="Lien (optionnel): https://..."
+                    className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setInfoBannerDraftItems((prev) => prev.length > 1 ? prev.filter((_, i) => i !== idx) : prev)}
+                    className="px-3 py-2 rounded-lg font-semibold border bg-[#ffe5ef] text-[#8f245e] border-[#e2b5c8] hover:bg-[#ffd5e7]"
+                    title="Supprimer"
+                  >
+                    Suppr
+                  </button>
+                </div>
+              ))}
+            </div>
+
+            <div className="flex flex-wrap items-center justify-end gap-2 mt-5">
+              <button
+                type="button"
+                onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', url: '' }])}
+                className="px-4 py-2 rounded-xl font-semibold border bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]"
+              >
+                + Ajouter info
+              </button>
+              <button
+                type="button"
+                onClick={saveInfoBanner}
+                disabled={savingInfoBanner}
+                className={`px-4 py-2 rounded-xl font-semibold border ${savingInfoBanner ? 'bg-gray-300 text-gray-700 border-gray-400 cursor-not-allowed' : 'bg-[#a12863] text-white border-[#d6619c] hover:bg-[#8f245e]'}`}
+              >
+                {savingInfoBanner ? 'Validation...' : 'Enregistrer'}
+              </button>
             </div>
           </div>
         </div>
