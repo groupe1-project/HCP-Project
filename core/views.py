@@ -621,6 +621,93 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             logger.exception('Erreur import excel')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'], url_path='append')
+    def append_table(self, request, pk=None):
+        """Ajoute les lignes d'un fichier Excel aux données existantes sans écrasement, avec remappage IA/fallback."""
+        st = self.get_object()
+        excel_file = request.FILES.get('file')
+        if not excel_file:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+        try:
+            use_ai = str(request.data.get('use_ai', 'false')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
+            warnings = []
+            df = pd.read_excel(excel_file)
+            excel_file.seek(0)
+            df_raw = pd.read_excel(excel_file, header=None)
+
+            normalized_df = None
+            if _is_bad_header_shape(df.columns):
+                normalized_df = _normalize_cross_table_to_flat(df_raw)
+                if normalized_df is not None:
+                    df = normalized_df
+                    warnings.append('Normalisation croisee->plate appliquee')
+
+            df = df.fillna('')
+            incoming_columns = [str(c) for c in df.columns]
+
+            existing_rows = list(st.data_json or [])
+            existing_columns = list(st.columns_order or [])
+
+            if _is_bad_header_shape(existing_columns) and normalized_df is not None:
+                existing_columns = [str(c) for c in normalized_df.columns]
+                warnings.append('Schema cible corrige a partir de la table normalisee')
+
+            overlap = _schema_overlap_ratio(existing_columns, incoming_columns)
+
+            if not existing_columns:
+                mapped_rows = df.to_dict(orient='records')
+                final_columns = incoming_columns
+                warnings.append('Schema cible vide: colonnes du fichier adoptees')
+            elif set(incoming_columns) == set(existing_columns):
+                mapped_rows = [
+                    {col: row.get(col, '') for col in existing_columns}
+                    for row in df.to_dict(orient='records')
+                ]
+                final_columns = existing_columns
+                warnings.append('Colonnes compatibles: ajout direct ordonne')
+            else:
+                if not use_ai:
+                    return Response(
+                        {
+                            'error': 'Colonnes incompatibles pour ajout classique. Activez Ajouter avec IA ou alignez les colonnes du fichier.',
+                            'expected_columns': existing_columns,
+                            'incoming_columns': incoming_columns,
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                try:
+                    mapped_rows = _run_gemini_mapping(df, existing_columns)
+                    final_columns = existing_columns
+                    warnings.append('Mapping IA applique pour ajout')
+                except Exception as ai_err:
+                    logger.warning('Fallback append mapping active: %s', ai_err)
+                    mapped_rows = _fallback_map_rows(df, existing_columns)
+                    final_columns = existing_columns
+                    warnings.append('Mapping IA indisponible: fallback heuristique utilise pour ajout')
+
+                warnings.append(
+                    f'Colonnes source differentes. Recouvrement schema: {round(overlap * 100)}%'
+                )
+
+            merged = existing_rows + mapped_rows
+            st.data_json = merged
+            st.columns_order = final_columns
+            st.save()
+
+            return Response(
+                {
+                    'message': f'{len(mapped_rows)} ligne(s) ajoutee(s). Total : {len(merged)} ligne(s).',
+                    'data': st.data_json,
+                    'columns_order': list(st.columns_order),
+                    'warnings': warnings,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as e:
+            logger.exception('Erreur append excel')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['post'], url_path='import-smart')
     def import_table_smart(self, request, pk=None):
         """Import Excel with AI-assisted column mapping to current sous-theme schema."""

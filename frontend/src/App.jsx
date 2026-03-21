@@ -83,6 +83,8 @@ function App({ forceVisitor = false }) {
   const [editTableRows, setEditTableRows] = useState([]);
   const [editTableColumns, setEditTableColumns] = useState([]);
   const [isSmartImporting, setIsSmartImporting] = useState(false);
+  const [isAppending, setIsAppending] = useState(false);
+  const [isAppendingAI, setIsAppendingAI] = useState(false);
   const [showAll, setShowAll] = useState(false);
   const [activeDataTab, setActiveDataTab] = useState('tableau');
   const [visitorTableView, setVisitorTableView] = useState('horizontal');
@@ -1837,6 +1839,201 @@ function App({ forceVisitor = false }) {
       alert('Erreur lors de l\'import IA: ' + (err.response?.data?.error || err.message));
     } finally {
       setIsSmartImporting(false);
+      if (e.target) e.target.value = null;
+    }
+  };
+
+  const handleAppendFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!confirm('Ajouter les lignes de ce fichier au tableau existant (sans effacer les données actuelles) ?')) { if (e.target) e.target.value = null; return; }
+
+    const readExcelRows = async (excelFile) => {
+      const buffer = await excelFile.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const sheetName = wb.SheetNames?.[0];
+      if (!sheetName) return { columns: [], rows: [] };
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+      const columns = rows.length > 0
+        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
+        : [];
+      const normalizedRows = (rows || []).map((row) =>
+        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
+      );
+      return { columns, rows: normalizedRows };
+    };
+
+    try {
+      if (isSaisisseur) {
+        const imported = await readExcelRows(file);
+        if (!imported.columns.length) {
+          alert('Le fichier importé est vide ou sans colonnes exploitables.');
+          if (e.target) e.target.value = null;
+          return;
+        }
+        const existingRows = editTableRows || [];
+        const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
+
+        if (existingColumns.length > 0) {
+          const expectedSet = new Set(existingColumns.map((c) => String(c || '').trim()));
+          const incomingSet = new Set((imported.columns || []).map((c) => String(c || '').trim()));
+          const sameColumns = expectedSet.size === incomingSet.size && [...expectedSet].every((c) => incomingSet.has(c));
+          if (!sameColumns) {
+            alert('Ajout classique refusé: colonnes incompatibles. Utilisez "Ajouter avec IA" ou alignez les colonnes du fichier.');
+            if (e.target) e.target.value = null;
+            return;
+          }
+        }
+
+        const normalizedRows = imported.rows.map((row) =>
+          Object.fromEntries(existingColumns.map((col) => [col, row?.[col] ?? '']))
+        );
+        const mergedRows = [...existingRows, ...normalizedRows];
+        await saveDraftAssignmentForSaisisseur(
+          { tables: mergedRows, columns_order: existingColumns },
+          'En cours'
+        );
+        setEditTableColumns(existingColumns);
+        setEditTableRows(mergedRows);
+        alert(`${normalizedRows.length} ligne(s) ajoutée(s) au brouillon.`);
+        if (e.target) e.target.value = null;
+        return;
+      }
+
+      setIsAppending(true);
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('use_ai', 'false');
+      const result = await axios.post(
+        `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`,
+        fd
+      );
+      const warnings = result?.data?.warnings || [];
+      const msg = result?.data?.message || 'Lignes ajoutées avec succès';
+      alert(warnings.length > 0 ? `${msg}\n⚠ ${warnings.join(' | ')}` : msg);
+
+      // refresh
+      const themesRes = await axios.get(themesApiBase);
+      setThemes(themesRes.data);
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
+      if (freshTheme) setSelectedTheme(freshTheme);
+      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
+        || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
+      if (freshSub) {
+        selectSubTheme(freshSub);
+        if (showEditTable) {
+          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
+          const refreshedCols = (freshSub.columns || []).length > 0
+            ? [...(freshSub.columns || [])]
+            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
+          setEditTableColumns(refreshedCols);
+          setEditTableRows(
+            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
+          );
+        }
+      }
+    } catch (err) {
+      console.error(err.response?.data || err);
+      alert('Erreur lors de l\'ajout : ' + (err.response?.data?.error || err.message));
+    } finally {
+      setIsAppending(false);
+      if (e.target) e.target.value = null;
+    }
+  };
+
+  const handleAppendAIFileChange = async (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    if (!confirm('Ajouter avec IA: remapper les colonnes du fichier vers la structure actuelle avant ajout ?')) { if (e.target) e.target.value = null; return; }
+    const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+    const readExcelRows = async (excelFile) => {
+      const buffer = await excelFile.arrayBuffer();
+      const wb = XLSX.read(buffer, { type: 'array' });
+      const sheetName = wb.SheetNames?.[0];
+      if (!sheetName) return { columns: [], rows: [] };
+      const ws = wb.Sheets[sheetName];
+      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+      const columns = rows.length > 0
+        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
+        : [];
+      const normalizedRows = (rows || []).map((row) =>
+        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
+      );
+      return { columns, rows: normalizedRows };
+    };
+
+    try {
+      if (isSaisisseur) {
+        const imported = await readExcelRows(file);
+        if (!imported.columns.length) {
+          alert('Le fichier importé est vide ou sans colonnes exploitables.');
+          if (e.target) e.target.value = null;
+          return;
+        }
+
+        const existingRows = editTableRows || [];
+        const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
+        const sourceByNorm = new Map((imported.columns || []).map((c) => [normalizeCol(c), c]));
+        const mappedRows = imported.rows.map((row) => {
+          const out = {};
+          existingColumns.forEach((targetCol) => {
+            const src = sourceByNorm.get(normalizeCol(targetCol));
+            out[targetCol] = src ? (row?.[src] ?? '') : '';
+          });
+          return out;
+        });
+        const mergedRows = [...existingRows, ...mappedRows];
+
+        await saveDraftAssignmentForSaisisseur(
+          { tables: mergedRows, columns_order: existingColumns },
+          'En cours'
+        );
+        setEditTableColumns(existingColumns);
+        setEditTableRows(mergedRows);
+        alert(`${mappedRows.length} ligne(s) ajoutée(s) au brouillon (remappage IA local).`);
+        if (e.target) e.target.value = null;
+        return;
+      }
+
+      setIsAppendingAI(true);
+      const fd = new FormData();
+      fd.append('file', file);
+      fd.append('use_ai', 'true');
+
+      const result = await axios.post(
+        `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`,
+        fd
+      );
+      const warnings = result?.data?.warnings || [];
+      const msg = result?.data?.message || 'Lignes ajoutées avec IA';
+      alert(warnings.length > 0 ? `${msg}\n⚠ ${warnings.join(' | ')}` : msg);
+
+      const themesRes = await axios.get(themesApiBase);
+      setThemes(themesRes.data);
+      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
+      if (freshTheme) setSelectedTheme(freshTheme);
+      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
+        || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
+      if (freshSub) {
+        selectSubTheme(freshSub);
+        if (showEditTable) {
+          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
+          const refreshedCols = (freshSub.columns || []).length > 0
+            ? [...(freshSub.columns || [])]
+            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
+          setEditTableColumns(refreshedCols);
+          setEditTableRows(
+            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
+          );
+        }
+      }
+    } catch (err) {
+      console.error(err.response?.data || err);
+      alert('Erreur lors de l\'ajout avec IA : ' + (err.response?.data?.error || err.message));
+    } finally {
+      setIsAppendingAI(false);
       if (e.target) e.target.value = null;
     }
   };
@@ -5210,7 +5407,15 @@ function App({ forceVisitor = false }) {
                 {isSmartImporting ? 'Import IA...' : 'Importer avec IA'}
                 <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleSmartImportFileChange} disabled={isSmartImporting} />
               </label>
-              <div className="text-sm italic text-gray-600">Choisir un fichier Excel pour remplacer le tableau actuel</div>
+              <label className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer ${isAppending ? 'bg-gray-300' : 'bg-[#a8d5a2]'}`}>
+                {isAppending ? 'Ajout...' : 'Ajouter au tableau'}
+                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleAppendFileChange} disabled={isAppending} />
+              </label>
+              <label className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer ${isAppendingAI ? 'bg-gray-300' : 'bg-[#8fc4ff]'}`}>
+                {isAppendingAI ? 'Ajout IA...' : 'Ajouter avec IA'}
+                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleAppendAIFileChange} disabled={isAppendingAI} />
+              </label>
+              <div className="text-sm italic text-gray-600">Remplacer : écrase le tableau · Importer avec IA : remplace/remappe · Ajouter : fusionne en mode strict · Ajouter avec IA : fusionne avec remapping intelligent</div>
             </div>
 
             <div className="overflow-auto">
