@@ -105,6 +105,10 @@ class SousTheme(models.Model):
     
     # Stockage des données Excel (votre logique actuelle)
     data_json = models.JSONField(null=True, blank=True) 
+
+    # Stockage analytique bilingue durable (canonique + labels FR/AR)
+    data_json_i18n = models.JSONField(default=dict, blank=True, help_text="Donnees canoniques bilingues (fr/ar)")
+    data_is_bilingual = models.BooleanField(default=False)
     
     # Ordre des colonnes pour préserver l'ordre du fichier Excel original
     columns_order = models.JSONField(default=list, blank=True, help_text="Liste ordonnée des noms de colonnes du fichier Excel")

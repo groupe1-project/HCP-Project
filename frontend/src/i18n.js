@@ -202,3 +202,81 @@ i18n
   });
 
 export default i18n;
+
+// ---------------------------------------------------------------------------
+// Static vocabulary for translating French data values → Arabic (display only).
+// Used by the frontend when the visitor switches to Arabic mode.
+// To add new translations: add entries to the object below.
+// ---------------------------------------------------------------------------
+export const DATA_TRANSLATIONS_FR_AR = {
+  // ─── Noms de colonnes ───
+  'Annee':              'السنة',
+  'Annees':             'السنوات',
+  'Année':              'السنة',
+  'Années':             'السنوات',
+  'Sexe':               'الجنس',
+  'Milieu':             'الوسط',
+  'Province':           'الإقليم',
+  'Region':             'الجهة',
+  'Région':             'الجهة',
+  'Valeur':             'القيمة',
+  'Dimension':          'البُعد',
+  "Groupes d'âges":     'الفئات العمرية',
+  'Groupes_d_ages':     'الفئات العمرية',
+  "Groupe d'âge":       'الفئة العمرية',
+  'Groupe_d_age':       'الفئة العمرية',
+  'Niveau_Etude':       'مستوى الدراسة',
+  'Niveau_Instruction': 'مستوى التعليم',
+  'Etat_Matrimonial':   'الحالة العائلية',
+  'Etat Matrimonial':   'الحالة العائلية',
+  'Activite':           'النشاط',
+  'Secteur':            'القطاع',
+  'Tranche_Age':        'الشريحة العمرية',
+  'Tranche Age':        'الشريحة العمرية',
+  'Nationalite':        'الجنسية',
+  'Categorie':          'الفئة',
+  'Type':               'النوع',
+  'Statut':             'الوضع',
+  'Commune':            'الجماعة',
+  'Indicateur':         'المؤشر',
+  'Periode':            'الفترة',
+
+  // ─── Valeurs – Sexe ───
+  'Féminin':   'إناث',
+  'Feminin':   'إناث',
+  'Masculin':  'ذكور',
+  'Femme':     'امرأة',
+  'Femmes':    'النساء',
+  'Homme':     'رجل',
+  'Hommes':    'الرجال',
+
+  // ─── Valeurs – Milieu ───
+  'Urbain':    'حضري',
+  'Urbaine':   'حضرية',
+  'Urbaines':  'حضريات',
+  'Rural':     'قروي',
+  'Rurale':    'قروية',
+  'Rurales':   'قرويات',
+
+  // ─── Valeurs – État matrimonial ───
+  'Célibataire':  'أعزب/عزباء',
+  'Celibataire':  'أعزب/عزباء',
+  'Marié':        'متزوج',
+  'Marie':        'متزوج',
+  'Mariée':       'متزوجة',
+  'Mariee':       'متزوجة',
+  'Divorcé':      'مطلق',
+  'Divorce':      'مطلق',
+  'Divorcée':     'مطلقة',
+  'Divorcee':     'مطلقة',
+  'Veuf':         'أرمل',
+  'Veuve':        'أرملة',
+
+  // ─── Valeurs communes ───
+  'Total':      'المجموع',
+  'Ensemble':   'المجموع الكلي',
+  'National':   'وطني',
+  'Nationale':  'وطنية',
+  'Oui':        'نعم',
+  'Non':        'لا',
+};

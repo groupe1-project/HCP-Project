@@ -20,6 +20,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
     columns = serializers.SerializerMethodField()
     # On expose également le champ data_json pour permettre les écritures depuis le front
     data_json = serializers.JSONField(required=False, allow_null=True)
+    data_json_i18n = serializers.JSONField(required=False)
     # Ordre des colonnes préservé de l'Excel original
     columns_order = serializers.JSONField(required=False, allow_null=True)
     # On utilise directement le champ du modèle s'il est déjà en JSON
@@ -33,6 +34,7 @@ class SousThemeSerializer(serializers.ModelSerializer):
         model = SousTheme
         fields = [
             'id', 'nom', 'nom_ar', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns_order', 'columns', 'charts_config',
+            'data_json_i18n', 'data_is_bilingual',
             # Métadonnées éditables côté front
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
             'definition_text_ar', 'unite_text_ar', 'indication_text_ar', 'source_text_ar', 'periodicite_text_ar', 'couverture_text_ar',

@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import os
+import unicodedata
 import pandas as pd
 import string
 import random
@@ -320,6 +321,541 @@ def _normalize_cross_table_to_flat(df_raw):
     return pd.DataFrame(records)
 
 
+def _make_unique_columns(columns):
+    seen = {}
+    result = []
+    for raw in columns:
+        base = str(raw or '').strip() or 'col'
+        if base not in seen:
+            seen[base] = 1
+            result.append(base)
+            continue
+        seen[base] += 1
+        result.append(f'{base}_{seen[base]}')
+    return result
+
+
+def _normalize_merged_headers_to_wide(df_raw):
+    """
+    Normalize Excel tables with merged/multi-row headers into a usable wide table.
+    This keeps each data row intact while rebuilding clean column names.
+    """
+    work = df_raw.copy()
+    work = work.apply(lambda col: col.map(_cell_to_text))
+
+    # Drop fully empty rows/columns early.
+    row_non_empty_mask = work.apply(lambda r: any(_cell_to_text(v) for v in r.tolist()), axis=1)
+    work = work.loc[row_non_empty_mask, :]
+    if work.empty:
+        return None
+
+    col_non_empty_mask = [
+        any(_cell_to_text(v) for v in work.iloc[:, c].tolist())
+        for c in range(work.shape[1])
+    ]
+    keep_col_idx = [i for i, keep in enumerate(col_non_empty_mask) if keep]
+    if not keep_col_idx:
+        return None
+    work = work.iloc[:, keep_col_idx]
+
+    # Detect first data row: enough numeric cells on the same row.
+    data_start = None
+    for ridx in range(len(work)):
+        row_vals = work.iloc[ridx].tolist()
+        non_empty = [_cell_to_text(v) for v in row_vals if _cell_to_text(v)]
+        if not non_empty:
+            continue
+        numeric_count = sum(1 for v in row_vals if _parse_number(v) is not None)
+        if numeric_count >= max(1, int(len(non_empty) * 0.4)):
+            data_start = ridx
+            break
+
+    if data_start is None or data_start <= 0:
+        return None
+
+    header_block = work.iloc[:data_start].copy()
+    data_block = work.iloc[data_start:].copy().reset_index(drop=True)
+    if header_block.empty or data_block.empty:
+        return None
+
+    # Simulate merged-cell fill in both directions to recover header labels.
+    header_block = header_block.replace('', pd.NA).ffill(axis=1).ffill(axis=0).fillna('')
+
+    raw_columns = []
+    generic_parents = {
+        'niveau', 'niveau etude', 'niveau_etude', 'milieu', 'zone',
+        'type', 'categorie', 'catégorie', 'groupe', 'group'
+    }
+
+    for cidx in range(header_block.shape[1]):
+        tokens = []
+        for ridx in range(header_block.shape[0]):
+            token = _cell_to_text(header_block.iat[ridx, cidx])
+            if token and (not tokens or _normalize_name(tokens[-1]) != _normalize_name(token)):
+                tokens.append(token)
+
+        if not tokens:
+            tokens = [f'col_{cidx + 1}']
+
+        if len(tokens) >= 2:
+            parent = tokens[-2]
+            child = tokens[-1]
+            parent_norm = _normalize_name(parent)
+            if parent_norm in generic_parents and _normalize_name(child) != parent_norm:
+                col_name = f'{parent}_{child}'
+            elif _normalize_name(parent) == _normalize_name(child):
+                col_name = child
+            else:
+                col_name = f'{parent}_{child}'
+        else:
+            col_name = tokens[-1]
+
+        col_name = re.sub(r'\s+', '_', str(col_name).strip()).strip('_') or f'col_{cidx + 1}'
+        raw_columns.append(col_name)
+
+    clean_columns = _make_unique_columns(raw_columns)
+    data_block.columns = clean_columns
+
+    # Remove columns that still contain no data after normalization.
+    keep_cols = [
+        col for col in data_block.columns
+        if any(_cell_to_text(v) for v in data_block[col].tolist())
+    ]
+    data_block = data_block[keep_cols] if keep_cols else data_block
+
+    # Keep only non-empty rows.
+    data_block = data_block[
+        data_block.apply(lambda r: any(_cell_to_text(v) for v in r.tolist()), axis=1)
+    ]
+
+    if data_block.empty or data_block.shape[1] < 2:
+        return None
+
+    return data_block.reset_index(drop=True)
+
+
+def _normalize_semantic_token(value):
+    text = ' '.join(str(value or '').strip().split()).lower()
+    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
+    text = re.sub(r'[^a-z0-9 ]+', ' ', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _infer_dimension_name_from_modalities(modalities):
+    """Infer a stable business dimension name from modality labels."""
+    normalized_modalities = {
+        _normalize_semantic_token(re.sub(r'[_\-:/]+', ' ', str(col or '').strip()))
+        for col in (modalities or [])
+        if str(col or '').strip()
+    }
+    normalized_modalities = {m for m in normalized_modalities if m}
+    if len(normalized_modalities) < 2:
+        return 'Dimension'
+
+    taxonomy = {
+        'Milieu': {
+            'total', 'rural', 'urbain', 'urbaine', 'urbaines', 'rurale', 'rurales'
+        },
+        'Sexe': {
+            'masculin', 'feminin', 'homme', 'hommes', 'femme', 'femmes', 'total'
+        },
+        'Etat_Matrimonial': {
+            'celibataire', 'celibataires', 'marie', 'maries', 'divorce', 'divorces',
+            'veuf', 'veufs', 'veuve', 'veuves', 'total'
+        },
+        'Province': {
+            'azilal', 'beni mellal', 'beni mellal', 'fquih ben salah', 'khenifra',
+            'khouribga', 'settat', 'berrechid', 'el jadida', 'safi', 'essaouira',
+            'marrakech', 'youssoufia', 'tinghir', 'ouarzazate', 'zagora', 'taroudannt',
+            'agadir ida ou tanane', 'chtouka ait baha', 'inezgane ait melloul',
+            'al haouz', 'chichaoua', 'rehamna', 'oujda angad', 'nador', 'driouch',
+            'berkane', 'taourirt', 'jerada', 'figuig', 'tetouan', 'larache',
+            'chefchaouen', 'al hoceima', 'tanger assilah', 'ouazzane', 'fahs anjra',
+            'meknes', 'fes', 'taounate', 'taza', 'ifrane', 'sidi kacem',
+            'sidi slimane', 'khemisset', 'rabat', 'sale', 'skhirate temara',
+            'kenitra', 'casablanca', 'mohammedia', 'nouaceur', 'mediouna'
+        },
+        'Region': {
+            'tanger tetouan al hoceima', 'l oriental', 'fes meknes',
+            'rabat sale kenitra', 'beni mellal khenifra', 'casablanca settat',
+            'marrakech safi', 'draa tafilalet', 'souss massa', 'guelmim oued noun',
+            'laayoune sakia el hamra', 'dakhla oued ed dahab'
+        },
+    }
+
+    best_name = 'Dimension'
+    best_score = 0
+
+    for candidate_dim, vocab in taxonomy.items():
+        normalized_vocab = {_normalize_semantic_token(v) for v in vocab}
+        overlap = len(normalized_modalities.intersection(normalized_vocab))
+        if overlap > best_score:
+            best_score = overlap
+            best_name = candidate_dim
+
+    # Require enough evidence to avoid false positives.
+    if best_score >= 2:
+        return best_name
+    return 'Dimension'
+
+
+def _normalize_wide_metrics_to_long(df):
+    """
+    Convert a wide table like:
+      Annees | Milieu_Total | Milieu_rural | Milieu_urbain
+    into a long table like:
+      Annees | Milieu | Valeur
+
+    Returns a normalized DataFrame or None if the table does not match the pattern.
+    """
+    if df is None or df.empty:
+        return None
+
+    work = df.copy()
+    work.columns = [str(c or '').strip() for c in work.columns]
+    if not work.columns.tolist() or len(work.columns) < 3:
+        return None
+
+    # Do not re-normalize if already in long format.
+    existing_norm = {_normalize_column_name(c) for c in work.columns}
+    if 'valeur' in existing_norm:
+        return None
+
+    def _is_year_like_series(series):
+        values = [_cell_to_text(v) for v in series.tolist() if _cell_to_text(v)]
+        # Support short tables (e.g. only 2 years) while avoiding false positives.
+        if len(values) < 2:
+            return False
+        year_like_count = sum(1 for v in values if re.fullmatch(r'(19|20)\d{2}', v))
+        return (year_like_count / float(len(values))) >= 0.8
+
+    # Candidate numeric/measure columns.
+    measure_cols = []
+    for col in work.columns:
+        values = work[col].tolist()
+        non_empty = [_cell_to_text(v) for v in values if _cell_to_text(v)]
+        if len(non_empty) < 2:
+            continue
+        numeric_count = sum(1 for v in non_empty if _parse_number(v) is not None)
+        ratio = numeric_count / float(max(1, len(non_empty)))
+        if ratio >= 0.75 and not _is_year_like_series(work[col]):
+            measure_cols.append(col)
+
+    if len(measure_cols) < 2:
+        return None
+
+    id_cols = [c for c in work.columns if c not in measure_cols]
+    # If no identifier column remains, do not unpivot (prevents malformed output).
+    if not id_cols:
+        return None
+
+    # Infer dimension name from common prefixes in measured columns.
+    prefix_counts = {}
+    split_map = {}
+    for c in measure_cols:
+        parts = re.split(r'[_\-:/]+', c, maxsplit=1)
+        if len(parts) == 2 and parts[0].strip() and parts[1].strip():
+            pref = parts[0].strip()
+            suffix = parts[1].strip()
+            split_map[c] = (pref, suffix)
+            pref_norm = _normalize_name(pref)
+            prefix_counts[pref_norm] = prefix_counts.get(pref_norm, 0) + 1
+
+    dim_name = 'Dimension'
+    selected_prefix_norm = None
+    if prefix_counts:
+        selected_prefix_norm = max(prefix_counts.items(), key=lambda kv: kv[1])[0]
+        if prefix_counts[selected_prefix_norm] >= 2:
+            # Keep original-case prefix from first matching column.
+            for c in measure_cols:
+                pref_suf = split_map.get(c)
+                if pref_suf and _normalize_name(pref_suf[0]) == selected_prefix_norm:
+                    dim_name = pref_suf[0]
+                    break
+
+    # If no explicit prefix was found, infer a semantic dimension name.
+    if dim_name == 'Dimension':
+        dim_name = _infer_dimension_name_from_modalities(measure_cols)
+
+    dim_name = re.sub(r'\s+', '_', str(dim_name).strip()) or 'Dimension'
+    if dim_name in id_cols:
+        dim_name = f'{dim_name}_dim'
+
+    records = []
+    for _, row in work.iterrows():
+        base = {col: row.get(col, '') for col in id_cols}
+        for mcol in measure_cols:
+            raw_val = row.get(mcol, '')
+            num = _parse_number(raw_val)
+            if num is None:
+                continue
+
+            if selected_prefix_norm and mcol in split_map and _normalize_name(split_map[mcol][0]) == selected_prefix_norm:
+                modality = split_map[mcol][1]
+            else:
+                modality = mcol
+
+            rec = dict(base)
+            rec[dim_name] = modality
+            rec['Valeur'] = int(num) if float(num).is_integer() else num
+            records.append(rec)
+
+    if not records:
+        return None
+
+    long_df = pd.DataFrame(records)
+    ordered_cols = [*id_cols, dim_name, 'Valeur']
+    ordered_cols = [c for c in ordered_cols if c in long_df.columns]
+    long_df = long_df[ordered_cols]
+    return long_df
+
+
+def _normalize_import_dataframe(excel_file, use_ai=True):
+    """Read one Excel file and normalize it to an analytical table."""
+    warnings = []
+    df = pd.read_excel(excel_file)
+    excel_file.seek(0)
+    df_raw = pd.read_excel(excel_file, header=None)
+
+    normalized_df = None
+    if _is_bad_header_shape(df.columns):
+        normalized_df = _normalize_cross_table_to_flat(df_raw)
+        if normalized_df is not None:
+            df = normalized_df
+            warnings.append('Normalisation croisee->plate appliquee')
+        else:
+            normalized_df = _normalize_merged_headers_to_wide(df_raw)
+            if normalized_df is not None:
+                df = normalized_df
+                warnings.append('Normalisation entetes fusionnes appliquee')
+
+    if use_ai:
+        long_df = _normalize_wide_metrics_to_long(df)
+        if long_df is not None:
+            df = long_df
+            warnings.append('Normalisation large->long appliquee (dimension + Valeur)')
+
+    df = df.fillna('')
+    df.columns = [str(c or '').strip() for c in df.columns]
+    return df, warnings
+
+
+def _safe_code_from_label(label, fallback_prefix='code'):
+    token = _normalize_semantic_token(label)
+    token = re.sub(r'[^a-z0-9]+', '_', token).strip('_')
+    return token or fallback_prefix
+
+
+def _pick_value_column(df):
+    """Select the metric/value column, preferring explicit names then numeric density."""
+    cols = [str(c) for c in df.columns]
+    if not cols:
+        return None
+
+    explicit = {'valeur', 'value', 'montant', 'effectif', 'nombre', 'taux'}
+    for c in cols:
+        if _normalize_column_name(c) in explicit:
+            return c
+
+    best_col = None
+    best_ratio = -1.0
+    for c in cols:
+        values = [_cell_to_text(v) for v in df[c].tolist() if _cell_to_text(v)]
+        if not values:
+            continue
+        numeric_count = sum(1 for v in values if _parse_number(v) is not None)
+        ratio = numeric_count / float(len(values))
+        if ratio > best_ratio:
+            best_ratio = ratio
+            best_col = c
+
+    return best_col
+
+
+def _build_bilingual_payload(df_fr, df_ar):
+    """
+    Build canonical bilingual dataset from two aligned FR/AR analytical tables.
+    Returns: payload, validation_report
+    """
+    cols_fr = [str(c) for c in df_fr.columns]
+    cols_ar = [str(c) for c in df_ar.columns]
+
+    report = {
+        'rows_fr': int(len(df_fr)),
+        'rows_ar': int(len(df_ar)),
+        'cols_fr': int(len(cols_fr)),
+        'cols_ar': int(len(cols_ar)),
+        'value_mismatches': 0,
+        'matched': False,
+        'errors': [],
+    }
+
+    if len(df_fr) == 0 or len(df_ar) == 0:
+        report['errors'].append('Un des deux fichiers est vide.')
+        return None, report
+
+    if len(df_fr) != len(df_ar):
+        report['errors'].append('Le nombre de lignes FR/AR est different.')
+        return None, report
+
+    if len(cols_fr) != len(cols_ar):
+        report['errors'].append('Le nombre de colonnes FR/AR est different.')
+        return None, report
+
+    value_col_fr = _pick_value_column(df_fr)
+    if not value_col_fr:
+        report['errors'].append('Impossible de detecter la colonne de valeur dans le fichier FR.')
+        return None, report
+
+    value_col_idx = cols_fr.index(value_col_fr)
+    value_col_ar = cols_ar[value_col_idx]
+
+    mismatches = []
+    for ridx in range(len(df_fr)):
+        fr_num = _parse_number(df_fr.iloc[ridx, value_col_idx])
+        ar_num = _parse_number(df_ar.iloc[ridx, value_col_idx])
+        if fr_num is None and ar_num is None:
+            continue
+        if fr_num is None or ar_num is None:
+            mismatches.append({'row': ridx + 1, 'fr': df_fr.iloc[ridx, value_col_idx], 'ar': df_ar.iloc[ridx, value_col_idx]})
+            continue
+        if abs(float(fr_num) - float(ar_num)) > 1e-9:
+            mismatches.append({'row': ridx + 1, 'fr': fr_num, 'ar': ar_num})
+
+    report['value_mismatches'] = len(mismatches)
+    if mismatches:
+        report['errors'].append('Les valeurs numeriques FR/AR ne correspondent pas.')
+        report['mismatch_samples'] = mismatches[:20]
+        return None, report
+
+    canonical_columns = []
+    column_labels = {}
+    used_cols = set()
+    for idx, fr_col in enumerate(cols_fr):
+        ar_col = cols_ar[idx]
+        base_code = _safe_code_from_label(fr_col, f'col_{idx + 1}')
+        code = base_code
+        suffix = 2
+        while code in used_cols:
+            code = f'{base_code}_{suffix}'
+            suffix += 1
+        used_cols.add(code)
+        canonical_columns.append(code)
+        column_labels[code] = {'fr': fr_col, 'ar': ar_col}
+
+    value_col_code = canonical_columns[value_col_idx]
+    value_labels = {}
+    rows = []
+
+    for ridx in range(len(df_fr)):
+        row_obj = {}
+        for cidx, col_code in enumerate(canonical_columns):
+            fr_val = df_fr.iloc[ridx, cidx]
+            ar_val = df_ar.iloc[ridx, cidx]
+
+            if cidx == value_col_idx:
+                parsed = _parse_number(fr_val)
+                row_obj[col_code] = parsed if parsed is not None else fr_val
+                continue
+
+            fr_txt = _cell_to_text(fr_val)
+            ar_txt = _cell_to_text(ar_val)
+            val_code_base = _safe_code_from_label(fr_txt, 'val')
+            existing = value_labels.setdefault(col_code, {})
+            val_code = val_code_base
+            suffix = 2
+            while val_code in existing and existing[val_code].get('fr') != fr_txt:
+                val_code = f'{val_code_base}_{suffix}'
+                suffix += 1
+
+            existing[val_code] = {
+                'fr': fr_txt,
+                'ar': ar_txt or fr_txt,
+            }
+            row_obj[col_code] = val_code
+
+        rows.append(row_obj)
+
+    report['matched'] = True
+
+    payload = {
+        'version': 1,
+        'canonical_columns': canonical_columns,
+        'value_column': value_col_code,
+        'column_labels': column_labels,
+        'value_labels': value_labels,
+        'rows': rows,
+        'source_columns': {'fr': cols_fr, 'ar': cols_ar},
+        'build_info': {
+            'row_count': len(rows),
+            'value_column_fr': value_col_fr,
+            'value_column_ar': value_col_ar,
+        },
+    }
+    return payload, report
+
+
+def _persist_monolingual_table(st, df):
+    st.data_json = df.to_dict(orient='records')
+    st.columns_order = [str(c) for c in df.columns]
+    st.data_json_i18n = {}
+    st.data_is_bilingual = False
+
+
+def _persist_bilingual_table(st, df_fr, payload, report):
+    st.data_json = df_fr.to_dict(orient='records')
+    st.columns_order = [str(c) for c in df_fr.columns]
+    st.data_json_i18n = {
+        **payload,
+        'validation_report': report,
+    }
+    st.data_is_bilingual = True
+
+
+def _merge_bilingual_payloads(existing_payload, incoming_payload):
+    if not existing_payload:
+        return incoming_payload
+
+    existing = json.loads(json.dumps(existing_payload))
+    if list(existing.get('canonical_columns') or []) != list(incoming_payload.get('canonical_columns') or []):
+        raise ValueError('Le schema bilingue existant est incompatible avec les nouvelles colonnes.')
+
+    for col_code in incoming_payload.get('canonical_columns') or []:
+        existing_labels = (existing.get('column_labels') or {}).get(col_code, {})
+        incoming_labels = (incoming_payload.get('column_labels') or {}).get(col_code, {})
+        if (existing_labels.get('fr') or '') != (incoming_labels.get('fr') or ''):
+            raise ValueError('Les labels FR du schema bilingue ne correspondent pas au tableau existant.')
+
+    existing_value_labels = existing.setdefault('value_labels', {})
+    for col_code, mapping in (incoming_payload.get('value_labels') or {}).items():
+        target = existing_value_labels.setdefault(col_code, {})
+        for value_code, labels in (mapping or {}).items():
+            target[value_code] = labels
+
+    existing_rows = list(existing.get('rows') or [])
+    existing_rows.extend(list(incoming_payload.get('rows') or []))
+    existing['rows'] = existing_rows
+
+    build_info = existing.setdefault('build_info', {})
+    build_info['row_count'] = len(existing_rows)
+    return existing
+
+
+def _maybe_build_bilingual_payload(df_fr, file_ar, use_ai=True):
+    if not file_ar:
+        return None, None, []
+
+    try:
+        file_ar.seek(0)
+    except Exception:
+        pass
+
+    df_ar, warnings_ar = _normalize_import_dataframe(file_ar, use_ai=use_ai)
+    payload, report = _build_bilingual_payload(df_fr, df_ar)
+    return payload, report, warnings_ar
+
+
 def _is_bad_header_shape(columns):
     # `columns` can be a pandas.Index; never use it in boolean context.
     if columns is None:
@@ -633,17 +1169,34 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         """Importe un fichier Excel et remplace les données du sous-thème."""
         st = self.get_object()
         excel_file = request.FILES.get('file')
+        arabic_file = request.FILES.get('file_ar')
         if not excel_file:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         try:
-            df = pd.read_excel(excel_file)
-            # Préserver l'ordre des colonnes du fichier original
-            columns_order = list(df.columns)
-            df = df.fillna("")
-            st.data_json = df.to_dict(orient='records')
-            st.columns_order = columns_order
+            if st.data_is_bilingual and not arabic_file:
+                return Response(
+                    {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            df, warnings = _normalize_import_dataframe(excel_file, use_ai=False)
+            payload, report, warnings_ar = _maybe_build_bilingual_payload(df, arabic_file, use_ai=False)
+
+            if arabic_file:
+                if payload is None:
+                    return Response(
+                        {'error': 'Validation bilingue echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar}},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                _persist_bilingual_table(st, df, payload, report)
+            else:
+                _persist_monolingual_table(st, df)
             st.save()
-            return Response({'message': 'Import réussi', 'data': st.data_json}, status=status.HTTP_200_OK)
+            response = {'message': 'Import réussi', 'data': st.data_json, 'warnings': warnings}
+            if arabic_file:
+                response['validation_report'] = report
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar}
+            return Response(response, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception('Erreur import excel')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
@@ -653,11 +1206,24 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         """Ajoute les lignes d'un fichier Excel aux données existantes sans écrasement, avec remappage IA/fallback."""
         st = self.get_object()
         excel_file = request.FILES.get('file')
+        arabic_file = request.FILES.get('file_ar')
         if not excel_file:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             use_ai = str(request.data.get('use_ai', 'false')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
             warnings = []
+
+            if st.data_is_bilingual and not arabic_file:
+                return Response(
+                    {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe est obligatoire pour tout ajout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if arabic_file and not st.data_is_bilingual and list(st.data_json or []):
+                return Response(
+                    {'error': 'Ajout bilingue sur un sous-theme monolingue non supporte. Faites d\'abord un remplacement bilingue complet.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
             df = pd.read_excel(excel_file)
             excel_file.seek(0)
             df_raw = pd.read_excel(excel_file, header=None)
@@ -668,6 +1234,18 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 if normalized_df is not None:
                     df = normalized_df
                     warnings.append('Normalisation croisee->plate appliquee')
+                else:
+                    normalized_df = _normalize_merged_headers_to_wide(df_raw)
+                    if normalized_df is not None:
+                        df = normalized_df
+                        warnings.append('Normalisation entetes fusionnes appliquee')
+
+            # Optional AI-like unpivot for wide metric columns -> long format.
+            if use_ai:
+                long_df = _normalize_wide_metrics_to_long(df)
+                if long_df is not None:
+                    df = long_df
+                    warnings.append('Normalisation large->long appliquee (dimension + Valeur)')
 
             df = df.fillna('')
             incoming_columns = [str(c) for c in df.columns]
@@ -717,9 +1295,29 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     f'Colonnes source differentes. Recouvrement schema: {round(overlap * 100)}%'
                 )
 
+            mapped_df = pd.DataFrame(mapped_rows, columns=final_columns)
             merged = existing_rows + mapped_rows
-            st.data_json = merged
-            st.columns_order = final_columns
+
+            if arabic_file:
+                payload, report, warnings_ar = _maybe_build_bilingual_payload(mapped_df, arabic_file, use_ai=use_ai)
+                if payload is None:
+                    return Response(
+                        {'error': 'Validation bilingue echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar}},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                merged_payload = _merge_bilingual_payloads(st.data_json_i18n or {}, payload)
+                st.data_json = merged
+                st.columns_order = final_columns
+                st.data_json_i18n = {
+                    **merged_payload,
+                    'validation_report': {'matched': True, 'rows_total': len(merged_payload.get('rows') or [])},
+                }
+                st.data_is_bilingual = True
+                warnings = {'fr': warnings, 'ar': warnings_ar}
+            else:
+                st.data_json = merged
+                st.columns_order = final_columns
             st.save()
 
             return Response(
@@ -740,98 +1338,144 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         """Import Excel with AI-assisted column mapping to current sous-theme schema."""
         st = self.get_object()
         excel_file = request.FILES.get('file')
+        arabic_file = request.FILES.get('file_ar')
         if not excel_file:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
-            warnings = []
+            if st.data_is_bilingual and not arabic_file:
+                return Response(
+                    {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
-            # Read twice: header inference + raw grid for merged-header normalization.
-            df = pd.read_excel(excel_file)
-            excel_file.seek(0)
-            df_raw = pd.read_excel(excel_file, header=None)
-
-            normalized_df = None
-            if _is_bad_header_shape(df.columns):
-                normalized_df = _normalize_cross_table_to_flat(df_raw)
-                if normalized_df is not None:
-                    df = normalized_df
-                    warnings.append('Normalisation croisee->plate appliquee')
-
-            df = df.fillna('')
+            df, warnings = _normalize_import_dataframe(excel_file, use_ai=True)
             incoming_columns = [str(c) for c in df.columns]
             free_schema = str(request.data.get('free_schema', 'true')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
 
             expected_columns = list(st.columns_order or st.columns or [])
-
-            # If previous schema is already polluted (Unnamed), replace by normalized columns.
-            if _is_bad_header_shape(expected_columns) and normalized_df is not None:
-                expected_columns = [str(c) for c in normalized_df.columns]
-                warnings.append('Schema cible corrige a partir de la table normalisee')
-
-            # Free-schema mode: always prefer incoming headers/data instead of old schema.
             overlap = _schema_overlap_ratio(expected_columns, incoming_columns)
             should_adopt_incoming = bool(free_schema and incoming_columns)
 
             if should_adopt_incoming:
                 mapped_rows = df.to_dict(orient='records')
                 expected_columns = incoming_columns
-                st.data_json = mapped_rows
-                st.columns_order = expected_columns
-                st.save()
+                mapped_df = df.copy()
                 warnings.append('Mode schema libre: colonnes du fichier adoptees')
                 if overlap > 0:
                     warnings.append(f'Recouvrement schema precedent: {round(overlap * 100)}%')
-                return Response(
-                    {
-                        'message': 'Import intelligent reussi',
-                        'data': mapped_rows,
-                        'columns_order': expected_columns,
-                        'warnings': warnings,
-                    },
-                    status=status.HTTP_200_OK,
-                )
-
-            # If schema is empty, keep classic behavior and adopt incoming columns
-            if not expected_columns:
-                expected_columns = [str(c) for c in df.columns]
-                mapped_rows = df.to_dict(orient='records')
             else:
-                try:
-                    mapped_rows = _run_gemini_mapping(df, expected_columns)
-                    warnings.append('Mapping IA applique')
-                except Exception as ai_err:
-                    logger.warning('Fallback mapping active: %s', ai_err)
-                    mapped_rows = _fallback_map_rows(df, expected_columns)
-                    warnings.append('Mapping IA indisponible: fallback heuristique utilise')
+                if not expected_columns:
+                    expected_columns = [str(c) for c in df.columns]
+                    mapped_rows = df.to_dict(orient='records')
+                    mapped_df = df.copy()
+                    warnings.append('Schema cible vide: import classique applique')
+                else:
+                    try:
+                        mapped_rows = _run_gemini_mapping(df, expected_columns)
+                        warnings.append('Mapping IA applique')
+                    except Exception as ai_err:
+                        logger.warning('Fallback mapping active: %s', ai_err)
+                        mapped_rows = _fallback_map_rows(df, expected_columns)
+                        warnings.append('Mapping IA indisponible: fallback heuristique utilise')
+                    mapped_df = pd.DataFrame(mapped_rows, columns=expected_columns)
 
+            if arabic_file:
+                payload, report, warnings_ar = _maybe_build_bilingual_payload(mapped_df, arabic_file, use_ai=True)
+                if payload is None:
+                    return Response(
+                        {
+                            'error': 'Validation bilingue echouee.',
+                            'validation_report': report,
+                            'warnings': {'fr': warnings, 'ar': warnings_ar},
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+                _persist_bilingual_table(st, mapped_df, payload, report)
+            else:
                 st.data_json = mapped_rows
                 st.columns_order = expected_columns
-                st.save()
+                st.data_json_i18n = {}
+                st.data_is_bilingual = False
+
+            st.save()
+            response = {
+                'message': 'Import intelligent reussi',
+                'data': mapped_rows,
+                'columns_order': expected_columns,
+                'warnings': warnings,
+            }
+            if arabic_file:
+                response['validation_report'] = report
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar}
+            return Response(response, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception('Erreur import intelligent')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='import-bilingual')
+    def import_table_bilingual(self, request, pk=None):
+        """
+        Import two aligned files (FR + AR), validate numeric coherence,
+        and store a durable bilingual canonical dataset.
+        """
+        st = self.get_object()
+        file_fr = request.FILES.get('file_fr')
+        file_ar = request.FILES.get('file_ar')
+
+        if not file_fr or not file_ar:
+            return Response(
+                {'error': 'Deux fichiers sont obligatoires: file_fr et file_ar.'},
+                status=status.HTTP_400_BAD_REQUEST,
+            )
+
+        try:
+            use_ai = str(request.data.get('use_ai', 'true')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
+
+            df_fr, warnings_fr = _normalize_import_dataframe(file_fr, use_ai=use_ai)
+            file_ar.seek(0)
+            df_ar, warnings_ar = _normalize_import_dataframe(file_ar, use_ai=use_ai)
+
+            payload, report = _build_bilingual_payload(df_fr, df_ar)
+            if payload is None:
                 return Response(
                     {
-                        'message': 'Import intelligent reussi',
-                        'data': mapped_rows,
-                        'columns_order': expected_columns,
-                        'warnings': warnings,
+                        'error': 'Validation bilingue echouee. Corrigez les ecarts FR/AR puis reimportez.',
+                        'validation_report': report,
+                        'warnings': {
+                            'fr': warnings_fr,
+                            'ar': warnings_ar,
+                        },
                     },
-                    status=status.HTTP_200_OK,
+                    status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            st.data_json = mapped_rows
-            st.columns_order = expected_columns
+            # Backward compatibility: keep FR table for existing screens.
+            st.data_json = df_fr.to_dict(orient='records')
+            st.columns_order = [str(c) for c in df_fr.columns]
+
+            # Durable bilingual analytical storage.
+            st.data_json_i18n = {
+                **payload,
+                'validation_report': report,
+            }
+            st.data_is_bilingual = True
             st.save()
+
             return Response(
                 {
-                    'message': 'Import intelligent reussi',
-                    'data': mapped_rows,
-                    'columns_order': expected_columns,
-                    'warnings': ['Schema cible vide: import classique applique'],
+                    'message': 'Import bilingue reussi (FR + AR) avec validation complete.',
+                    'columns_order': st.columns_order,
+                    'validation_report': report,
+                    'warnings': {
+                        'fr': warnings_fr,
+                        'ar': warnings_ar,
+                    },
                 },
                 status=status.HTTP_200_OK,
             )
         except Exception as e:
-            logger.exception('Erreur import intelligent')
+            logger.exception('Erreur import bilingue')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
 

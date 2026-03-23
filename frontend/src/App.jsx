@@ -6,16 +6,54 @@ import * as XLSX from 'xlsx-js-style';
 import LoginPage from './LoginPage';
 import AdministratorsPage from './AdministratorsPage';
 import ChartModal from './components/ChartModal';
+import { DATA_TRANSLATIONS_FR_AR } from './i18n';
 
 // --- COMPOSANTS DE STYLE ---
-const SidebarButton = ({ label, onClick, active, centered = false }) => (
+const SidebarIcon = ({ type }) => {
+  const iconProps = {
+    viewBox: '0 0 24 24',
+    className: 'h-4 w-4',
+    fill: 'none',
+    stroke: 'currentColor',
+    strokeWidth: '1.8',
+    strokeLinecap: 'round',
+    strokeLinejoin: 'round',
+    'aria-hidden': 'true',
+  };
+
+  switch (type) {
+    case 'themes':
+      return <svg {...iconProps}><path d="M4 7h16" /><path d="M7 4v16" /><path d="M11 11h9" /><path d="M11 16h9" /></svg>;
+    case 'indicators':
+      return <svg {...iconProps}><path d="M5 19V9" /><path d="M12 19V5" /><path d="M19 19v-7" /><path d="M3 19h18" /></svg>;
+    case 'about':
+      return <svg {...iconProps}><circle cx="12" cy="12" r="9" /><path d="M12 10v6" /><path d="M12 7h.01" /></svg>;
+    case 'contact':
+      return <svg {...iconProps}><path d="M4 6h16v12H4z" /><path d="m4 8 8 6 8-6" /></svg>;
+    case 'links':
+      return <svg {...iconProps}><path d="M10 13a5 5 0 0 0 7.07 0l2.12-2.12a5 5 0 1 0-7.07-7.07L10.7 5.2" /><path d="M14 11a5 5 0 0 0-7.07 0L4.8 13.12a5 5 0 1 0 7.07 7.07l1.41-1.41" /></svg>;
+    case 'admin':
+      return <svg {...iconProps}><path d="M12 3 4 7v5c0 5 3.4 7.8 8 9 4.6-1.2 8-4 8-9V7l-8-4Z" /><path d="M9.5 12 11 13.5 14.5 10" /></svg>;
+    case 'saisisseur':
+      return <svg {...iconProps}><path d="M14 4h6v6" /><path d="M10 20H4v-6" /><path d="M20 4 9 15" /><path d="M4 20 15 9" /></svg>;
+    default:
+      return <svg {...iconProps}><circle cx="12" cy="12" r="8" /></svg>;
+  }
+};
+
+const SidebarButton = ({ label, onClick, active, centered = false, iconType = 'default' }) => (
   <button 
     onClick={onClick}
     className={`w-full py-3 px-5 ${centered ? 'text-center' : 'text-left'} font-semibold border-b border-[var(--color-border)] transition-colors uppercase tracking-wide ${
       active ? 'bg-[#f1dec0] text-[var(--color-primary)] shadow-sm' : 'bg-[var(--color-surface)] text-[var(--color-primary)] hover:bg-[#f7e8cf]'
     }`}
   >
-    {label}
+    <span className={`flex items-center gap-2 ${centered ? 'justify-center' : 'justify-start'}`}>
+      <span className="shrink-0">
+        <SidebarIcon type={iconType} />
+      </span>
+      <span>{label}</span>
+    </span>
   </button>
 );
 
@@ -161,9 +199,11 @@ function App({ forceVisitor = false }) {
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
   const [editTableColumns, setEditTableColumns] = useState([]);
+  const [isReplacing, setIsReplacing] = useState(false);
   const [isSmartImporting, setIsSmartImporting] = useState(false);
   const [isAppending, setIsAppending] = useState(false);
   const [isAppendingAI, setIsAppendingAI] = useState(false);
+  const [importDialog, setImportDialog] = useState({ open: false, mode: null, file: null, fileAr: null });
   const [showAll, setShowAll] = useState(false);
   const [activeDataTab, setActiveDataTab] = useState('tableau');
   const [visitorTableView, setVisitorTableView] = useState('horizontal');
@@ -260,6 +300,53 @@ function App({ forceVisitor = false }) {
   const isInfoMenu = ['Contact', 'APropos', 'LiensUtiles'].includes(activeMenu);
   const isArabicVisitor = isVisitor && i18n.language === 'ar';
   const localeCode = isArabicVisitor ? 'ar-MA' : 'fr-FR';
+
+  const bilingualLabelLookup = React.useMemo(() => {
+    const frToAr = {};
+    const arToFr = {};
+    try {
+      const raw = selectedSubTheme?.data_json_i18n;
+      if (!raw) return { frToAr, arToFr };
+      const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
+      if (!payload || typeof payload !== 'object') return { frToAr, arToFr };
+
+      const colLabels = payload.column_labels || {};
+      Object.values(colLabels).forEach((labels) => {
+        const fr = String(labels?.fr || '').trim();
+        const ar = String(labels?.ar || '').trim();
+        if (fr && ar) {
+          frToAr[fr] = ar;
+          arToFr[ar] = fr;
+        }
+      });
+
+      const valueLabels = payload.value_labels || {};
+      Object.values(valueLabels).forEach((mapping) => {
+        if (!mapping || typeof mapping !== 'object') return;
+        Object.values(mapping).forEach((labels) => {
+          const fr = String(labels?.fr || '').trim();
+          const ar = String(labels?.ar || '').trim();
+          if (fr && ar) {
+            frToAr[fr] = ar;
+            arToFr[ar] = fr;
+          }
+        });
+      });
+    } catch (e) {
+      // Ignore malformed payload and keep static dictionary fallback.
+    }
+    return { frToAr, arToFr };
+  }, [selectedSubTheme?.id, selectedSubTheme?.data_json_i18n]);
+
+  // Translate a data value (column name or cell value) from French → Arabic.
+  // Safe to call on any value: numbers and '—' are returned unchanged.
+  const translateDataValue = (val) => {
+    if (!isArabicVisitor) return (val === null || val === undefined) ? '' : String(val);
+    if (val === null || val === undefined || val === '—') return val;
+    const s = String(val);
+    if (bilingualLabelLookup.frToAr[s] !== undefined) return bilingualLabelLookup.frToAr[s];
+    return DATA_TRANSLATIONS_FR_AR[s] !== undefined ? DATA_TRANSLATIONS_FR_AR[s] : s;
+  };
 
   const parseAssignmentNotes = (rawNotes) => {
     try {
@@ -1970,377 +2057,252 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const handleImportFileChange = async (e) => {
-    const file = e.target.files[0];
+  const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+
+  const readExcelRows = async (excelFile) => {
+    const buffer = await excelFile.arrayBuffer();
+    const wb = XLSX.read(buffer, { type: 'array' });
+    const sheetName = wb.SheetNames?.[0];
+    if (!sheetName) return { columns: [], rows: [] };
+    const ws = wb.Sheets[sheetName];
+    const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
+    const columns = rows.length > 0
+      ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
+      : [];
+    const normalizedRows = (rows || []).map((row) =>
+      Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
+    );
+    return { columns, rows: normalizedRows };
+  };
+
+  const formatWarningsForAlert = (warnings) => {
+    if (!warnings) return '';
+    if (Array.isArray(warnings)) return warnings.filter(Boolean).join(' | ');
+    if (typeof warnings === 'object') {
+      const fr = Array.isArray(warnings.fr) ? warnings.fr.join(' | ') : '';
+      const ar = Array.isArray(warnings.ar) ? warnings.ar.join(' | ') : '';
+      return [fr ? `FR: ${fr}` : '', ar ? `AR: ${ar}` : ''].filter(Boolean).join(' || ');
+    }
+    return String(warnings);
+  };
+
+  const refreshEditedSubTheme = async () => {
+    const themesRes = await axios.get(themesApiBase);
+    setThemes(themesRes.data);
+    const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
+    if (freshTheme) setSelectedTheme(freshTheme);
+    const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
+      || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
+    if (freshSub) {
+      selectSubTheme(freshSub);
+      if (showEditTable) {
+        const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
+        const refreshedCols = (freshSub.columns || []).length > 0
+          ? [...(freshSub.columns || [])]
+          : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
+        setEditTableColumns(refreshedCols);
+        setEditTableRows(
+          refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
+        );
+      }
+    }
+  };
+
+  const executeClassicImport = async (file, fileAr = null) => {
     if (!file) return;
-    if (!confirm('Remplacer le tableau existant par ce fichier ?')) { if (e.target) e.target.value = null; return; }
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('free_schema', 'true');
+    if (isSaisisseur) {
+      const imported = await readExcelRows(file);
+      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
+      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
+      setEditTableColumns(imported.columns);
+      setEditTableRows(imported.rows);
+      alert('Import effectue en brouillon (saisisseur).');
+      return;
+    }
 
-    const readExcelRows = async (excelFile) => {
-      const buffer = await excelFile.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array' });
-      const sheetName = wb.SheetNames?.[0];
-      if (!sheetName) return { columns: [], rows: [] };
-      const ws = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
-      const columns = rows.length > 0
-        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
-        : [];
-
-      const normalizedRows = (rows || []).map((row) =>
-        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
-      );
-      return { columns, rows: normalizedRows };
-    };
-
+    setIsReplacing(true);
     try {
-      if (isSaisisseur) {
-        const imported = await readExcelRows(file);
-        if (!imported.columns.length) {
-          alert('Le fichier importé est vide ou sans colonnes exploitables.');
-          if (e.target) e.target.value = null;
-          return;
-        }
+      const fd = new FormData();
+      fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
+      fd.append('free_schema', 'true');
+      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd);
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      alert(warningText ? `Import reussi\n${warningText}` : 'Import reussi');
+      await refreshEditedSubTheme();
+    } finally {
+      setIsReplacing(false);
+    }
+  };
 
-        await saveDraftAssignmentForSaisisseur({
-          tables: imported.rows,
-          columns_order: imported.columns,
-        }, 'En cours');
+  const executeSmartImport = async (file, fileAr = null) => {
+    if (!file) return;
+    if (isSaisisseur) {
+      const imported = await readExcelRows(file);
+      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
+      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
 
+      const targetColumns = (editTableColumns && editTableColumns.length > 0)
+        ? editTableColumns
+        : (selectedSubTheme?.columns || (getTableRows(selectedSubTheme)?.[0] ? Object.keys(getTableRows(selectedSubTheme)[0]) : []));
+
+      if (!targetColumns || targetColumns.length === 0) {
+        await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
         setEditTableColumns(imported.columns);
         setEditTableRows(imported.rows);
-        alert('Import effectué en brouillon (saisisseur).');
-        if (e.target) e.target.value = null;
+        alert('Import brouillon effectue. Aucune structure cible trouvee, colonnes source conservees.');
         return;
       }
 
-      // Let the browser set the multipart boundary header automatically
-      await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd);
-      alert('Import réussi');
-      // refresh
-      const themesRes = await axios.get(themesApiBase);
-      setThemes(themesRes.data);
-      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
-      if (freshTheme) setSelectedTheme(freshTheme);
-      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id);
-      if (freshSub) {
-        selectSubTheme(freshSub);
-        if (showEditTable) {
-          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
-          const refreshedCols = (freshSub.columns || []).length > 0
-            ? [...(freshSub.columns || [])]
-            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
-          setEditTableColumns(refreshedCols);
-          setEditTableRows(
-            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
-          );
-        }
-      }
-    } catch (err) { console.error(err.response?.data || err); alert('Erreur lors de l\'import: ' + (err.response?.data?.error || err.message)); }
-    if (e.target) e.target.value = null;
-  };
-
-  const handleSmartImportFileChange = async (e) => {
-    const file = e.target.files[0];
-    if (!file) return;
-    if (!confirm('Importer avec IA et remapper vers la structure actuelle du tableau ?')) { if (e.target) e.target.value = null; return; }
-    const fd = new FormData();
-    fd.append('file', file);
-    fd.append('free_schema', 'true');
-
-    const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-    const readExcelRows = async (excelFile) => {
-      const buffer = await excelFile.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array' });
-      const sheetName = wb.SheetNames?.[0];
-      if (!sheetName) return { columns: [], rows: [] };
-      const ws = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
-      const columns = rows.length > 0
-        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
-        : [];
-      const normalizedRows = (rows || []).map((row) =>
-        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
-      );
-      return { columns, rows: normalizedRows };
-    };
-
-    try {
-      if (isSaisisseur) {
-        const imported = await readExcelRows(file);
-        if (!imported.columns.length) {
-          alert('Le fichier importé est vide ou sans colonnes exploitables.');
-          if (e.target) e.target.value = null;
-          return;
-        }
-
-        const targetColumns = (editTableColumns && editTableColumns.length > 0)
-          ? editTableColumns
-          : (selectedSubTheme?.columns || (getTableRows(selectedSubTheme)?.[0] ? Object.keys(getTableRows(selectedSubTheme)[0]) : []));
-
-        if (!targetColumns || targetColumns.length === 0) {
-          await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
-          setEditTableColumns(imported.columns);
-          setEditTableRows(imported.rows);
-          alert('Import brouillon effectué. Aucune structure cible trouvée, colonnes source conservées.');
-          if (e.target) e.target.value = null;
-          return;
-        }
-
-        const sourceByNorm = new Map(imported.columns.map((c) => [normalizeCol(c), c]));
-        const mappedRows = imported.rows.map((r) => {
-          const out = {};
-          targetColumns.forEach((tc) => {
-            const src = sourceByNorm.get(normalizeCol(tc));
-            out[tc] = src ? (r?.[src] ?? '') : '';
-          });
-          return out;
+      const sourceByNorm = new Map(imported.columns.map((c) => [normalizeCol(c), c]));
+      const mappedRows = imported.rows.map((r) => {
+        const out = {};
+        targetColumns.forEach((tc) => {
+          const src = sourceByNorm.get(normalizeCol(tc));
+          out[tc] = src ? (r?.[src] ?? '') : '';
         });
+        return out;
+      });
+      await saveDraftAssignmentForSaisisseur({ tables: mappedRows, columns_order: targetColumns }, 'En cours');
+      setEditTableColumns(targetColumns);
+      setEditTableRows(mappedRows);
+      alert('Import IA brouillon effectue (remappage local vers la structure cible).');
+      return;
+    }
 
-        await saveDraftAssignmentForSaisisseur({
-          tables: mappedRows,
-          columns_order: targetColumns,
-        }, 'En cours');
-
-        setEditTableColumns(targetColumns);
-        setEditTableRows(mappedRows);
-        alert('Import "IA" brouillon effectué (remappage local vers la structure cible).');
-        if (e.target) e.target.value = null;
-        return;
-      }
-
-      setIsSmartImporting(true);
+    setIsSmartImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
+      fd.append('free_schema', 'true');
       const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import-smart/`, fd);
-      const warnings = result?.data?.warnings || [];
-      if (warnings.length > 0) {
-        alert(`Import IA termine: ${warnings.join(' | ')}`);
-      } else {
-        alert('Import IA reussi');
-      }
-
-      // refresh
-      const themesRes = await axios.get(themesApiBase);
-      setThemes(themesRes.data);
-      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
-      if (freshTheme) setSelectedTheme(freshTheme);
-      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
-        || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
-      if (freshSub) {
-        selectSubTheme(freshSub);
-        if (showEditTable) {
-          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
-          const refreshedCols = (freshSub.columns || []).length > 0
-            ? [...(freshSub.columns || [])]
-            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
-          setEditTableColumns(refreshedCols);
-          setEditTableRows(
-            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
-          );
-        }
-      }
-    } catch (err) {
-      console.error(err.response?.data || err);
-      alert('Erreur lors de l\'import IA: ' + (err.response?.data?.error || err.message));
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      alert(warningText ? `Import IA reussi\n${warningText}` : 'Import IA reussi');
+      await refreshEditedSubTheme();
     } finally {
       setIsSmartImporting(false);
-      if (e.target) e.target.value = null;
     }
   };
 
-  const handleAppendFileChange = async (e) => {
-    const file = e.target.files[0];
+  const executeClassicAppend = async (file, fileAr = null) => {
     if (!file) return;
-    if (!confirm('Ajouter les lignes de ce fichier au tableau existant (sans effacer les données actuelles) ?')) { if (e.target) e.target.value = null; return; }
-
-    const readExcelRows = async (excelFile) => {
-      const buffer = await excelFile.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array' });
-      const sheetName = wb.SheetNames?.[0];
-      if (!sheetName) return { columns: [], rows: [] };
-      const ws = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
-      const columns = rows.length > 0
-        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
-        : [];
-      const normalizedRows = (rows || []).map((row) =>
-        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
-      );
-      return { columns, rows: normalizedRows };
-    };
-
-    try {
-      if (isSaisisseur) {
-        const imported = await readExcelRows(file);
-        if (!imported.columns.length) {
-          alert('Le fichier importé est vide ou sans colonnes exploitables.');
-          if (e.target) e.target.value = null;
-          return;
-        }
-        const existingRows = editTableRows || [];
-        const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
-
-        if (existingColumns.length > 0) {
-          const expectedSet = new Set(existingColumns.map((c) => String(c || '').trim()));
-          const incomingSet = new Set((imported.columns || []).map((c) => String(c || '').trim()));
-          const sameColumns = expectedSet.size === incomingSet.size && [...expectedSet].every((c) => incomingSet.has(c));
-          if (!sameColumns) {
-            alert('Ajout classique refusé: colonnes incompatibles. Utilisez "Ajouter avec IA" ou alignez les colonnes du fichier.');
-            if (e.target) e.target.value = null;
-            return;
-          }
-        }
-
-        const normalizedRows = imported.rows.map((row) =>
-          Object.fromEntries(existingColumns.map((col) => [col, row?.[col] ?? '']))
-        );
-        const mergedRows = [...existingRows, ...normalizedRows];
-        await saveDraftAssignmentForSaisisseur(
-          { tables: mergedRows, columns_order: existingColumns },
-          'En cours'
-        );
-        setEditTableColumns(existingColumns);
-        setEditTableRows(mergedRows);
-        alert(`${normalizedRows.length} ligne(s) ajoutée(s) au brouillon.`);
-        if (e.target) e.target.value = null;
-        return;
+    if (isSaisisseur) {
+      const imported = await readExcelRows(file);
+      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
+      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      const existingRows = editTableRows || [];
+      const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
+      if (existingColumns.length > 0) {
+        const expectedSet = new Set(existingColumns.map((c) => String(c || '').trim()));
+        const incomingSet = new Set((imported.columns || []).map((c) => String(c || '').trim()));
+        const sameColumns = expectedSet.size === incomingSet.size && [...expectedSet].every((c) => incomingSet.has(c));
+        if (!sameColumns) throw new Error('Ajout classique refuse: colonnes incompatibles. Utilisez Ajouter avec IA ou alignez les colonnes du fichier.');
       }
+      const normalizedRows = imported.rows.map((row) => Object.fromEntries(existingColumns.map((col) => [col, row?.[col] ?? ''])));
+      const mergedRows = [...existingRows, ...normalizedRows];
+      await saveDraftAssignmentForSaisisseur({ tables: mergedRows, columns_order: existingColumns }, 'En cours');
+      setEditTableColumns(existingColumns);
+      setEditTableRows(mergedRows);
+      alert(`${normalizedRows.length} ligne(s) ajoutee(s) au brouillon.`);
+      return;
+    }
 
-      setIsAppending(true);
+    setIsAppending(true);
+    try {
       const fd = new FormData();
       fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
       fd.append('use_ai', 'false');
-      const result = await axios.post(
-        `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`,
-        fd
-      );
-      const warnings = result?.data?.warnings || [];
-      const msg = result?.data?.message || 'Lignes ajoutées avec succès';
-      alert(warnings.length > 0 ? `${msg}\n⚠ ${warnings.join(' | ')}` : msg);
-
-      // refresh
-      const themesRes = await axios.get(themesApiBase);
-      setThemes(themesRes.data);
-      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
-      if (freshTheme) setSelectedTheme(freshTheme);
-      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
-        || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
-      if (freshSub) {
-        selectSubTheme(freshSub);
-        if (showEditTable) {
-          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
-          const refreshedCols = (freshSub.columns || []).length > 0
-            ? [...(freshSub.columns || [])]
-            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
-          setEditTableColumns(refreshedCols);
-          setEditTableRows(
-            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
-          );
-        }
-      }
-    } catch (err) {
-      console.error(err.response?.data || err);
-      alert('Erreur lors de l\'ajout : ' + (err.response?.data?.error || err.message));
+      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`, fd);
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      const msg = result?.data?.message || 'Lignes ajoutees avec succes';
+      alert(warningText ? `${msg}\n${warningText}` : msg);
+      await refreshEditedSubTheme();
     } finally {
       setIsAppending(false);
-      if (e.target) e.target.value = null;
     }
   };
 
-  const handleAppendAIFileChange = async (e) => {
-    const file = e.target.files[0];
+  const executeSmartAppend = async (file, fileAr = null) => {
     if (!file) return;
-    if (!confirm('Ajouter avec IA: remapper les colonnes du fichier vers la structure actuelle avant ajout ?')) { if (e.target) e.target.value = null; return; }
-    const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
-
-    const readExcelRows = async (excelFile) => {
-      const buffer = await excelFile.arrayBuffer();
-      const wb = XLSX.read(buffer, { type: 'array' });
-      const sheetName = wb.SheetNames?.[0];
-      if (!sheetName) return { columns: [], rows: [] };
-      const ws = wb.Sheets[sheetName];
-      const rows = XLSX.utils.sheet_to_json(ws, { defval: '', raw: false });
-      const columns = rows.length > 0
-        ? Object.keys(rows[0]).map((c) => String(c || '').trim()).filter(Boolean)
-        : [];
-      const normalizedRows = (rows || []).map((row) =>
-        Object.fromEntries(columns.map((col) => [col, row?.[col] ?? '']))
-      );
-      return { columns, rows: normalizedRows };
-    };
-
-    try {
-      if (isSaisisseur) {
-        const imported = await readExcelRows(file);
-        if (!imported.columns.length) {
-          alert('Le fichier importé est vide ou sans colonnes exploitables.');
-          if (e.target) e.target.value = null;
-          return;
-        }
-
-        const existingRows = editTableRows || [];
-        const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
-        const sourceByNorm = new Map((imported.columns || []).map((c) => [normalizeCol(c), c]));
-        const mappedRows = imported.rows.map((row) => {
-          const out = {};
-          existingColumns.forEach((targetCol) => {
-            const src = sourceByNorm.get(normalizeCol(targetCol));
-            out[targetCol] = src ? (row?.[src] ?? '') : '';
-          });
-          return out;
+    if (isSaisisseur) {
+      const imported = await readExcelRows(file);
+      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
+      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      const existingRows = editTableRows || [];
+      const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
+      const sourceByNorm = new Map((imported.columns || []).map((c) => [normalizeCol(c), c]));
+      const mappedRows = imported.rows.map((row) => {
+        const out = {};
+        existingColumns.forEach((targetCol) => {
+          const src = sourceByNorm.get(normalizeCol(targetCol));
+          out[targetCol] = src ? (row?.[src] ?? '') : '';
         });
-        const mergedRows = [...existingRows, ...mappedRows];
+        return out;
+      });
+      const mergedRows = [...existingRows, ...mappedRows];
+      await saveDraftAssignmentForSaisisseur({ tables: mergedRows, columns_order: existingColumns }, 'En cours');
+      setEditTableColumns(existingColumns);
+      setEditTableRows(mergedRows);
+      alert(`${mappedRows.length} ligne(s) ajoutee(s) au brouillon (remappage IA local).`);
+      return;
+    }
 
-        await saveDraftAssignmentForSaisisseur(
-          { tables: mergedRows, columns_order: existingColumns },
-          'En cours'
-        );
-        setEditTableColumns(existingColumns);
-        setEditTableRows(mergedRows);
-        alert(`${mappedRows.length} ligne(s) ajoutée(s) au brouillon (remappage IA local).`);
-        if (e.target) e.target.value = null;
-        return;
-      }
-
-      setIsAppendingAI(true);
+    setIsAppendingAI(true);
+    try {
       const fd = new FormData();
       fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
       fd.append('use_ai', 'true');
-
-      const result = await axios.post(
-        `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`,
-        fd
-      );
-      const warnings = result?.data?.warnings || [];
-      const msg = result?.data?.message || 'Lignes ajoutées avec IA';
-      alert(warnings.length > 0 ? `${msg}\n⚠ ${warnings.join(' | ')}` : msg);
-
-      const themesRes = await axios.get(themesApiBase);
-      setThemes(themesRes.data);
-      const freshTheme = themesRes.data.find(t => t.id === selectedTheme?.id);
-      if (freshTheme) setSelectedTheme(freshTheme);
-      const freshSub = freshTheme?.sous_themes?.find(st => st.id === selectedSubTheme.id)
-        || (freshTheme?.categories || []).flatMap(cat => cat.sous_themes || []).find(st => st.id === selectedSubTheme.id);
-      if (freshSub) {
-        selectSubTheme(freshSub);
-        if (showEditTable) {
-          const refreshedRows = JSON.parse(JSON.stringify(getTableRows(freshSub) || []));
-          const refreshedCols = (freshSub.columns || []).length > 0
-            ? [...(freshSub.columns || [])]
-            : (refreshedRows[0] ? Object.keys(refreshedRows[0]) : []);
-          setEditTableColumns(refreshedCols);
-          setEditTableRows(
-            refreshedRows.map((row) => Object.fromEntries(refreshedCols.map((col) => [col, row?.[col] ?? ''])))
-          );
-        }
-      }
-    } catch (err) {
-      console.error(err.response?.data || err);
-      alert('Erreur lors de l\'ajout avec IA : ' + (err.response?.data?.error || err.message));
+      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`, fd);
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      const msg = result?.data?.message || 'Lignes ajoutees avec IA';
+      alert(warningText ? `${msg}\n${warningText}` : msg);
+      await refreshEditedSubTheme();
     } finally {
       setIsAppendingAI(false);
-      if (e.target) e.target.value = null;
+    }
+  };
+
+  const getImportModeMeta = (mode) => {
+    if (mode === 'replace') return { title: 'Remplacer par un fichier', description: 'Import classique d\'un tableau analytique. Le fichier arabe est optionnel si le sous-theme n\'est pas encore bilingue.' };
+    if (mode === 'smart-replace') return { title: 'Importer avec IA', description: 'Import de fichier complexe avec normalisation IA. Le fichier arabe optionnel sera verifie apres normalisation.' };
+    if (mode === 'append') return { title: 'Ajouter au tableau', description: 'Ajout strict de nouvelles lignes. Si le sous-theme est bilingue, le fichier arabe devient obligatoire.' };
+    return { title: 'Ajouter avec IA', description: 'Ajout avec remappage IA. Si le sous-theme est bilingue, le fichier arabe devient obligatoire.' };
+  };
+
+  const openImportDialog = (mode) => setImportDialog({ open: true, mode, file: null, fileAr: null });
+  const closeImportDialog = () => setImportDialog({ open: false, mode: null, file: null, fileAr: null });
+  const isCurrentImportBusy = isReplacing || isSmartImporting || isAppending || isAppendingAI;
+
+  const handleConfirmImportDialog = async () => {
+    const { mode, file, fileAr } = importDialog;
+    if (!file) {
+      alert('Le fichier principal est obligatoire.');
+      return;
+    }
+
+    try {
+      if (mode === 'replace') {
+        await executeClassicImport(file, fileAr || null);
+      } else if (mode === 'smart-replace') {
+        await executeSmartImport(file, fileAr || null);
+      } else if (mode === 'append') {
+        await executeClassicAppend(file, fileAr || null);
+      } else if (mode === 'append-smart') {
+        await executeSmartAppend(file, fileAr || null);
+      }
+      closeImportDialog();
+    } catch (err) {
+      console.error(err.response?.data || err);
+      const report = err.response?.data?.validation_report;
+      if (report?.errors?.length) {
+        alert(`Validation bilingue refusee:\n- ${report.errors.join('\n- ')}`);
+      } else {
+        alert(err.response?.data?.error || err.message || 'Erreur lors de l\'import.');
+      }
     }
   };
 
@@ -2734,11 +2696,11 @@ function App({ forceVisitor = false }) {
     if (!items || items.length === 0) return null;
     return (
       <div className="bg-white p-2 border border-gray-300 rounded shadow-lg">
-        <div className="font-bold mb-1">{label}</div>
+        <div className="font-bold mb-1">{translateDataValue(label)}</div>
         {items.map((p, i) => (
           <div key={i} className="flex items-center gap-2 text-sm">
             <div style={{ width: 10, height: 10, background: p.color || p.fill || '#000' }} />
-            <div className="font-semibold">{p.name}</div>
+            <div className="font-semibold">{translateDataValue(p.name)}</div>
             <div className="ml-2">: {p.value}</div>
           </div>
         ))}
@@ -3735,20 +3697,72 @@ function App({ forceVisitor = false }) {
           <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
         <div className="bg-[#f9fafb] text-[var(--color-text-main)] py-2 px-4 font-semibold text-center border-b border-[var(--color-border)]">{t('menu')}</div>
-        <SidebarButton label={t('nav_themes')} centered={isVisitor} active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
-        <SidebarButton label={t('nav_indicators')} centered={isVisitor} active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
-        <SidebarButton label={t('nav_about')} centered={isVisitor} active={activeMenu === 'APropos'} onClick={() => { setActiveMenu('APropos'); setFormStep(0); }} />
-        <SidebarButton label={t('nav_contact')} centered={isVisitor} active={activeMenu === 'Contact'} onClick={() => { setActiveMenu('Contact'); setFormStep(0); }} />
-        <SidebarButton label={t('nav_links')} centered={isVisitor} active={activeMenu === 'LiensUtiles'} onClick={() => { setActiveMenu('LiensUtiles'); setFormStep(0); }} />
-        {canEdit && (
-          <>
+        <div>
+          <SidebarButton label={t('nav_themes')} iconType="themes" centered={isVisitor} active={activeMenu === 'Themes'} onClick={() => {setActiveMenu('Themes'); setFormStep(0);}} />
+          <SidebarButton label={t('nav_indicators')} iconType="indicators" centered={isVisitor} active={activeMenu === 'Indicateurs'} onClick={() => setActiveMenu('Indicateurs')} />
+          <SidebarButton label={t('nav_about')} iconType="about" centered={isVisitor} active={activeMenu === 'APropos'} onClick={() => { setActiveMenu('APropos'); setFormStep(0); }} />
+          <SidebarButton label={t('nav_contact')} iconType="contact" centered={isVisitor} active={activeMenu === 'Contact'} onClick={() => { setActiveMenu('Contact'); setFormStep(0); }} />
+          <SidebarButton label={t('nav_links')} iconType="links" centered={isVisitor} active={activeMenu === 'LiensUtiles'} onClick={() => { setActiveMenu('LiensUtiles'); setFormStep(0); }} />
+          {canEdit && (
             <SidebarButton
               label={isSaisisseur ? t('nav_saisisseur') : t('nav_admin')}
+              iconType={isSaisisseur ? 'saisisseur' : 'admin'}
               centered={isVisitor}
               active={activeMenu === (isSaisisseur ? 'Saisisseur' : 'Admin')}
               onClick={() => { setActiveMenu(isSaisisseur ? 'Saisisseur' : 'Admin'); setFormStep(0); setSelectedTheme(null); setSelectedSubTheme(null); }}
             />
-          </>
+          )}
+        </div>
+        {canEdit && (
+          <div className="mt-auto p-3 border-t border-[var(--color-border)] bg-[linear-gradient(180deg,#f8efdf_0%,#f4e4c7_100%)] space-y-2">
+            <button
+              onClick={() => {
+                const auth = resolveCurrentAuthStorage();
+                setSettingsForm({ email: auth.email || '', newPassword: '', confirmPassword: '' });
+                setShowSettings(true);
+              }}
+              className="group w-full flex items-center gap-3 rounded-2xl border border-[#d6b58b] bg-[linear-gradient(135deg,#fffdf8_0%,#f8ecda_100%)] px-4 py-3 text-left text-[#6E001F] font-semibold shadow-[0_8px_20px_rgba(122,10,74,0.08)] transition-all hover:-translate-y-[1px] hover:border-[#B03372] hover:shadow-[0_14px_24px_rgba(122,10,74,0.16)]"
+            >
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#e4bfd0] bg-[linear-gradient(135deg,#f9e3ee_0%,#f2cadc_100%)] text-[#7A0A4A] shrink-0 transition-transform group-hover:scale-105">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <circle cx="12" cy="12" r="3.2" />
+                  <path d="M19.4 15a1 1 0 0 0 .2 1.1l.1.1a1.9 1.9 0 0 1 0 2.7 1.9 1.9 0 0 1-2.7 0l-.1-.1a1 1 0 0 0-1.1-.2 1 1 0 0 0-.6.9V20a2 2 0 0 1-4 0v-.2a1 1 0 0 0-.7-.9 1 1 0 0 0-1.1.2l-.1.1a1.9 1.9 0 0 1-2.7 0 1.9 1.9 0 0 1 0-2.7l.1-.1a1 1 0 0 0 .2-1.1 1 1 0 0 0-.9-.6H4a2 2 0 0 1 0-4h.2a1 1 0 0 0 .9-.7 1 1 0 0 0-.2-1.1l-.1-.1a1.9 1.9 0 0 1 0-2.7 1.9 1.9 0 0 1 2.7 0l.1.1a1 1 0 0 0 1.1.2H9a1 1 0 0 0 .6-.9V4a2 2 0 0 1 4 0v.2a1 1 0 0 0 .7.9 1 1 0 0 0 1.1-.2l.1-.1a1.9 1.9 0 0 1 2.7 0 1.9 1.9 0 0 1 0 2.7l-.1.1a1 1 0 0 0-.2 1.1V9c0 .4.2.8.6.9H20a2 2 0 0 1 0 4h-.2a1 1 0 0 0-.9.7Z" />
+                </svg>
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm uppercase tracking-wide">{t('settings')}</span>
+                <span className="block text-xs text-[#8A5A72] normal-case">Compte et securite</span>
+              </span>
+              <span className="text-[#9c4d78] transition-transform group-hover:translate-x-0.5">
+                <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 10h12" />
+                  <path d="m11 5 5 5-5 5" />
+                </svg>
+              </span>
+            </button>
+            <button
+              onClick={handleLogout}
+              className="group w-full flex items-center gap-3 rounded-2xl border border-[#d9b2b6] bg-[linear-gradient(135deg,#fff8f8_0%,#f9e4e6_100%)] px-4 py-3 text-left text-[#7A0A4A] font-semibold shadow-[0_8px_20px_rgba(122,10,74,0.08)] transition-all hover:-translate-y-[1px] hover:border-[#B03372] hover:shadow-[0_14px_24px_rgba(122,10,74,0.16)]"
+            >
+              <span className="flex h-10 w-10 items-center justify-center rounded-xl border border-[#e7c7cf] bg-[linear-gradient(135deg,#fbe6ea_0%,#f4cfd8_100%)] text-[#7A0A4A] shrink-0 transition-transform group-hover:scale-105">
+                <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4" />
+                  <path d="M16 17l5-5-5-5" />
+                  <path d="M21 12H9" />
+                </svg>
+              </span>
+              <span className="flex-1 min-w-0">
+                <span className="block text-sm uppercase tracking-wide">{t('logout')}</span>
+                <span className="block text-xs text-[#8A5A72] normal-case">Fermer la session</span>
+              </span>
+              <span className="text-[#9c4d78] transition-transform group-hover:translate-x-0.5">
+                <svg viewBox="0 0 20 20" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                  <path d="M4 10h12" />
+                  <path d="m11 5 5 5-5 5" />
+                </svg>
+              </span>
+            </button>
+          </div>
         )}
       </div>
 
@@ -3814,26 +3828,6 @@ function App({ forceVisitor = false }) {
               <div className="relative shrink-0">
                 <LangSelector t={t} i18n={i18n} />
               </div>
-            </div>
-          )}
-          {canEdit && (
-            <div className="flex items-center gap-2 shrink-0">
-              <button
-                onClick={() => {
-                  const auth = resolveCurrentAuthStorage();
-                  setSettingsForm({ email: auth.email || '', newPassword: '', confirmPassword: '' });
-                  setShowSettings(true);
-                }}
-                className="bg-[var(--color-primary)] hover:bg-[var(--color-primary-hover)] text-white font-semibold py-2 px-3 rounded-xl border border-[#b84c83]"
-              >
-                {t('settings')}
-              </button>
-              <button
-                onClick={handleLogout}
-                className="bg-[var(--color-primary-hover)] hover:bg-[#4A062E] text-white font-semibold py-2 px-3 rounded-xl border border-[#7A0A4A]"
-              >
-                {t('logout')}
-              </button>
             </div>
           )}
         </div>
@@ -4277,12 +4271,29 @@ function App({ forceVisitor = false }) {
                           onClick={(e) => { 
                             e.stopPropagation();
                             const rect = e.currentTarget.getBoundingClientRect();
-                            const menuHeight = 200;
+                            const menuHeight = 60 + (t.categories.length * 36); // Estimer hauteur basée sur nb de catégories
                             const menuWidth = 256; // w-64
                             const spaceBelow = window.innerHeight - rect.bottom;
                             const spaceRight = window.innerWidth - rect.left;
-                            const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                            const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            
+                            let top, left;
+                            
+                            // Positionner en bas si possible, sinon en haut
+                            if (spaceBelow > menuHeight + 8) {
+                              top = rect.bottom + 8;
+                            } else {
+                              top = rect.top - menuHeight - 8;
+                            }
+                            
+                            // Positionnement horizontal
+                            left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                            
+                            // Clamp horizontal seulement pour éviter sortie de l'écran
+                            left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
+                            
+                            // Clamp vertical: juste éviter top négatif, laisser le menu déborder si nécessaire (max-h + overflow-y-auto)
+                            top = Math.max(8, top);
+                            
                             setCategorieMenuPos({ left, top });
                             setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
                           }}
@@ -4334,12 +4345,29 @@ function App({ forceVisitor = false }) {
                             onClick={(e) => { 
                               e.stopPropagation();
                               const rect = e.currentTarget.getBoundingClientRect();
-                              const menuHeight = 200;
+                              const menuHeight = 60 + (t.categories.length * 36); // Estimer hauteur basée sur nb de catégories
                               const menuWidth = 256; // w-64
                               const spaceBelow = window.innerHeight - rect.bottom;
                               const spaceRight = window.innerWidth - rect.left;
-                              const top = spaceBelow > menuHeight ? rect.bottom + 8 : rect.top - menuHeight - 8;
-                              const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                              
+                              let top, left;
+                              
+                              // Positionner en bas si possible, sinon en haut
+                              if (spaceBelow > menuHeight + 8) {
+                                top = rect.bottom + 8;
+                              } else {
+                                top = rect.top - menuHeight - 8;
+                              }
+                              
+                              // Positionnement horizontal
+                              left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
+                              
+                              // Clamp horizontal seulement pour éviter sortie de l'écran
+                              left = Math.max(8, Math.min(left, window.innerWidth - menuWidth - 8));
+                              
+                              // Clamp vertical: juste éviter top négatif, laisser le menu déborder si nécessaire (max-h + overflow-y-auto)
+                              top = Math.max(8, top);
+                              
                               setCategorieMenuPos({ left, top });
                               setOpenCategorieMenu(openCategorieMenu === t.id ? null : t.id);
                             }}
@@ -5439,7 +5467,7 @@ function App({ forceVisitor = false }) {
                               <>
                                 <tr>
                                   {rowCols.map(col => (
-                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
+                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-left uppercase tracking-wide font-bold text-xs">{translateDataValue(col)}</th>
                                   ))}
                                   {(headerRows[0].cells || []).map(cell => (
                                     <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#7b1e5a] text-center font-bold text-sm">{cell.label}</th>
@@ -5516,7 +5544,7 @@ function App({ forceVisitor = false }) {
                                       rowSpan={span}
                                       className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
                                     >
-                                      <span className={`font-semibold ${isYearCol ? 'text-3xl leading-none' : ''}`}>{String(row?.dimensions?.[col] ?? '—')}</span>
+                                      <span className={`font-semibold ${isYearCol ? 'text-3xl leading-none' : ''}`}>{translateDataValue(String(row?.dimensions?.[col] ?? '—'))}</span>
                                     </td>
                                   );
                                 })}
@@ -5548,7 +5576,7 @@ function App({ forceVisitor = false }) {
                       <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
                         <tr>
                           {(visitorMatrix.displayGroupCols || []).map(col => (
-                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-left uppercase tracking-wide font-bold text-xs">{col}</th>
+                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-left uppercase tracking-wide font-bold text-xs">{translateDataValue(col)}</th>
                           ))}
                           {visitorMatrix.periods.map((period, idx) => (
                             <th key={period} className={`p-4 border-r border-[#7b1e5a] min-w-[110px] text-center font-bold text-sm ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
@@ -5616,7 +5644,7 @@ function App({ forceVisitor = false }) {
                                 const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
                                   <td key={`${row.key}-${col}`} rowSpan={span} className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
-                                    <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{value}</span>
+                                    <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{translateDataValue(value)}</span>
                                     {isTotalCell && colIndex === groupCols.length - 1 && (
                                       <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#7A0A4A] text-white uppercase tracking-wide">{t('total')}</span>
                                     )}
@@ -5638,7 +5666,7 @@ function App({ forceVisitor = false }) {
                         <tr>
                           {visibleColumnsForRender.map(col => (
                             <th key={col} className={`p-4 border-r ${isVisitor ? 'border-[#7b1e5a]' : 'border-[#5E0738]'} min-w-[160px] text-left uppercase tracking-wide font-bold text-xs`}>
-                              <div className="uppercase text-[11px] tracking-wide font-bold text-white">{col}</div>
+                              <div className="uppercase text-[11px] tracking-wide font-bold text-white">{translateDataValue(col)}</div>
                             </th>
                           ))}
                         </tr>
@@ -5670,7 +5698,7 @@ function App({ forceVisitor = false }) {
                                 const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
                                   <td key={col} rowSpan={span} className={`border-r ${isVisitor ? 'border-[#D6BE8C]' : 'border-[#D8C49A]'} p-3 text-xs ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'} ${isNumericCol ? (isVisitor ? 'tabular-nums text-[#4A062E] font-medium' : 'tabular-nums text-[#5E0738] font-medium') : (isVisitor ? 'text-[#3F2A1F]' : 'text-[#3F2A1F]')}`}>
-                                    <span className={`${isMergedCell ? mergedSizeClass : ''} ${isNumericCol ? 'text-right inline-block w-full' : 'font-semibold'}`}>{row[col]}</span>
+                                    <span className={`${isMergedCell ? mergedSizeClass : ''} ${isNumericCol ? 'text-right inline-block w-full' : 'font-semibold'}`}>{isNumericCol ? row[col] : translateDataValue(row[col])}</span>
                                   </td>
                                 );
                               })}
@@ -5756,6 +5784,37 @@ function App({ forceVisitor = false }) {
                       });
 
                       multiSeries = { seriesData, groupValues, seriesScatterData };
+                    }
+
+                    // ── Arabic translation: translate x-axis values and group labels ──
+                    if (isArabicVisitor) {
+                      if (chartData) {
+                        chartData = chartData.map(r => {
+                          const row = { ...r };
+                          if (chart.x && row[chart.x] !== undefined) {
+                            row[chart.x] = DATA_TRANSLATIONS_FR_AR[String(row[chart.x])] ?? row[chart.x];
+                          }
+                          return row;
+                        });
+                      }
+                      if (multiSeries) {
+                        const origGroups = multiSeries.groupValues;
+                        const transGroups = origGroups.map(g => DATA_TRANSLATIONS_FR_AR[g] ?? g);
+                        const newSeriesData = multiSeries.seriesData.map(r => {
+                          const row = {};
+                          row[chart.x] = DATA_TRANSLATIONS_FR_AR[String(r[chart.x] || '')] ?? r[chart.x];
+                          origGroups.forEach((g, i) => { row[transGroups[i]] = r[g]; });
+                          return row;
+                        });
+                        const newScatterData = {};
+                        origGroups.forEach((g, i) => {
+                          newScatterData[transGroups[i]] = (multiSeries.seriesScatterData[g] || []).map(d => ({
+                            ...d,
+                            [chart.x]: DATA_TRANSLATIONS_FR_AR[String(d[chart.x] || '')] ?? d[chart.x],
+                          }));
+                        });
+                        multiSeries = { ...multiSeries, groupValues: transGroups, seriesData: newSeriesData, seriesScatterData: newScatterData };
+                      }
                     }
 
                     return (
@@ -5970,24 +6029,60 @@ function App({ forceVisitor = false }) {
             <h2 className="text-xl font-black mb-4 text-center">Édition du tableau</h2>
 
             <div className="mb-4 flex gap-4 items-center">
-              <label className="bg-[#B89C5A] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer">
-                Remplacer par un fichier
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleImportFileChange} />
-              </label>
-              <label className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer ${isSmartImporting ? 'bg-gray-300' : 'bg-[#ffcf80]'}`}>
+              <button onClick={() => openImportDialog('replace')} disabled={isCurrentImportBusy} className={`bg-[#B89C5A] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isCurrentImportBusy ? 'opacity-60 cursor-not-allowed' : ''}`}>
+                {isReplacing ? 'Remplacement...' : 'Remplacer par un fichier'}
+              </button>
+              <button onClick={() => openImportDialog('smart-replace')} disabled={isCurrentImportBusy} className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isSmartImporting ? 'bg-gray-300' : 'bg-[#ffcf80]'} ${isCurrentImportBusy && !isSmartImporting ? 'opacity-60 cursor-not-allowed' : ''}`}>
                 {isSmartImporting ? 'Import IA...' : 'Importer avec IA'}
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleSmartImportFileChange} disabled={isSmartImporting} />
-              </label>
-              <label className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer ${isAppending ? 'bg-gray-300' : 'bg-[#a8d5a2]'}`}>
+              </button>
+              <button onClick={() => openImportDialog('append')} disabled={isCurrentImportBusy} className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isAppending ? 'bg-gray-300' : 'bg-[#a8d5a2]'} ${isCurrentImportBusy && !isAppending ? 'opacity-60 cursor-not-allowed' : ''}`}>
                 {isAppending ? 'Ajout...' : 'Ajouter au tableau'}
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleAppendFileChange} disabled={isAppending} />
-              </label>
-              <label className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md cursor-pointer ${isAppendingAI ? 'bg-gray-300' : 'bg-[#8fc4ff]'}`}>
+              </button>
+              <button onClick={() => openImportDialog('append-smart')} disabled={isCurrentImportBusy} className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isAppendingAI ? 'bg-gray-300' : 'bg-[#8fc4ff]'} ${isCurrentImportBusy && !isAppendingAI ? 'opacity-60 cursor-not-allowed' : ''}`}>
                 {isAppendingAI ? 'Ajout IA...' : 'Ajouter avec IA'}
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleAppendAIFileChange} disabled={isAppendingAI} />
-              </label>
-              <div className="text-sm italic text-gray-600">Remplacer : écrase le tableau · Importer avec IA : remplace/remappe · Ajouter : fusionne en mode strict · Ajouter avec IA : fusionne avec remapping intelligent</div>
+              </button>
+              <div className="text-sm italic text-gray-600">Chaque action ouvre maintenant une verification unique: fichier principal obligatoire, version arabe optionnelle, puis controle de coherence avant sauvegarde. Si le sous-theme est deja bilingue, le fichier arabe devient obligatoire.</div>
             </div>
+
+            {importDialog.open && (
+              <div className="mb-5 rounded-2xl border-2 border-[#d6b978] bg-[#fff8ee] p-5 shadow-sm">
+                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                  <div>
+                    <h3 className="text-lg font-black text-[#5a2436]">{getImportModeMeta(importDialog.mode).title}</h3>
+                    <p className="text-sm text-[#6b4b3b]">{getImportModeMeta(importDialog.mode).description}</p>
+                    {selectedSubTheme?.data_is_bilingual && (
+                      <p className="mt-2 text-sm font-semibold text-[#8b1538]">Ce sous-theme est deja bilingue: le fichier arabe correspondant est obligatoire.</p>
+                    )}
+                  </div>
+                  <button onClick={closeImportDialog} className="self-start rounded-lg border border-[#d0b17b] bg-white px-3 py-1.5 text-sm font-semibold text-[#5a2436] hover:bg-[#f8ecd8]">Fermer</button>
+                </div>
+
+                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                  <div>
+                    <label className="block text-sm font-bold text-[#5a2436] mb-1">Fichier principal</label>
+                    <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, file: e.target.files?.[0] || null }))} />
+                    <div className="mt-1 text-xs text-gray-600">Obligatoire. C'est le fichier FR ou le fichier principal de travail.</div>
+                    {importDialog.file && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.file.name}</div>}
+                  </div>
+                  <div>
+                    <label className="block text-sm font-bold text-[#5a2436] mb-1">Version arabe du meme tableau</label>
+                    <input type="file" accept=".xlsx,.xls" disabled={isSaisisseur} className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-400" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileAr: e.target.files?.[0] || null }))} />
+                    <div className="mt-1 text-xs text-gray-600">Optionnelle pour un sous-theme monolingue. Obligatoire si le sous-theme est deja bilingue.</div>
+                    {importDialog.fileAr && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileAr.name}</div>}
+                  </div>
+                </div>
+
+                <div className="mt-4 rounded-xl border border-[#ecd29f] bg-white px-4 py-3 text-sm text-[#6b4b3b]">
+                  <div>Mode: <span className="font-semibold text-[#5a2436]">{getImportModeMeta(importDialog.mode).title}</span></div>
+                  <div className="mt-1">Verification bilingue: <span className="font-semibold text-[#5a2436]">{importDialog.fileAr ? 'activee' : 'desactivee'}</span></div>
+                </div>
+
+                <div className="mt-4 flex gap-3">
+                  <button onClick={handleConfirmImportDialog} disabled={isCurrentImportBusy || !importDialog.file} className="rounded-xl border-2 border-black bg-[#7A0A4A] px-4 py-2 font-bold text-white disabled:cursor-not-allowed disabled:bg-gray-300">Verifier et importer</button>
+                  <button onClick={closeImportDialog} disabled={isCurrentImportBusy} className="rounded-xl border-2 border-black bg-white px-4 py-2 font-bold text-[#5a2436] disabled:cursor-not-allowed disabled:opacity-60">Annuler</button>
+                </div>
+              </div>
+            )}
 
             <div className="overflow-auto">
               <table className="w-full border-collapse">
@@ -6632,47 +6727,60 @@ function App({ forceVisitor = false }) {
 
       {/* Settings modal */}
       {showSettings && (
-        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 12000, backgroundColor: 'rgba(0,0,0,0.18)' }}>
-          <div className="bg-white border-4 border-black p-8 rounded-3xl w-full max-w-md shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-2xl font-bold mb-6 text-[#1a5d85]">Informations du compte</h2>
+        <div className="fixed inset-0 flex items-center justify-center p-4" style={{ zIndex: 12000, backgroundColor: 'rgba(62, 8, 39, 0.28)' }}>
+          <div className="w-full max-w-lg rounded-2xl border border-[#B03372] bg-[#fffaf2] shadow-[0_18px_42px_rgba(94,7,56,0.34)] overflow-hidden">
+            <div className="bg-gradient-to-r from-[#7A0A4A] to-[#B03372] px-6 py-4 border-b border-[#8c1f60]">
+              <h2 className="text-xl md:text-2xl font-bold text-white">Informations du compte</h2>
+              <p className="text-xs md:text-sm text-[#fbe3ef] mt-1">Mettre a jour votre email et votre mot de passe.</p>
+            </div>
             
-            <div className="space-y-4">
+            <div className="p-6 space-y-4">
               <div>
-                <label className="block font-bold text-gray-700 mb-2">Email</label>
+                <label className="block text-sm font-semibold text-[#6E001F] mb-1.5">Email</label>
                 <input
                   type="email"
                   value={settingsForm.email}
                   onChange={(e) => setSettingsForm({...settingsForm, email: e.target.value})}
-                  className="w-full p-3 border-2 border-black rounded-lg outline-none"
+                  className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
                 />
               </div>
 
               <div>
-                <label className="block font-bold text-gray-700 mb-2">Nouveau mot de passe</label>
+                <label className="block text-sm font-semibold text-[#6E001F] mb-1.5">Nouveau mot de passe</label>
                 <input
                   type="password"
                   value={settingsForm.newPassword}
                   onChange={(e) => setSettingsForm({...settingsForm, newPassword: e.target.value})}
                   placeholder="Laisser vide si inchangé"
-                  className="w-full p-3 border-2 border-black rounded-lg outline-none"
+                  className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none placeholder:text-[#9C7087] focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
                 />
               </div>
 
               <div>
-                <label className="block font-bold text-gray-700 mb-2">Confirmer le mot de passe</label>
+                <label className="block text-sm font-semibold text-[#6E001F] mb-1.5">Confirmer le mot de passe</label>
                 <input
                   type="password"
                   value={settingsForm.confirmPassword}
                   onChange={(e) => setSettingsForm({...settingsForm, confirmPassword: e.target.value})}
                   placeholder="Confirmer le nouveau mot de passe"
-                  className="w-full p-3 border-2 border-black rounded-lg outline-none"
+                  className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none placeholder:text-[#9C7087] focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
                 />
               </div>
             </div>
 
-            <div className="flex gap-4 mt-6">
-              <button onClick={() => setShowSettings(false)} className="flex-1 bg-gray-200 py-3 border-2 border-black rounded-xl font-bold">Annuler</button>
-              <button onClick={updateAccount} className="flex-1 bg-blue-600 hover:bg-blue-700 text-white py-3 border-2 border-black rounded-xl font-bold">Enregistrer les modifications</button>
+            <div className="px-6 pb-6 pt-2 flex flex-col sm:flex-row gap-3">
+              <button
+                onClick={() => setShowSettings(false)}
+                className="flex-1 h-11 rounded-lg border border-[#CCB47F] bg-white text-[#6E001F] font-semibold hover:bg-[#f7ead2] transition-colors"
+              >
+                Annuler
+              </button>
+              <button
+                onClick={updateAccount}
+                className="flex-1 h-11 rounded-lg border border-[#B03372] bg-[#7A0A4A] text-white font-semibold hover:bg-[#5E0738] transition-colors"
+              >
+                Enregistrer les modifications
+              </button>
             </div>
           </div>
         </div>
