@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { useState, useEffect, useRef } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
@@ -7,6 +7,8 @@ import LoginPage from './LoginPage';
 import AdministratorsPage from './AdministratorsPage';
 import ChartModal from './components/ChartModal';
 import { DATA_TRANSLATIONS_FR_AR } from './i18n';
+
+const API_BASE = 'http://127.0.0.1:8000/api';
 
 // --- COMPOSANTS DE STYLE ---
 const SidebarIcon = ({ type }) => {
@@ -88,7 +90,7 @@ const LangSelector = ({ t, i18n }) => {
             className={`w-full text-left px-3 py-2 text-xs hover:bg-[#f7e8cf] flex items-center gap-2 ${i18n.language === 'ar' ? 'font-bold text-[#7A0A4A]' : 'text-[#6B3150]'}`}
           >
             {i18n.language === 'ar' && <span>✔</span>}
-            عربية
+            العربية
           </button>
         </div>
       )}
@@ -113,23 +115,26 @@ function App({ forceVisitor = false }) {
     couverture_text_ar: '',
   });
 
-  // --- RTL + language restriction (visitor only) ---
+  // --- RTL + language restriction ---
   useEffect(() => {
     const pathname = (typeof window !== 'undefined' && window.location.pathname)
       ? window.location.pathname.toLowerCase()
       : '/';
     const isVisitorRoute = forceVisitor || pathname === '/visiteur' || pathname.startsWith('/visiteur/');
+    const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
+    const isSaisisseurRoute = pathname === '/saisisseur' || pathname.startsWith('/saisisseur/');
+    const canUseRouteLanguage = isVisitorRoute || isAdminRoute || isSaisisseurRoute;
 
-    if (!isVisitorRoute && i18n.language !== 'fr') {
+    if (!canUseRouteLanguage && i18n.language !== 'fr') {
       i18n.changeLanguage('fr');
     }
 
-    const effectiveLang = isVisitorRoute ? i18n.language : 'fr';
+    const effectiveLang = canUseRouteLanguage ? i18n.language : 'fr';
     document.documentElement.dir = effectiveLang === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = effectiveLang;
 
     try {
-      if (isVisitorRoute) {
+      if (canUseRouteLanguage) {
         localStorage.setItem('app_lang', i18n.language);
       }
     } catch {}
@@ -284,7 +289,7 @@ function App({ forceVisitor = false }) {
   });
   const [savingSiteContent, setSavingSiteContent] = useState(false);
 
-  // --- TOUS LES useEffect EN MÊME TEMPS ---
+  // --- TOUS LES useEffect EN MأٹME TEMPS ---
   const pathname = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
   const pathHasVisiteur = pathname === '/visiteur' || pathname.startsWith('/visiteur/');
   const pathHasSaisisseur = pathname === '/saisisseur' || pathname.startsWith('/saisisseur/');
@@ -294,26 +299,50 @@ function App({ forceVisitor = false }) {
   const isVisitor = forceVisitor || pathHasVisiteur;
   const isSaisisseur = isSaisisseurRoute || (userRole === 'SAISISSEUR' && isAuthenticated);
   const canEdit = isAuthenticated && !isVisitor;
-  const themesApiBase = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
-  const infoBannerApi = 'http://127.0.0.1:8000/api/info-banner/';
-  const siteContentApi = 'http://127.0.0.1:8000/api/site-content/';
+  const themesApiBase = isVisitor ? `${API_BASE}/public-themes/` : `${API_BASE}/themes/`;
+  const infoBannerApi = `${API_BASE}/info-banner/`;
+  const siteContentApi = `${API_BASE}/site-content/`;
   const isInfoMenu = ['Contact', 'APropos', 'LiensUtiles'].includes(activeMenu);
+  const canUseTranslatedDataView = isVisitor || pathHasAdmin || isSaisisseurRoute;
+  const isArabicDataView = canUseTranslatedDataView && i18n.language === 'ar';
   const isArabicVisitor = isVisitor && i18n.language === 'ar';
-  const localeCode = isArabicVisitor ? 'ar-MA' : 'fr-FR';
+  const localeCode = isArabicDataView ? 'ar-MA' : 'fr-FR';
+
+  const normalizeDataToken = (value) => String(value ?? '')
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .replace(/[_\-]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
 
   const bilingualLabelLookup = React.useMemo(() => {
     const frToAr = {};
     const arToFr = {};
+    const columnCodeByToken = {};
+    const columnLabelsByCode = {};
+    const valueLabelsByColumn = {};
+    const globalValueLabels = {};
+    let canonicalColumns = [];
+    let valueColumnCode = null;
     try {
       const raw = selectedSubTheme?.data_json_i18n;
-      if (!raw) return { frToAr, arToFr };
+      if (!raw) return { frToAr, arToFr, columnCodeByToken, columnLabelsByCode, valueLabelsByColumn, globalValueLabels, canonicalColumns, valueColumnCode, payload: null };
       const payload = typeof raw === 'string' ? JSON.parse(raw) : raw;
-      if (!payload || typeof payload !== 'object') return { frToAr, arToFr };
+      if (!payload || typeof payload !== 'object') return { frToAr, arToFr, columnCodeByToken, columnLabelsByCode, valueLabelsByColumn, globalValueLabels, canonicalColumns, valueColumnCode, payload: null };
+
+      canonicalColumns = Array.isArray(payload.canonical_columns) ? payload.canonical_columns : Object.keys(payload.column_labels || {});
+      valueColumnCode = payload.value_column || null;
 
       const colLabels = payload.column_labels || {};
-      Object.values(colLabels).forEach((labels) => {
+      Object.entries(colLabels).forEach(([code, labels]) => {
         const fr = String(labels?.fr || '').trim();
         const ar = String(labels?.ar || '').trim();
+        columnLabelsByCode[code] = { code, fr, ar };
+        [code, fr, ar].forEach((token) => {
+          const normalized = normalizeDataToken(token);
+          if (normalized) columnCodeByToken[normalized] = code;
+        });
         if (fr && ar) {
           frToAr[fr] = ar;
           arToFr[ar] = fr;
@@ -321,27 +350,156 @@ function App({ forceVisitor = false }) {
       });
 
       const valueLabels = payload.value_labels || {};
-      Object.values(valueLabels).forEach((mapping) => {
+      Object.entries(valueLabels).forEach(([columnCode, mapping]) => {
         if (!mapping || typeof mapping !== 'object') return;
-        Object.values(mapping).forEach((labels) => {
+        valueLabelsByColumn[columnCode] = valueLabelsByColumn[columnCode] || {};
+        Object.entries(mapping).forEach(([valueCode, labels]) => {
           const fr = String(labels?.fr || '').trim();
           const ar = String(labels?.ar || '').trim();
+          const entry = { code: valueCode, fr, ar };
+          [valueCode, fr, ar].forEach((token) => {
+            const normalized = normalizeDataToken(token);
+            if (!normalized) return;
+            valueLabelsByColumn[columnCode][normalized] = entry;
+            if (!globalValueLabels[normalized]) globalValueLabels[normalized] = entry;
+          });
           if (fr && ar) {
             frToAr[fr] = ar;
             arToFr[ar] = fr;
           }
         });
       });
+      return {
+        frToAr,
+        arToFr,
+        columnCodeByToken,
+        columnLabelsByCode,
+        valueLabelsByColumn,
+        globalValueLabels,
+        canonicalColumns,
+        valueColumnCode,
+        payload,
+      };
     } catch (e) {
       // Ignore malformed payload and keep static dictionary fallback.
     }
-    return { frToAr, arToFr };
+    return { frToAr, arToFr, columnCodeByToken, columnLabelsByCode, valueLabelsByColumn, globalValueLabels, canonicalColumns, valueColumnCode, payload: null };
   }, [selectedSubTheme?.id, selectedSubTheme?.data_json_i18n]);
+
+  const getCanonicalColumnCode = (columnIdentifier) => {
+    const normalized = normalizeDataToken(columnIdentifier);
+    if (!normalized) return null;
+    return bilingualLabelLookup.columnCodeByToken[normalized] || null;
+  };
+
+  const getCanonicalValueCode = (columnIdentifier, valueIdentifier) => {
+    const columnCode = getCanonicalColumnCode(columnIdentifier) || String(columnIdentifier || '').trim();
+    const normalizedValue = normalizeDataToken(valueIdentifier);
+    if (!normalizedValue) return valueIdentifier;
+    const mapping = bilingualLabelLookup.valueLabelsByColumn[columnCode] || {};
+    return mapping[normalizedValue]?.code || valueIdentifier;
+  };
+
+  const getLocalizedColumnLabel = (columnIdentifier, langOverride = null) => {
+    const fallback = (columnIdentifier === null || columnIdentifier === undefined) ? '' : String(columnIdentifier);
+    const targetLang = langOverride || (isArabicDataView ? 'ar' : 'fr');
+    const columnCode = getCanonicalColumnCode(columnIdentifier);
+    if (!columnCode) {
+      if (targetLang === 'ar' && DATA_TRANSLATIONS_FR_AR[fallback] !== undefined) return DATA_TRANSLATIONS_FR_AR[fallback];
+      return fallback;
+    }
+    const labels = bilingualLabelLookup.columnLabelsByCode[columnCode] || {};
+    return labels[targetLang] || labels.fr || fallback;
+  };
+
+  const getLocalizedValueLabel = (columnIdentifier, valueIdentifier, langOverride = null) => {
+    if (valueIdentifier === null || valueIdentifier === undefined || valueIdentifier === '—') return valueIdentifier;
+    const rawValue = String(valueIdentifier);
+    const targetLang = langOverride || (isArabicDataView ? 'ar' : 'fr');
+    const columnCode = getCanonicalColumnCode(columnIdentifier) || String(columnIdentifier || '').trim();
+    const normalizedValue = normalizeDataToken(valueIdentifier);
+    const columnMapping = bilingualLabelLookup.valueLabelsByColumn[columnCode] || {};
+    const entry = columnMapping[normalizedValue] || bilingualLabelLookup.globalValueLabels[normalizedValue];
+    if (entry) return entry[targetLang] || entry.fr || rawValue;
+    if (targetLang === 'ar') {
+      if (bilingualLabelLookup.frToAr[rawValue] !== undefined) return bilingualLabelLookup.frToAr[rawValue];
+      if (DATA_TRANSLATIONS_FR_AR[rawValue] !== undefined) return DATA_TRANSLATIONS_FR_AR[rawValue];
+    }
+    return rawValue;
+  };
+
+  const normalizeConfiguredColumns = (items) => {
+    if (!Array.isArray(items)) return [];
+    return items
+      .map((item) => {
+        const raw = typeof item === 'string' ? item : (item && item.column) ? item.column : String(item ?? '');
+        const canonical = getCanonicalColumnCode(raw);
+        return canonical || raw;
+      })
+      .filter(Boolean);
+  };
+
+  const localizeConfiguredColumns = (items, langOverride = null) => normalizeConfiguredColumns(items)
+    .map((item) => getLocalizedColumnLabel(item, langOverride))
+    .filter(Boolean);
+
+  const parseVisitorDefaultsObject = (rawVal) => {
+    if (rawVal === null || rawVal === undefined) return {};
+    if (typeof rawVal === 'object') return rawVal || {};
+    if (typeof rawVal === 'string') {
+      try { return JSON.parse(rawVal); } catch (_) {}
+      const out = {};
+      rawVal.split(',').map(s => s.trim()).filter(Boolean).forEach((part) => {
+        const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
+        if (!sep) return;
+        const [k, v] = part.split(sep).map((p) => p.trim());
+        if (k && v) out[k] = v;
+      });
+      return out;
+    }
+    return {};
+  };
+
+  const canonicalizeVisitorDefaults = (rawVal) => {
+    const parsed = parseVisitorDefaultsObject(rawVal);
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => {
+        const canonicalKey = getCanonicalColumnCode(key) || key;
+        return [canonicalKey, getCanonicalValueCode(canonicalKey, value)];
+      })
+    );
+  };
+
+  const localizeVisitorDefaults = (rawVal, langOverride = null) => {
+    const parsed = parseVisitorDefaultsObject(rawVal);
+    return Object.fromEntries(
+      Object.entries(parsed).map(([key, value]) => {
+        const canonicalKey = getCanonicalColumnCode(key) || key;
+        return [
+          getLocalizedColumnLabel(canonicalKey, langOverride),
+          getLocalizedValueLabel(canonicalKey, value, langOverride),
+        ];
+      })
+    );
+  };
+
+  const isPeriodColumnIdentifier = (columnIdentifier) => {
+    const canonical = getCanonicalColumnCode(columnIdentifier) || String(columnIdentifier ?? '');
+    const normalized = normalizeDataToken(canonical);
+    return /(annee|annees|period|periode|periodes|year|years|date|temps|time|سنة|سنوات|السنوات|الفترة|الفترات)/i.test(normalized);
+  };
+
+  const isValueColumnIdentifier = (columnIdentifier) => {
+    const canonical = getCanonicalColumnCode(columnIdentifier) || String(columnIdentifier ?? '');
+    if (bilingualLabelLookup.valueColumnCode && canonical === bilingualLabelLookup.valueColumnCode) return true;
+    const normalized = normalizeDataToken(canonical);
+    return /(valeur|value|values|metric|mesure|measure|amount|count|nombre|effectif|montant|ratio|taux|pourcentage|percent|قيمة|القيمة|نسبة|المؤشر)/i.test(normalized);
+  };
 
   // Translate a data value (column name or cell value) from French → Arabic.
   // Safe to call on any value: numbers and '—' are returned unchanged.
   const translateDataValue = (val) => {
-    if (!isArabicVisitor) return (val === null || val === undefined) ? '' : String(val);
+    if (!isArabicDataView) return (val === null || val === undefined) ? '' : String(val);
     if (val === null || val === undefined || val === '—') return val;
     const s = String(val);
     if (bilingualLabelLookup.frToAr[s] !== undefined) return bilingualLabelLookup.frToAr[s];
@@ -358,7 +516,7 @@ function App({ forceVisitor = false }) {
 
   const getLocalizedValue = (item, frKey, arKey) => {
     if (!item) return '';
-    if (isArabicVisitor) {
+    if (isArabicDataView) {
       return item?.[arKey] || item?.[frKey] || '';
     }
     return item?.[frKey] || '';
@@ -607,7 +765,7 @@ function App({ forceVisitor = false }) {
 
       let existing = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
       if (!existing) {
-        const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/', saisisseurRequestConfig);
+        const resp = await axios.get(`${API_BASE}/user-theme-assignments/`, saisisseurRequestConfig);
         const myAssignments = (resp.data || []).filter((assignment) => String(assignment.user) === String(userId) && assignment.sous_theme);
         setSaisisseurAssignments(myAssignments);
         existing = myAssignments.find((assignment) => String(assignment.sous_theme) === String(selectedSubTheme.id));
@@ -626,7 +784,7 @@ function App({ forceVisitor = false }) {
       mergedNotes = { ...mergedNotes, ...partialNotes };
 
       const patchResponse = await axios.patch(
-        `http://127.0.0.1:8000/api/user-theme-assignments/${existing.id}/`,
+        `${API_BASE}/user-theme-assignments/${existing.id}/`,
         { notes: JSON.stringify(mergedNotes), statut },
         saisisseurRequestConfig,
       );
@@ -856,13 +1014,13 @@ function App({ forceVisitor = false }) {
       try {
         const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
         if (!userId) return;
-        const resp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/');
+        const resp = await axios.get(`${API_BASE}/user-theme-assignments/`);
         const my = resp.data.filter(a => String(a.user) === String(userId) && a.sous_theme);
         setSaisisseurAssignments(my);
         const subs = [];
         for (const a of my) {
           try {
-            const r = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${a.sous_theme}/`);
+            const r = await axios.get(`${API_BASE}/sousthemes/${a.sous_theme}/`);
             subs.push({ id: a.sous_theme, nom: r.data.nom, theme: r.data.theme });
           } catch (e) { console.error('Erreur fetch soustheme', e); }
         }
@@ -938,47 +1096,24 @@ function App({ forceVisitor = false }) {
           if (st) { found = st; break; }
         }
         if (!found) {
-          const res = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${subThemeId}/`);
+          const res = await axios.get(`${API_BASE}/sousthemes/${subThemeId}/`);
           found = res.data;
         }
         if (!found) return;
 
-        // helper to parse possible stored defaults into an object
-        const parseDefaultsString = (raw) => {
-          if (!raw && raw !== '') return {};
-          if (typeof raw === 'object' && raw !== null) return raw;
-          if (typeof raw === 'string') {
-            try { return JSON.parse(raw); } catch (_) {}
-            const obj = {};
-            const parts = raw.split(',').map(p => p.trim()).filter(Boolean);
-            parts.forEach(part => {
-              const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
-              if (sep) {
-                const [k, v] = part.split(sep).map(s => s.trim());
-                if (k && v) obj[k] = v;
-              }
-            });
-            return obj;
-          }
-            return {};
-          };
-
         setConfigSubTheme(found);
         const cols = found.visitor_visible_columns || [];
         const rawFilters = found.visitor_filters || found.filtres_disponibles || [];
-        const normalizeFilters = (arr) => {
-          if (!Array.isArray(arr)) return [];
-          return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
-        };
+        const normalizeFilters = (arr) => localizeConfiguredColumns(arr, 'fr');
         const filters = normalizeFilters(rawFilters);
         const hierarchy = normalizeFilters(found.visitor_pivot_columns || []);
 
         // Start with the live SousTheme values
-        let vcCols = cols;
+        let vcCols = localizeConfiguredColumns(cols, 'fr');
         let vcFilters = filters;
         let vcHierarchy = hierarchy;
         let vcDefaultView = (found.visitor_default_view === 'vertical') ? 'vertical' : 'horizontal';
-        let vcDefaultFilters = parseDefaultsString(found.visitor_default_filters || {});
+        let vcDefaultFilters = localizeVisitorDefaults(found.visitor_default_filters || {}, 'fr');
 
         // If saisisseur, prefer the pending visitor_config stored in assignment notes
         if (isSaisisseur) {
@@ -988,11 +1123,11 @@ function App({ forceVisitor = false }) {
               const notesParsed = assignmentForSt.notes ? JSON.parse(assignmentForSt.notes) : {};
               const vc = notesParsed.visitor_config;
               if (vc && typeof vc === 'object') {
-                if (Array.isArray(vc.visitor_visible_columns)) vcCols = vc.visitor_visible_columns;
-                if (Array.isArray(vc.visitor_filters)) vcFilters = vc.visitor_filters;
-                if (Array.isArray(vc.visitor_pivot_columns)) vcHierarchy = vc.visitor_pivot_columns;
+                if (Array.isArray(vc.visitor_visible_columns)) vcCols = localizeConfiguredColumns(vc.visitor_visible_columns, 'fr');
+                if (Array.isArray(vc.visitor_filters)) vcFilters = localizeConfiguredColumns(vc.visitor_filters, 'fr');
+                if (Array.isArray(vc.visitor_pivot_columns)) vcHierarchy = localizeConfiguredColumns(vc.visitor_pivot_columns, 'fr');
                 if (vc.visitor_default_view) vcDefaultView = vc.visitor_default_view === 'vertical' ? 'vertical' : 'horizontal';
-                if (vc.visitor_default_filters) vcDefaultFilters = parseDefaultsString(vc.visitor_default_filters);
+                if (vc.visitor_default_filters) vcDefaultFilters = localizeVisitorDefaults(vc.visitor_default_filters, 'fr');
               }
             } catch (_) {}
           }
@@ -1070,31 +1205,15 @@ function App({ forceVisitor = false }) {
     if (!isVisitor || !selectedSubTheme) return;
     try {
       const raw = selectedSubTheme.visitor_default_filters || {};
-      const parse = (rawVal) => {
-        if (rawVal === null || rawVal === undefined) return {};
-        if (typeof rawVal === 'object') return rawVal || {};
-        if (typeof rawVal === 'string') {
-          try { return JSON.parse(rawVal); } catch (_) {}
-          const out = {};
-          rawVal.split(',').map(s => s.trim()).filter(Boolean).forEach(part => {
-            const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
-            if (!sep) return;
-            const [k, v] = part.split(sep).map(p => p.trim());
-            if (k && v) out[k] = v;
-          });
-          return out;
-        }
-        return {};
-      };
-
-      const defaultsObj = parse(raw);
+      const defaultsObj = localizeVisitorDefaults(raw);
       const newMap = { ...(chartVisitorFilters || {}) };
       (savedCharts || []).forEach(chart => {
         const vf = chart.visible_filters || [];
         if (!vf || vf.length === 0) return;
         newMap[chart.id] = { ...(newMap[chart.id] || {}) };
         vf.forEach(item => {
-          const col = typeof item === 'string' ? item : (item && item.column) || '';
+          const rawCol = typeof item === 'string' ? item : (item && item.column) || '';
+          const col = getLocalizedColumnLabel(rawCol);
           if (!col) return;
           if (defaultsObj && Object.prototype.hasOwnProperty.call(defaultsObj, col)) {
             newMap[chart.id][col] = defaultsObj[col];
@@ -1115,32 +1234,16 @@ function App({ forceVisitor = false }) {
     if (!isVisitor || !selectedSubTheme) return;
     try {
       const raw = selectedSubTheme.visitor_default_filters || {};
-      const parseDefaults = (rawVal) => {
-        if (rawVal === null || rawVal === undefined) return {};
-        if (typeof rawVal === 'object') return rawVal || {};
-        if (typeof rawVal === 'string') {
-          try { return JSON.parse(rawVal); } catch (_) {}
-          const out = {};
-          rawVal.split(',').map(s => s.trim()).filter(Boolean).forEach(part => {
-            const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
-            if (!sep) return;
-            const [k, v] = part.split(sep).map(p => p.trim());
-            if (k && v) out[k] = v;
-          });
-          return out;
-        }
-        return {};
-      };
+      const defaults = localizeVisitorDefaults(raw);
 
-      const defaults = parseDefaults(raw);
+      const candidateColumns = Array.from(new Set([
+        ...localizeConfiguredColumns(selectedSubTheme.visitor_filters || []),
+        ...localizeConfiguredColumns(selectedSubTheme.filtres_disponibles || []),
+        ...localizeConfiguredColumns(selectedSubTheme.columns || []),
+        ...Object.keys((getTableRows(selectedSubTheme) || [])[0] || {}),
+      ].filter(Boolean)));
 
-      const candidateColumns = [
-        ...(selectedSubTheme.visitor_filters || []),
-        ...(selectedSubTheme.filtres_disponibles || []),
-        ...(selectedSubTheme.columns || [])
-      ].map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item))).filter(Boolean);
-
-      const periodCol = candidateColumns.find(c => /(annee|année|period|période|year)/i.test(String(c).toLowerCase()));
+      const periodCol = candidateColumns.find(c => isPeriodColumnIdentifier(c));
 
       const findLatestPeriodValue = () => {
         if (!periodCol) return null;
@@ -1152,7 +1255,7 @@ function App({ forceVisitor = false }) {
           const nb = Number(String(b).replace(/,/g, '.'));
           const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
           if (bothNumeric) return na - nb;
-          return String(a).localeCompare(String(b), 'fr', { numeric: true, sensitivity: 'base' });
+          return String(a).localeCompare(String(b), localeCode, { numeric: true, sensitivity: 'base' });
         });
         return vals[vals.length - 1];
       };
@@ -1196,6 +1299,21 @@ function App({ forceVisitor = false }) {
   // --- HELPER FUNCTIONS ---
   const getTableRows = (sub) => {
     if (!sub) return [];
+    if (canUseTranslatedDataView && sub.data_is_bilingual && bilingualLabelLookup.payload && Array.isArray(bilingualLabelLookup.payload.rows)) {
+      const canonicalColumns = bilingualLabelLookup.canonicalColumns || [];
+      const valueColumnCode = bilingualLabelLookup.valueColumnCode;
+      return bilingualLabelLookup.payload.rows.map((row) => {
+        const localizedRow = {};
+        canonicalColumns.forEach((columnCode) => {
+          const displayColumn = getLocalizedColumnLabel(columnCode);
+          const rawValue = row?.[columnCode];
+          localizedRow[displayColumn] = columnCode === valueColumnCode
+            ? (rawValue ?? '')
+            : getLocalizedValueLabel(columnCode, rawValue);
+        });
+        return localizedRow;
+      });
+    }
     try {
       // Lightweight debug to help trace why imported tables show only header
       if (typeof console !== 'undefined' && console.debug) {
@@ -1434,7 +1552,7 @@ function App({ forceVisitor = false }) {
         ? { headers: { Authorization: `Token ${auth.token}` } }
         : undefined;
 
-      await axios.patch(`http://127.0.0.1:8000/api/users/${auth.userId}/`, payload, requestConfig);
+      await axios.patch(`${API_BASE}/users/${auth.userId}/`, payload, requestConfig);
       localStorage.setItem(auth.emailKey, settingsForm.email);
       if (auth.context === 'saisisseur') localStorage.setItem('user_email', settingsForm.email);
       showToast('Informations mises à jour', 'success');
@@ -1589,7 +1707,7 @@ function App({ forceVisitor = false }) {
       }
 
       await axios.put(
-        `http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${chartId}/`,
+        `${API_BASE}/sousthemes/${selectedSubTheme.id}/charts/${chartId}/`,
         {
           excluded_rows: excludedRowsList
         },
@@ -1647,7 +1765,7 @@ function App({ forceVisitor = false }) {
 
   const archiveTheme = async (id) => {
     try {
-      await axios.post(`http://127.0.0.1:8000/api/themes/${id}/archive/`);
+      await axios.post(`${API_BASE}/themes/${id}/archive/`);
       showToast('Thème archivé', 'success');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1657,7 +1775,7 @@ function App({ forceVisitor = false }) {
 
   const unarchiveTheme = async (id) => {
     try {
-      await axios.post(`http://127.0.0.1:8000/api/themes/${id}/unarchive/`);
+      await axios.post(`${API_BASE}/themes/${id}/unarchive/`);
       showToast('Thème désarchivé', 'success');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1672,7 +1790,7 @@ function App({ forceVisitor = false }) {
     setOpenThemeMenu(null);
     if (selectedTheme && selectedTheme.id === id) { setSelectedTheme(null); setFormStep(0); }
     try {
-      await axios.delete(`http://127.0.0.1:8000/api/themes/${id}/`);
+      await axios.delete(`${API_BASE}/themes/${id}/`);
       showToast('Thème supprimé', 'success');
       // refresh to ensure consistent state
       const res = await axios.get(themesApiBase);
@@ -1722,7 +1840,7 @@ function App({ forceVisitor = false }) {
       return;
     }
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${id}/`, { titre: cleanedName, titre_ar: String(newNameAr || '').trim() });
+      await axios.patch(`${API_BASE}/themes/${id}/`, { titre: cleanedName, titre_ar: String(newNameAr || '').trim() });
       alert('Thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1754,7 +1872,7 @@ function App({ forceVisitor = false }) {
         // Si pas de catégorie, hériter la visibilité du thème
         payload.is_visible = theme?.is_visible ?? true;
       }
-      const res = await axios.post(`http://127.0.0.1:8000/api/themes/${themeId}/sous_themes/`, payload);
+      const res = await axios.post(`${API_BASE}/themes/${themeId}/sous_themes/`, payload);
       alert('Sous-thème ajouté');
       const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
@@ -1778,7 +1896,7 @@ function App({ forceVisitor = false }) {
       const ordre = theme?.categories?.length || 0;
       // Ensure the new category inherits the theme's visibility status
       const payload = { nom: cleanedName, nom_ar: String(nameAr || '').trim(), theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
-      await axios.post('http://127.0.0.1:8000/api/categories/', payload);
+      await axios.post(`${API_BASE}/categories/`, payload);
       alert('Catégorie ajoutée');
       const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
@@ -1803,7 +1921,7 @@ function App({ forceVisitor = false }) {
     }
 
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/categories/${categorieId}/`, {
+      await axios.patch(`${API_BASE}/categories/${categorieId}/`, {
         nom: cleanedName,
         nom_ar: String(newNameAr || '').trim(),
       });
@@ -1840,7 +1958,7 @@ function App({ forceVisitor = false }) {
       return;
     }
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { nom: cleanedName, nom_ar: String(newNameAr || '').trim() });
+      await axios.patch(`${API_BASE}/sousthemes/${id}/`, { nom: cleanedName, nom_ar: String(newNameAr || '').trim() });
       alert('Sous-thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1861,7 +1979,7 @@ function App({ forceVisitor = false }) {
 
   const archiveSubTheme = async (id) => {
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { archived: true });
+      await axios.patch(`${API_BASE}/sousthemes/${id}/`, { archived: true });
       showToast('Sous-thème archivé', 'success');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1880,7 +1998,7 @@ function App({ forceVisitor = false }) {
 
   const unarchiveSubTheme = async (id) => {
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${id}/`, { archived: false });
+      await axios.patch(`${API_BASE}/sousthemes/${id}/`, { archived: false });
       showToast('Sous-thème désarchivé', 'success');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1915,7 +2033,7 @@ function App({ forceVisitor = false }) {
     setOpenSubThemeMenu(null);
     if (selectedSubTheme && selectedSubTheme.id === id) { setSelectedSubTheme(null); setFormStep(3); }
     try {
-      await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${id}/`);
+      await axios.delete(`${API_BASE}/sousthemes/${id}/`);
       showToast('Sous-thème supprimé', 'success');
       // refresh to ensure consistent state
       const res = await axios.get(themesApiBase);
@@ -1947,7 +2065,7 @@ function App({ forceVisitor = false }) {
     try {
       if (!confirm('Êtes-vous sûr de vouloir supprimer cette catégorie ? Tous les sous-thèmes seront supprimés.')) return;
       
-      await axios.delete(`http://127.0.0.1:8000/api/categories/${categorieId}/`);
+      await axios.delete(`${API_BASE}/categories/${categorieId}/`);
       showToast('Catégorie supprimée', 'success');
       
       // Refresh to ensure consistent state
@@ -1971,7 +2089,7 @@ function App({ forceVisitor = false }) {
   const toggleThemePublication = async (themeId, newVisibility) => {
     try {
       // Change theme visibility
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { is_visible: newVisibility });
+      await axios.patch(`${API_BASE}/themes/${themeId}/`, { is_visible: newVisibility });
       
       // Cascade: update all categories and their sous-themes
       const theme = themes.find(t => t.id === themeId);
@@ -1980,13 +2098,13 @@ function App({ forceVisitor = false }) {
         if (theme.categories && theme.categories.length > 0) {
           for (const category of theme.categories) {
             // Use toggle-visibility action to cascade to sous-thèmes
-            await axios.post(`http://127.0.0.1:8000/api/categories/${category.id}/toggle-visibility/`, { is_visible: newVisibility });
+            await axios.post(`${API_BASE}/categories/${category.id}/toggle-visibility/`, { is_visible: newVisibility });
           }
         } else {
           // If no categories, update sous-themes directly
           if (theme.sous_themes) {
             for (const subTheme of theme.sous_themes) {
-              await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subTheme.id}/`, { is_visible: newVisibility });
+              await axios.patch(`${API_BASE}/sousthemes/${subTheme.id}/`, { is_visible: newVisibility });
             }
           }
         }
@@ -2034,7 +2152,7 @@ function App({ forceVisitor = false }) {
         return;
       }
 
-      const res = await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
+      const res = await axios.patch(`${API_BASE}/sousthemes/${selectedSubTheme.id}/`, {
         data_json: normalizedRows,
         columns_order: finalColumns,
       });
@@ -2127,7 +2245,7 @@ function App({ forceVisitor = false }) {
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
       fd.append('free_schema', 'true');
-      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import/`, fd);
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/import/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
       alert(warningText ? `Import reussi\n${warningText}` : 'Import reussi');
       await refreshEditedSubTheme();
@@ -2177,7 +2295,7 @@ function App({ forceVisitor = false }) {
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
       fd.append('free_schema', 'true');
-      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/import-smart/`, fd);
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/import-smart/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
       alert(warningText ? `Import IA reussi\n${warningText}` : 'Import IA reussi');
       await refreshEditedSubTheme();
@@ -2215,7 +2333,7 @@ function App({ forceVisitor = false }) {
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
       fd.append('use_ai', 'false');
-      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`, fd);
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/append/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
       const msg = result?.data?.message || 'Lignes ajoutees avec succes';
       alert(warningText ? `${msg}\n${warningText}` : msg);
@@ -2256,7 +2374,7 @@ function App({ forceVisitor = false }) {
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
       fd.append('use_ai', 'true');
-      const result = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/append/`, fd);
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/append/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
       const msg = result?.data?.message || 'Lignes ajoutees avec IA';
       alert(warningText ? `${msg}\n${warningText}` : msg);
@@ -2649,7 +2767,7 @@ function App({ forceVisitor = false }) {
 
   const fetchThemes = async () => {
     try {
-      const url = isVisitor ? 'http://127.0.0.1:8000/api/public-themes/' : 'http://127.0.0.1:8000/api/themes/';
+      const url = isVisitor ? `${API_BASE}/public-themes/` : `${API_BASE}/themes/`;
       // Route is authoritative; avoid stale cross-tab auth_context.
       let token = null;
       try {
@@ -2678,9 +2796,11 @@ function App({ forceVisitor = false }) {
   // Fonction pour obtenir les valeurs uniques d'une colonne
   const getUniqueValuesForColumn = (columnName) => {
     const data = getTableRows(selectedSubTheme);
+    // Also try the localized equivalent of columnName so it works after a language switch
+    const localizedColumnName = getLocalizedColumnLabel(columnName);
     const values = new Set();
     data.forEach(row => {
-      const val = row[columnName];
+      const val = row[columnName] !== undefined ? row[columnName] : row[localizedColumnName];
       if (val !== null && val !== undefined && val !== '') {
         values.add(String(val));
       }
@@ -2708,17 +2828,55 @@ function App({ forceVisitor = false }) {
     );
   };
 
+  const chartContainerHeightClass = isArabicDataView ? 'h-[24rem] md:h-[28rem]' : 'h-[22rem] md:h-[26rem]';
+
+  const renderPieChartLabel = ({ cx, cy, midAngle, outerRadius, name, percent }) => {
+    const RADIAN = Math.PI / 180;
+    const labelRadius = (outerRadius || 0) + (isArabicDataView ? 44 : 30);
+    const x = cx + labelRadius * Math.cos(-midAngle * RADIAN);
+    const y = cy + labelRadius * Math.sin(-midAngle * RADIAN);
+    const safeName = translateDataValue(name);
+    const safePercent = `(${((percent || 0) * 100).toFixed(0)}%)`;
+    const textAnchor = x > cx ? 'start' : 'end';
+
+    return (
+      <text
+        x={x}
+        y={y}
+        fill="#4d1734"
+        textAnchor={textAnchor}
+        dominantBaseline="central"
+        fontSize={isArabicDataView ? 15 : 13}
+        fontWeight="700"
+      >
+        <tspan x={x} dy="0">{safeName}</tspan>
+        <tspan x={x} dy="1.1em">{safePercent}</tspan>
+      </text>
+    );
+  };
+
   const getFilteredChartData = (chart) => {
     const data = getTableRows(selectedSubTheme);
+    const resolveChartColumnValue = (row, columnName) => {
+      const localizedColumnName = getLocalizedColumnLabel(columnName);
+      if (row[columnName] !== undefined) return row[columnName];
+      if (localizedColumnName !== columnName && row[localizedColumnName] !== undefined) return row[localizedColumnName];
+      return undefined;
+    };
+    const matchesChartFilter = (row, columnName, expectedValue) => {
+      const rowValue = resolveChartColumnValue(row, columnName);
+      const localizedExpectedValue = isArabicDataView ? getLocalizedValueLabel(columnName, expectedValue) : expectedValue;
+      return String(rowValue ?? '') === String(expectedValue ?? '') || String(rowValue ?? '') === String(localizedExpectedValue ?? '');
+    };
     
     // Appliquer le filtre de colonne primaire
     let filtered = data;
     if (chart?.filter_column && chart?.filter_value) {
       const mode = chart?.filter_mode || 'include';
       if (mode === 'include') {
-        filtered = data.filter(row => String(row[chart.filter_column] ?? '') === String(chart.filter_value));
+        filtered = data.filter(row => matchesChartFilter(row, chart.filter_column, chart.filter_value));
       } else {
-        filtered = data.filter(row => String(row[chart.filter_column] ?? '') !== String(chart.filter_value));
+        filtered = data.filter(row => !matchesChartFilter(row, chart.filter_column, chart.filter_value));
       }
     }
     
@@ -2728,9 +2886,9 @@ function App({ forceVisitor = false }) {
         if (filter.column && filter.value) {
           const mode = filter.mode || 'include';
           if (mode === 'include') {
-            filtered = filtered.filter(row => String(row[filter.column] ?? '') === String(filter.value));
+            filtered = filtered.filter(row => matchesChartFilter(row, filter.column, filter.value));
           } else {
-            filtered = filtered.filter(row => String(row[filter.column] ?? '') !== String(filter.value));
+            filtered = filtered.filter(row => !matchesChartFilter(row, filter.column, filter.value));
           }
         }
       });
@@ -2742,74 +2900,105 @@ function App({ forceVisitor = false }) {
 
   // Logique de filtrage du tableau avec les deux types de filtres
 
+  // Helper: resolve a filter key to the correct column name in the current row,
+  // handling language switches where dynamicFilters/columnFilters may still hold
+  // keys/values from a previous locale.
+  const resolveFilterKeyInRow = (key, row) => {
+    if (row[key] !== undefined) return { key, value: row[key] };
+    // Try the localized equivalent (resolves FR↔AR via canonical codes)
+    const localizedKey = getLocalizedColumnLabel(key);
+    if (localizedKey !== key && row[localizedKey] !== undefined) return { key: localizedKey, value: row[localizedKey] };
+    // Key not found in row; treat as no-op (don't filter out rows for unknown columns)
+    return null;
+  };
+
   const filteredData = getTableRows(selectedSubTheme).filter(row => {
     // Filtre par recherche texte (columnFilters)
-    const passesTextFilter = Object.keys(columnFilters).every(key => 
-      String(row[key] || '').toLowerCase().includes(columnFilters[key].toLowerCase())
-    );
-    
+    const passesTextFilter = Object.keys(columnFilters).every(key => {
+      const resolved = resolveFilterKeyInRow(key, row);
+      if (!resolved) return true;
+      return String(resolved.value || '').toLowerCase().includes(columnFilters[key].toLowerCase());
+    });
+
     // Filtre par valeurs sélectionnées (dynamicFilters basé sur filtres_disponibles)
     const passesDynamicFilters = Object.keys(dynamicFilters).every(key => {
       const selectedValue = dynamicFilters[key];
       if (selectedValue === null || selectedValue === undefined) return true;
-      // support arrays (multi-select) and single-value for backward compatibility
+
+      const resolved = resolveFilterKeyInRow(key, row);
+      if (!resolved) return true; // column not present in row — skip filter
+      const rowVal = resolved.value;
+
+      // Translate the selected value to the current language before comparing,
+      // so a previously-selected "Masculin" still matches "ط°ظƒط±" after AR switch, etc.
+      const localizedSelectedValue = isArabicDataView ? getLocalizedValueLabel(key, selectedValue) : String(selectedValue ?? '');
+
       if (Array.isArray(selectedValue)) {
         if (selectedValue.length === 0) return true;
-        return selectedValue.map(String).includes(String(row[key] || ''));
+        return selectedValue.some(sv => {
+          const lv = isArabicDataView ? getLocalizedValueLabel(key, sv) : String(sv ?? '');
+          return String(sv) === String(rowVal) || String(lv) === String(rowVal);
+        });
       }
       if (selectedValue === '') return true;
-      return String(row[key] || '') === String(selectedValue);
+      return String(rowVal) === String(selectedValue) || String(rowVal) === String(localizedSelectedValue);
     });
-    
+
     return passesTextFilter && passesDynamicFilters;
   }) || [];
 
   const visibleColumnsForRender = React.useMemo(() => {
     if (!selectedSubTheme) return [];
-    const fallbackColumns =
-      (Array.isArray(selectedSubTheme.columns) && selectedSubTheme.columns.length > 0)
+    const rowBasedColumns = (() => {
+      const rows = getTableRows(selectedSubTheme) || [];
+      return rows[0] ? Object.keys(rows[0]) : [];
+    })();
+
+    const fallbackColumns = isVisitor
+      ? rowBasedColumns
+      : (Array.isArray(selectedSubTheme.columns) && selectedSubTheme.columns.length > 0)
         ? selectedSubTheme.columns
         : (Array.isArray(selectedSubTheme.columns_order) && selectedSubTheme.columns_order.length > 0)
           ? selectedSubTheme.columns_order
-          : (() => {
-              const rows = getTableRows(selectedSubTheme) || [];
-              return rows[0] ? Object.keys(rows[0]) : [];
-            })();
+          : rowBasedColumns;
 
     if (isVisitor) {
       return (selectedSubTheme.visitor_visible_columns && selectedSubTheme.visitor_visible_columns.length)
-        ? selectedSubTheme.visitor_visible_columns
+        ? localizeConfiguredColumns(selectedSubTheme.visitor_visible_columns)
         : fallbackColumns;
     }
+    if (isArabicDataView) {
+      return localizeConfiguredColumns(fallbackColumns);
+    }
     return fallbackColumns;
-  }, [selectedSubTheme, isVisitor]);
+  }, [selectedSubTheme, isVisitor, isArabicDataView, i18n.language]);
 
   const filtersForRender = React.useMemo(() => {
     if (!selectedSubTheme) return [];
     if (isVisitor) {
       const raw = (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
-      return (raw || []).map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
+      return localizeConfiguredColumns(raw);
+    }
+    if (isArabicDataView) {
+      return localizeConfiguredColumns(selectedSubTheme.filtres_disponibles || []);
     }
     return selectedSubTheme.filtres_disponibles || [];
-  }, [selectedSubTheme, isVisitor]);
+  }, [selectedSubTheme, isVisitor, isArabicDataView, i18n.language]);
 
   const visitorMatrix = React.useMemo(() => {
     if (!isVisitor || !selectedSubTheme) return null;
 
     const cols = (visibleColumnsForRender || []).filter(Boolean);
-    const normalizedCols = cols.map(c => ({ original: c, lower: String(c).toLowerCase() }));
 
-    const periodEntry = normalizedCols.find(c => /(annee|année|period|période|year)/i.test(c.lower));
-    const valueEntry = normalizedCols.find(c => /(valeur|value|taux|%|ratio|montant|nombre|effectif)/i.test(c.lower));
-    const periodCol = periodEntry?.original || null;
-    const valueCol = valueEntry?.original || null;
+    const periodCol = cols.find(c => isPeriodColumnIdentifier(c)) || null;
+    const valueCol = cols.find(c => isValueColumnIdentifier(c)) || null;
 
     const groupCols = cols.filter(c => c !== periodCol && c !== valueCol);
     const canPivot = Boolean(periodCol && valueCol && groupCols.length > 0);
     if (!canPivot) return { canPivot: false };
 
     const rows = filteredData || [];
-    const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble)/i.test(String(val ?? '').toLowerCase());
+    const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble|المجموع|إجمالي)/i.test(String(val ?? '').toLowerCase());
 
     const displayGroupCols = groupCols;
 
@@ -2819,10 +3008,10 @@ function App({ forceVisitor = false }) {
       const nb = Number(String(b).replace(/,/g, '.'));
       const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
       if (bothNumeric) return na - nb;
-      return String(a).localeCompare(String(b), 'fr', { numeric: true, sensitivity: 'base' });
+      return String(a).localeCompare(String(b), localeCode, { numeric: true, sensitivity: 'base' });
     });
 
-    const valueLooksRate = /(%|taux|ratio|pourcentage)/i.test(String(valueCol).toLowerCase());
+    const valueLooksRate = /(%|taux|ratio|pourcentage|ظ†ط³ط¨ط©)/i.test(String(valueCol).toLowerCase());
     const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
 
     const byGroup = {};
@@ -2868,7 +3057,7 @@ function App({ forceVisitor = false }) {
         const bi = isTotalToken(bv);
         if (ai && !bi) return -1;
         if (!ai && bi) return 1;
-        const cmp = av.localeCompare(bv, 'fr', { sensitivity: 'base' });
+        const cmp = av.localeCompare(bv, localeCode, { sensitivity: 'base' });
         if (cmp !== 0) return cmp;
       }
       return 0;
@@ -2892,16 +3081,16 @@ function App({ forceVisitor = false }) {
     const valueCol = visitorMatrix.valueCol;
     if (!valueCol) return { canVertical: false };
 
-    const hierarchyRaw = Array.isArray(selectedSubTheme?.visitor_pivot_columns) ? selectedSubTheme.visitor_pivot_columns : [];
+    const hierarchyRaw = localizeConfiguredColumns(Array.isArray(selectedSubTheme?.visitor_pivot_columns) ? selectedSubTheme.visitor_pivot_columns : []);
     const hierarchyCols = hierarchyRaw.filter(c => cols.includes(c) && c !== valueCol);
     if (!hierarchyCols || hierarchyCols.length === 0) return { canVertical: false };
 
     const rowCols = cols.filter(c => c !== valueCol && !hierarchyCols.includes(c));
     const rows = filteredData || [];
 
-    const valueLooksRate = /(%|taux|ratio|pourcentage)/i.test(String(valueCol).toLowerCase());
+    const valueLooksRate = /(%|taux|ratio|pourcentage|ظ†ط³ط¨ط©)/i.test(String(valueCol).toLowerCase());
     const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
-    const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble)/i.test(String(val ?? '').toLowerCase());
+    const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble|المجموع|إجمالي)/i.test(String(val ?? '').toLowerCase());
 
     const compareSmart = (a, b) => {
       const sa = String(a ?? '');
@@ -2910,7 +3099,7 @@ function App({ forceVisitor = false }) {
       const nb = Number(sb.replace(/,/g, '.'));
       const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
       if (bothNumeric) return na - nb;
-      return sa.localeCompare(sb, 'fr', { numeric: true, sensitivity: 'base' });
+      return sa.localeCompare(sb, localeCode, { numeric: true, sensitivity: 'base' });
     };
 
     const leavesMap = new Map();
@@ -3059,13 +3248,13 @@ function App({ forceVisitor = false }) {
         setSavedCharts(nextCharts);
         await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
         setIsModalOpen(false);
-        setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '', group_by: '' });
+        setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', x_label: '', y_label: '', group_by: '' });
         return;
       }
 
       if (currentChartConfig.id) {
         // Update existing chart
-        const res = await axios.put(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${currentChartConfig.id}/`, {
+        const res = await axios.put(`${API_BASE}/sousthemes/${selectedSubTheme.id}/charts/${currentChartConfig.id}/`, {
           type: currentChartConfig.type,
           x: currentChartConfig.x,
           y: currentChartConfig.y,
@@ -3076,15 +3265,17 @@ function App({ forceVisitor = false }) {
           filters: currentChartConfig.filters || [],
           visible_filters: currentChartConfig.visible_filters || [],
           title: currentChartConfig.title || '',
+          title_ar: currentChartConfig.title_ar || '',
           x_label: currentChartConfig.x_label || '',
-              y_label: currentChartConfig.y_label || '',
-              group_by: currentChartConfig.group_by || '',
+          y_label: currentChartConfig.y_label || '',
+          group_by: currentChartConfig.group_by || '',
+          mesure_ar: currentChartConfig.mesure_ar || '',
         });
         const updated = res.data;
         setSavedCharts(prev => prev.map(c => c.id === updated.id ? updated : c));
       } else {
         // Create new chart
-        const res = await axios.post(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/`, {
+        const res = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/charts/`, {
           type: currentChartConfig.type,
           x: currentChartConfig.x,
           y: currentChartConfig.y,
@@ -3095,9 +3286,11 @@ function App({ forceVisitor = false }) {
           filters: currentChartConfig.filters || [],
           visible_filters: currentChartConfig.visible_filters || [],
           title: currentChartConfig.title || '',
+          title_ar: currentChartConfig.title_ar || '',
           x_label: currentChartConfig.x_label || '',
-              y_label: currentChartConfig.y_label || '',
-              group_by: currentChartConfig.group_by || '',
+          y_label: currentChartConfig.y_label || '',
+          group_by: currentChartConfig.group_by || '',
+          mesure_ar: currentChartConfig.mesure_ar || '',
         });
         const created = res.data;
         setSavedCharts(prev => [...prev, created]);
@@ -3111,7 +3304,7 @@ function App({ forceVisitor = false }) {
       setSavedCharts(freshSubTheme.charts_config || []);
 
       setIsModalOpen(false);
-      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '', group_by: '' });
+      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', x_label: '', y_label: '', group_by: '' });
     } catch (err) {
       console.error('Erreur en sauvegarde du graphique', err);
       alert('Erreur lors de la sauvegarde du graphique');
@@ -3133,7 +3326,7 @@ function App({ forceVisitor = false }) {
         return;
       }
 
-      await axios.delete(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
+      await axios.delete(`${API_BASE}/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
       setSavedCharts(prev => prev.filter(c => c.id !== id));
       // refresh subtheme
       const themesRes = await axios.get(themesApiBase);
@@ -3150,7 +3343,7 @@ function App({ forceVisitor = false }) {
   const toggleCategoriePublication = async (categorieId, newVisibility) => {
     try {
       // Call toggle-visibility action to cascade to sous-thèmes
-      await axios.post(`http://127.0.0.1:8000/api/categories/${categorieId}/toggle-visibility/`, { is_visible: newVisibility });
+      await axios.post(`${API_BASE}/categories/${categorieId}/toggle-visibility/`, { is_visible: newVisibility });
       // Refresh themes and update selectedCategorie
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -3172,7 +3365,7 @@ function App({ forceVisitor = false }) {
 
   const toggleSubThemePublication = async (subThemeId, newVisibility) => {
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${subThemeId}/`, { is_visible: newVisibility });
+      await axios.patch(`${API_BASE}/sousthemes/${subThemeId}/`, { is_visible: newVisibility });
       // refresh themes and update selectedTheme/selectedSubTheme
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -3301,7 +3494,7 @@ function App({ forceVisitor = false }) {
     try {
       const cleanedImage = await makeThemeImageBackgroundTransparent(imageFile);
       const dataUrl = await fileToDataUrl(cleanedImage);
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { theme_image: dataUrl });
+      await axios.patch(`${API_BASE}/themes/${themeId}/`, { theme_image: dataUrl });
 
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -3332,7 +3525,7 @@ function App({ forceVisitor = false }) {
     if (!themeId) return;
     if (!confirm('Supprimer l\'image de ce thème ?')) return;
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${themeId}/`, { theme_image: null });
+      await axios.patch(`${API_BASE}/themes/${themeId}/`, { theme_image: null });
 
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -3521,7 +3714,7 @@ function App({ forceVisitor = false }) {
     });
 
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/themes/enregistrer_complet/', formData);
+      const res = await axios.post(`${API_BASE}/themes/enregistrer_complet/`, formData);
       const newTheme = res.data && res.data.theme;
       if (newTheme) {
         setThemes(prev => [...prev, newTheme]);
@@ -3542,7 +3735,7 @@ function App({ forceVisitor = false }) {
   const saveThemeMeta = async () => {
     if (!selectedTheme) return alert('Aucun thème sélectionné');
     try {
-      await axios.patch(`http://127.0.0.1:8000/api/themes/${selectedTheme.id}/`, themeMeta);
+      await axios.patch(`${API_BASE}/themes/${selectedTheme.id}/`, themeMeta);
       alert('Métadonnées sauvegardées');
       setShowThemeMeta(false);
       // refresh themes and selectedTheme
@@ -3566,7 +3759,7 @@ function App({ forceVisitor = false }) {
         return;
       }
 
-      await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, subThemeMeta);
+      await axios.patch(`${API_BASE}/sousthemes/${selectedSubTheme.id}/`, subThemeMeta);
       alert('Métadonnées du sous-thème sauvegardées');
       setShowSubThemeMeta(false);
       // refresh themes and selectedTheme + selectedSubTheme
@@ -3772,58 +3965,60 @@ function App({ forceVisitor = false }) {
           <h1 className={`text-white font-bold text-center tracking-wide leading-tight ${isVisitor ? 'text-[18px] md:text-[24px] w-full px-8 md:px-0 md:absolute md:left-1/2 md:-translate-x-1/2 md:w-[min(62vw,820px)] pointer-events-none break-words' : 'text-[24px] md:text-[32px] flex-1 min-w-0 break-words'}`}>
             {i18n.language === 'ar' ? 'قاعدة المعطيات الجهوية لبني ملال-خنيفرة' : 'Base de Données Région Béni Mellal-Khénifra'}
           </h1>
-          {/* Header search + language selector (visitor only) */}
-          {isVisitor && (
+          {/* Header search + language selector */}
+          {(isVisitor || pathHasAdmin || isSaisisseurRoute) && (
             <div className="flex items-center gap-2 shrink-0 min-w-0" style={{zIndex: 200}}>
-              <div
-                className="relative w-[150px] md:w-[210px]"
-                onFocus={() => setShowVisitorHeaderSearch(true)}
-                onBlur={(e) => {
-                  if (!e.currentTarget.contains(e.relatedTarget)) {
-                    setShowVisitorHeaderSearch(false);
-                  }
-                }}
-              >
-                <input
-                  type="text"
-                  dir={isArabicVisitor ? 'rtl' : 'ltr'}
-                  value={visitorHeaderSearch}
-                  onChange={(e) => setVisitorHeaderSearch(e.target.value)}
-                  placeholder={isArabicVisitor ? 'ابحث عن موضوع فرعي...' : 'Rechercher un sous-theme...'}
-                  className={`w-full h-9 text-sm ${isArabicVisitor ? 'pr-9 pl-3 text-right' : 'pl-9 pr-3 text-left'} bg-[#fffaf2] border border-[#B84C83] text-[#6B3150] rounded-md outline-none focus:border-[#7A0A4A]`}
-                />
-                <span className={`absolute ${isArabicVisitor ? 'right-3' : 'left-3'} top-1/2 -translate-y-1/2 text-[#7A0A4A]`}>⌕</span>
+              {isVisitor && (
+                <div
+                  className="relative w-[150px] md:w-[210px]"
+                  onFocus={() => setShowVisitorHeaderSearch(true)}
+                  onBlur={(e) => {
+                    if (!e.currentTarget.contains(e.relatedTarget)) {
+                      setShowVisitorHeaderSearch(false);
+                    }
+                  }}
+                >
+                  <input
+                    type="text"
+                    dir={isArabicVisitor ? 'rtl' : 'ltr'}
+                    value={visitorHeaderSearch}
+                    onChange={(e) => setVisitorHeaderSearch(e.target.value)}
+                    placeholder={isArabicVisitor ? 'ابحث عن موضوع فرعي...' : 'Rechercher un sous-thème...'}
+                    className={`w-full h-9 text-sm ${isArabicVisitor ? 'pr-9 pl-3 text-right' : 'pl-9 pr-3 text-left'} bg-[#fffaf2] border border-[#B84C83] text-[#6B3150] rounded-md outline-none focus:border-[#7A0A4A]`}
+                  />
+                  <span className={`absolute ${isArabicVisitor ? 'right-3' : 'left-3'} top-1/2 -translate-y-1/2 text-[#7A0A4A]`}>⌕</span>
 
-                {showVisitorHeaderSearch && headerSearchTerm && (
-                  <div className={`absolute ${isArabicVisitor ? 'left-0' : 'right-0'} mt-1 w-full bg-[#fffaf2] border border-[#B84C83] rounded-md shadow-lg max-h-72 overflow-y-auto`}>
-                    {visitorSubThemeSearchResults.length > 0 ? (
-                      visitorSubThemeSearchResults.map((result) => {
-                        const subLabel = isArabicVisitor ? (result.subNameAr || result.subNameFr) : (result.subNameFr || result.subNameAr);
-                        const themeLabel = isArabicVisitor ? (result.themeTitleAr || result.themeTitleFr) : (result.themeTitleFr || result.themeTitleAr);
-                        const catLabel = isArabicVisitor ? (result.catNameAr || result.catNameFr) : (result.catNameFr || result.catNameAr);
+                  {showVisitorHeaderSearch && headerSearchTerm && (
+                    <div className={`absolute ${isArabicVisitor ? 'left-0' : 'right-0'} mt-1 w-full bg-[#fffaf2] border border-[#B84C83] rounded-md shadow-lg max-h-72 overflow-y-auto`}>
+                      {visitorSubThemeSearchResults.length > 0 ? (
+                        visitorSubThemeSearchResults.map((result) => {
+                          const subLabel = isArabicVisitor ? (result.subNameAr || result.subNameFr) : (result.subNameFr || result.subNameAr);
+                          const themeLabel = isArabicVisitor ? (result.themeTitleAr || result.themeTitleFr) : (result.themeTitleFr || result.themeTitleAr);
+                          const catLabel = isArabicVisitor ? (result.catNameAr || result.catNameFr) : (result.catNameFr || result.catNameAr);
 
-                        return (
-                          <button
-                            key={`visitor-search-${result.subThemeId}`}
-                            type="button"
-                            onClick={() => openVisitorSubThemeFromHeader(result)}
-                            className={`w-full px-3 py-2 border-b border-[#E7C8DA] last:border-b-0 hover:bg-[#f7e8cf] ${isArabicVisitor ? 'text-right' : 'text-left'}`}
-                          >
-                            <div className="font-semibold text-[#6E001F] truncate">{subLabel}</div>
-                            <div className="text-xs text-[#7A0A4A] truncate">
-                              {catLabel ? `${themeLabel} - ${catLabel}` : themeLabel}
-                            </div>
-                          </button>
-                        );
-                      })
-                    ) : (
-                      <div className={`px-3 py-2 text-sm text-[#7A0A4A] ${isArabicVisitor ? 'text-right' : 'text-left'}`}>
-                        {isArabicVisitor ? 'لا توجد نتائج' : 'Aucun resultat'}
-                      </div>
-                    )}
-                  </div>
-                )}
-              </div>
+                          return (
+                            <button
+                              key={`visitor-search-${result.subThemeId}`}
+                              type="button"
+                              onClick={() => openVisitorSubThemeFromHeader(result)}
+                              className={`w-full px-3 py-2 border-b border-[#E7C8DA] last:border-b-0 hover:bg-[#f7e8cf] ${isArabicVisitor ? 'text-right' : 'text-left'}`}
+                            >
+                              <div className="font-semibold text-[#6E001F] truncate">{subLabel}</div>
+                              <div className="text-xs text-[#7A0A4A] truncate">
+                                {catLabel ? `${themeLabel} - ${catLabel}` : themeLabel}
+                              </div>
+                            </button>
+                          );
+                        })
+                      ) : (
+                        <div className={`px-3 py-2 text-sm text-[#7A0A4A] ${isArabicVisitor ? 'text-right' : 'text-left'}`}>
+                          {isArabicVisitor ? 'لا توجد نتائج' : 'Aucun résultat'}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
 
               <div className="relative shrink-0">
                 <LangSelector t={t} i18n={i18n} />
@@ -3945,7 +4140,7 @@ function App({ forceVisitor = false }) {
 
         <div className="px-8 pt-3 pb-10 flex-1 min-h-0 overflow-y-auto bg-white">
           
-          {/* GRILLE DES INDICATEURS (TOUS LES SOUS-THÈMES) */}
+          {/* GRILLE DES INDICATEURS (TOUS LES SOUS-THأˆMES) */}
           {activeMenu === 'Indicateurs' && (
             <div className="relative min-h-[400px]">
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -4213,7 +4408,7 @@ function App({ forceVisitor = false }) {
             </div>
           )}
 
-          {/* ÉTAPE 0 : GRILLE DES THÈMES */}
+          {/* ÉTAPE 0 : GRILLE DES THأˆMES */}
           {activeMenu === 'Themes' && formStep === 0 && (
             <div className="relative min-h-[400px]">
               <div className={isVisitor ? 'grid grid-cols-3 gap-4' : 'grid grid-cols-3 gap-2'}>
@@ -4244,7 +4439,7 @@ function App({ forceVisitor = false }) {
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded text-xs font-bold">🚫</div>
                       )}
                       
-                      {/* IMAGE À GAUCHE */}
+                      {/* IMAGE أ€ GAUCHE */}
                       {t.theme_image && (
                         <div className="flex-shrink-0">
                           <img
@@ -4255,7 +4450,7 @@ function App({ forceVisitor = false }) {
                         </div>
                       )}
                       
-                      {/* NUMÉRO ET TITRE À DROITE */}
+                      {/* NUMÉRO ET TITRE أ€ DROITE */}
                       <div className="flex-1 min-w-0">
                         <div className={`font-extrabold text-2xl mb-1 ${t.archived ? 'text-white' : 'text-[#5E0738]'}`}>
                           {String(i + 1).padStart(2, '0')}
@@ -4394,7 +4589,7 @@ function App({ forceVisitor = false }) {
                           setActionMenuPos({ left, top }); 
                           setOpenActionMenu(openActionMenu === t.id ? null : t.id); 
                           setOpenThemeMenu(null); 
-                        }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
+                        }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">✎</button>
                       )}
 
                       <div>
@@ -4410,7 +4605,7 @@ function App({ forceVisitor = false }) {
                               const left = spaceRight > menuWidth ? rect.left : rect.right - menuWidth;
                               setThemeMenuPos({ left, top });
                               setOpenThemeMenu(openThemeMenu === t.id ? null : t.id);
-                            }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                            }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">⚙</button>
                         )}
                       </div>
                     </div>
@@ -4662,7 +4857,7 @@ function App({ forceVisitor = false }) {
                    {themeImagePreview && (
                      <div className="flex items-center gap-3">
                        <div className="w-12 h-12 border border-gray-300 rounded-sm bg-[#7A0A4A] flex items-center justify-center overflow-hidden">
-                         <img src={themeImagePreview} alt="Aperçu" className="w-10 h-10 object-contain" />
+                         <img src={themeImagePreview} alt="Aperأ§u" className="w-10 h-10 object-contain" />
                        </div>
                        <button
                          type="button"
@@ -4769,13 +4964,13 @@ function App({ forceVisitor = false }) {
                  <label className="text-xl w-64 font-bold">Statut de publication</label>
                  <select className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none" 
                    onChange={e => setThemeData({...themeData, statut: e.target.value})}>
-                   <option value="Public">Public 📢</option>
+                   <option value="Public">Public 🌍</option>
                    <option value="Privé">Privé 🔒</option>
                  </select>
                </div>
                <div className="flex justify-end gap-4 mt-10">
                  <button onClick={() => { setFormStep(0); setThemeImageFile(null); setThemeImagePreview(''); setRows([]); }} className="bg-[#f28a8a] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Annuler</button>
-                 <button onClick={goToTable} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Suivant ➡</button>
+                 <button onClick={goToTable} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Suivant →</button>
                </div>
              </div>
           )}
@@ -4815,7 +5010,7 @@ function App({ forceVisitor = false }) {
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.periodicite} onChange={e => {const r = [...rows]; r[globalIdx].periodicite = e.target.value; setRows(r);}} /></td>
                                  <td className="p-1 text-center bg-gray-50">
                                    <label className="cursor-pointer">
-                                     <span className="text-2xl">📤</span>
+                                     <span className="text-2xl">📄</span>
                                      <input type="file" className="hidden" onChange={e => {const r = [...rows]; r[globalIdx].file = e.target.files[0]; setRows(r);}} />
                                      {row.file && <div className="text-[10px] text-green-600 font-bold">OK</div>}
                                    </label>
@@ -4851,7 +5046,7 @@ function App({ forceVisitor = false }) {
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.periodicite} onChange={e => {const r = [...rows]; r[i].periodicite = e.target.value; setRows(r);}} /></td>
                            <td className="p-1 text-center bg-gray-50">
                              <label className="cursor-pointer">
-                               <span className="text-2xl">📤</span>
+                               <span className="text-2xl">📄</span>
                                <input type="file" className="hidden" onChange={e => {const r = [...rows]; r[i].file = e.target.files[0]; setRows(r);}} />
                                {row.file && <div className="text-[10px] text-green-600 font-bold">OK</div>}
                              </label>
@@ -4864,12 +5059,12 @@ function App({ forceVisitor = false }) {
                )}
                <div className="p-4 flex justify-between bg-gray-50 rounded-lg border-2 border-black">
                  <button onClick={() => setFormStep(1)} className="bg-[#ffb366] text-white px-8 py-2 rounded-lg border-2 border-black font-bold shadow-md">⬅ Précédent</button>
-                 <button onClick={handleFinalSubmit} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Enregistrer ➡</button>
+                 <button onClick={handleFinalSubmit} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Enregistrer →</button>
                </div>
              </div>
           )}
 
-          {/* ÉTAPE 3 : LISTE DES SOUS-THÈMES */}
+          {/* ÉTAPE 3 : LISTE DES SOUS-THأˆMES */}
           {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
             <div className="space-y-2">
               {canEdit && userRole === 'ADMIN' && (
@@ -4891,7 +5086,7 @@ function App({ forceVisitor = false }) {
                         }}
                         className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
                       >
-                        <option value="Public">Public 📢</option>
+                        <option value="Public">Public 🌍</option>
                         <option value="Privé">Privé 🔒</option>
                       </select>
                     )}
@@ -4912,7 +5107,7 @@ function App({ forceVisitor = false }) {
                         }}
                         className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
                       >
-                        <option value="Public">Public 📢</option>
+                        <option value="Public">Public 🌍</option>
                         <option value="Privé">Privé 🔒</option>
                       </select>
                     )}
@@ -4968,7 +5163,7 @@ function App({ forceVisitor = false }) {
                             setOpenThemeMenu(null);
                             setOpenSubThemeMenu(null);
                             setOpenCategorieMenu(null); 
-                          }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
+                          }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">✎</button>
                           <button onClick={(e) => { 
                             e.stopPropagation(); 
                             const rect = e.currentTarget.getBoundingClientRect(); 
@@ -4984,7 +5179,7 @@ function App({ forceVisitor = false }) {
                             setOpenActionMenu(null); 
                             setOpenThemeMenu(null);
                             setOpenCategorieMenu(null);
-                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">⚙</button>
                         </div>
                       )}
                       {canEdit && userRole === 'ADMIN' && (
@@ -5000,7 +5195,7 @@ function App({ forceVisitor = false }) {
                         onClick={() => setSelectedVisitorCategoryId('all')}
                         className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center gap-2 ${selectedVisitorCategoryId === 'all' ? 'bg-[#7A0A4A] text-white border-[#B03372]' : 'bg-[#7A0A4A] text-white/90 border-[#A85A84] hover:bg-[#5E0738]'}`}
                       >
-                        <span className="text-[12px]">⏷</span>
+                        <span className="text-[12px]">▸</span>
                         <span>{t('all')}</span>
                       </button>
                       {selectedTheme.categories
@@ -5013,7 +5208,7 @@ function App({ forceVisitor = false }) {
                             className={`w-full text-left px-3 py-2 rounded-sm border font-bold text-[16px] uppercase tracking-wide transition-colors flex items-center justify-between gap-2 ${String(selectedVisitorCategoryId) === String(cat.id) ? 'bg-[#7A0A4A] text-white border-[#B03372]' : 'bg-[#7A0A4A] text-white/90 border-[#A85A84] hover:bg-[#5E0738]'}`}
                           >
                             <span className="flex items-center gap-2 min-w-0">
-                              <span className="text-[12px] shrink-0">⏷</span>
+                              <span className="text-[12px] shrink-0">▸</span>
                               <span className="truncate">{getCategoryDisplayName(cat)}</span>
                             </span>
                             <span className="text-[12px] opacity-90">↗</span>
@@ -5082,7 +5277,7 @@ function App({ forceVisitor = false }) {
                                     setOpenThemeMenu(null);
                                     setOpenSubThemeMenu(null);
                                     setOpenCategorieMenu(null);
-                                  }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
+                                  }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">✎</button>
                                   <button onClick={(e) => {
                                     e.stopPropagation();
                                     const rect = e.currentTarget.getBoundingClientRect();
@@ -5098,7 +5293,7 @@ function App({ forceVisitor = false }) {
                                     setOpenActionMenu(null);
                                     setOpenThemeMenu(null);
                                     setOpenCategorieMenu(null);
-                                  }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                                  }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">⚙</button>
                                 </div>
                               )}
                               {canEdit && userRole === 'ADMIN' && (
@@ -5113,7 +5308,7 @@ function App({ forceVisitor = false }) {
                 // Affichage sans catégories (thèmes classiques)
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                   {selectedTheme.sous_themes && selectedTheme.sous_themes
-                    .filter(st => st.nom.toLowerCase().includes(searchSubTheme.toLowerCase()))
+                    .filter(st => getSubThemeDisplayName(st).toLowerCase().includes(searchSubTheme.toLowerCase()))
                     .filter(st => isSubThemeVisibleForCurrentRole(st))
                     .map((st, i) => (
                     <div 
@@ -5136,7 +5331,7 @@ function App({ forceVisitor = false }) {
                         <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                       )}
                       <div className="text-[20px] leading-tight">
-                        <span>{st.nom}</span>
+                        <span>{getSubThemeDisplayName(st)}</span>
                       </div>
                       {canEdit && userRole === 'ADMIN' && (
                         <div className="flex justify-center gap-2 mt-4 text-black">
@@ -5153,7 +5348,7 @@ function App({ forceVisitor = false }) {
                             setOpenSubActionMenu(openSubActionMenu === st.id ? null : st.id); 
                             setOpenActionMenu(null); 
                             setOpenThemeMenu(null); 
-                          }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">📝</button>
+                          }} className="bg-[#B89C5A] p-1 border border-black rounded shadow">✎</button>
                           <button onClick={(e) => { 
                             e.stopPropagation(); 
                             const rect = e.currentTarget.getBoundingClientRect(); 
@@ -5168,7 +5363,7 @@ function App({ forceVisitor = false }) {
                             setOpenSubActionMenu(null); 
                             setOpenActionMenu(null); 
                             setOpenThemeMenu(null); 
-                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">📂</button>
+                          }} className="bg-[#f0a38e] p-1 border border-black rounded shadow">⚙</button>
                         </div>
                       )}
                       {canEdit && userRole === 'ADMIN' && (
@@ -5181,7 +5376,7 @@ function App({ forceVisitor = false }) {
             </div>
           )}
 
-          {/* ÉTAPE 4 : DÉTAILS SOUS-THÈME DÉVELOPPÉ */}
+          {/* ÉTAPE 4 : DÉTAILS SOUS-THأˆME DÉVELOPPÉ */}
           {activeMenu === 'Themes' && formStep === 4 && selectedSubTheme && (
             <div className={`${isVisitor ? 'bg-white border border-[#b56695] shadow-[0_8px_24px_rgba(106,31,82,0.18)]' : 'bg-white border border-[#b8d4e3] shadow-[0_8px_24px_rgba(16,78,116,0.12)]'} p-6 rounded-2xl space-y-6`}>
               
@@ -5238,7 +5433,7 @@ function App({ forceVisitor = false }) {
                       }}
                       className="bg-[#df4a4a] text-white px-4 py-2 rounded-xl border border-[#9a2d2d] font-bold shadow-sm hover:bg-[#c93b3b]"
                     >
-                      ⚙️ Visiteur
+                      ⚙ Visiteur
                     </button>
                   )}
 
@@ -5276,7 +5471,7 @@ function App({ forceVisitor = false }) {
                             let assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
                             if (!assignment?.id) {
                               const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
-                              const refreshResp = await axios.get('http://127.0.0.1:8000/api/user-theme-assignments/', saisisseurRequestConfig);
+                              const refreshResp = await axios.get(`${API_BASE}/user-theme-assignments/`, saisisseurRequestConfig);
                               const myAssignments = (refreshResp.data || []).filter((a) => String(a.user) === String(userId) && a.sous_theme);
                               setSaisisseurAssignments(myAssignments);
                               assignment = myAssignments.find((a) => String(a.sous_theme) === String(selectedSubTheme.id));
@@ -5287,7 +5482,7 @@ function App({ forceVisitor = false }) {
                             }
 
                             const submitRes = await axios.post(
-                              `http://127.0.0.1:8000/api/user-theme-assignments/${assignment.id}/submit/`,
+                              `${API_BASE}/user-theme-assignments/${assignment.id}/submit/`,
                               {
                                 message: 'Soumission depuis l\'éditeur du sous-thème',
                                 progression: 100,
@@ -5303,7 +5498,7 @@ function App({ forceVisitor = false }) {
                         }}
                         className="bg-blue-600 text-white px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-blue-700"
                       >
-                        📤 Envoyer au admin
+                        📄 Envoyer au admin
                       </button>
                     </>
                   )}
@@ -5347,7 +5542,7 @@ function App({ forceVisitor = false }) {
                 {/* FILTRES DYNAMIQUES - basés sur filtres_disponibles */}
                 {filtersForRender && filtersForRender.length > 0 && (
                   <div className={`${isVisitor ? 'bg-white border-[#B88FA4]' : 'bg-white border-[#CCB47F]'} border rounded-lg p-3 space-y-3 w-fit shadow-sm`}>
-                    <h3 className={`font-bold text-sm ${isVisitor ? 'text-[#5E0738]' : 'text-blue-900'}`}>🔍 {t('filters_available')}</h3>
+                    <h3 className={`font-bold text-sm ${isVisitor ? 'text-[#5E0738]' : 'text-blue-900'}`}>🔎 {t('filters_available')}</h3>
                     <div className="flex flex-wrap gap-3">
                       {filtersForRender.map(filterCol => (
                         <div key={filterCol} className="relative">
@@ -5739,70 +5934,80 @@ function App({ forceVisitor = false }) {
 
                     return chartsToRender.map((chart) => {
                       const baseChartData = getFilteredChartData(chart);
+                    // Resolve stored column names → current-language keys (rows use localized keys in AR mode)
+                    const chartXKey = getLocalizedColumnLabel(chart.x);
+                    const chartYKey = chart.y ? getLocalizedColumnLabel(chart.y) : '';
+                    const chartGroupByKey = chart.group_by ? getLocalizedColumnLabel(chart.group_by) : '';
+                    const chartXAxisLabel = translateDataValue(chart.x_label || chart.x);
+                    const chartYAxisLabel = translateDataValue(chart.y_label || (selectedSubTheme?.type_unite || ''));
+                    const chartTitle = (isArabicDataView && chart.title_ar) ? chart.title_ar : chart.title;
+                    const chartMesure = (isArabicDataView && chart.mesure_ar) ? chart.mesure_ar : chart.mesure;
                     // Apply per-chart visitor-only filters (do not affect table)
                     const visitorFiltersList = chart.visible_filters || [];
                     const visitorValues = chartVisitorFilters[chart.id] || {};
                     let chartData = baseChartData;
                     if (visitorFiltersList && visitorFiltersList.length > 0) {
-                      // normalize list to objects with column/default
                       const norm = visitorFiltersList.map(item => (typeof item === 'string' ? { column: item, default: '' } : item || {}));
                       norm.forEach(vf => {
                         const col = vf.column;
+                        const colKey = getLocalizedColumnLabel(col);
                         const val = visitorValues[col] !== undefined ? visitorValues[col] : (vf.default || '');
-                        if (col && val) {
-                          chartData = chartData.filter(row => String(row[col] ?? '') === String(val));
+                        const localizedVal = isArabicDataView ? getLocalizedValueLabel(col, val) : val;
+                        if (col && (val || localizedVal)) {
+                          chartData = chartData.filter(row => {
+                            const rowVal = String(row[colKey] ?? row[col] ?? '');
+                            return rowVal === String(val) || rowVal === String(localizedVal);
+                          });
                         }
                       });
                     }
 
                     // If chart defines a grouping column, prepare multi-series data
                     let multiSeries = null;
-                    if (chart.group_by) {
-                      const groupCol = chart.group_by;
-                      const groupValues = Array.from(new Set((chartData || []).map(r => String(r[groupCol] ?? '')))).filter(g => g !== '');
-                      const xValues = Array.from(new Set((chartData || []).map(r => String(r[chart.x] ?? '')))).sort();
-                      const aggregation = {}; // aggregation[x][group] = sum
+                    if (chartGroupByKey) {
+                      const groupValues = Array.from(new Set((chartData || []).map(r => String(r[chartGroupByKey] ?? '')))).filter(g => g !== '');
+                      const xValues = Array.from(new Set((chartData || []).map(r => String(r[chartXKey] ?? '')))).sort();
+                      const aggregation = {};
                       (chartData || []).forEach(r => {
-                        const xVal = String(r[chart.x] ?? 'N/A');
-                        const g = String(r[groupCol] ?? 'N/A');
-                        const raw = r[chart.y];
+                        const xVal = String(r[chartXKey] ?? 'N/A');
+                        const g = String(r[chartGroupByKey] ?? 'N/A');
+                        const raw = r[chartYKey];
                         const val = raw === null || raw === undefined || raw === '' ? 0 : parseFloat(String(raw).replace(/,/g, '.')) || 0;
                         aggregation[xVal] = aggregation[xVal] || {};
                         aggregation[xVal][g] = (aggregation[xVal][g] || 0) + val;
                       });
-
                       const seriesData = xValues.map(xVal => {
-                        const obj = { [chart.x]: xVal };
+                        const obj = { [chartXKey]: xVal };
                         groupValues.forEach(g => { obj[g] = (aggregation[xVal] && aggregation[xVal][g]) ? aggregation[xVal][g] : 0; });
                         return obj;
                       });
-
-                      // For scatter we prepare per-group arrays
                       const seriesScatterData = {};
                       groupValues.forEach(g => {
-                        seriesScatterData[g] = xValues.map(xVal => ({ [chart.x]: xVal, [chart.y]: (aggregation[xVal] && aggregation[xVal][g]) ? aggregation[xVal][g] : 0 }));
+                        seriesScatterData[g] = xValues.map(xVal => ({
+                          [chartXKey]: xVal,
+                          [chartYKey]: (aggregation[xVal] && aggregation[xVal][g]) ? aggregation[xVal][g] : 0,
+                        }));
                       });
-
                       multiSeries = { seriesData, groupValues, seriesScatterData };
                     }
 
-                    // ── Arabic translation: translate x-axis values and group labels ──
-                    if (isArabicVisitor) {
+                    // Translate x-axis category values and group labels for Arabic display
+                    if (isArabicDataView) {
                       if (chartData) {
                         chartData = chartData.map(r => {
                           const row = { ...r };
-                          if (chart.x && row[chart.x] !== undefined) {
-                            row[chart.x] = DATA_TRANSLATIONS_FR_AR[String(row[chart.x])] ?? row[chart.x];
+                          if (chartXKey && row[chartXKey] !== undefined) {
+                            row[chartXKey] = translateDataValue(row[chartXKey]);
                           }
                           return row;
                         });
                       }
                       if (multiSeries) {
                         const origGroups = multiSeries.groupValues;
-                        const transGroups = origGroups.map(g => DATA_TRANSLATIONS_FR_AR[g] ?? g);
+                        const transGroups = origGroups.map(g => translateDataValue(g));
                         const newSeriesData = multiSeries.seriesData.map(r => {
                           const row = {};
-                          row[chart.x] = DATA_TRANSLATIONS_FR_AR[String(r[chart.x] || '')] ?? r[chart.x];
+                          row[chartXKey] = translateDataValue(r[chartXKey]);
                           origGroups.forEach((g, i) => { row[transGroups[i]] = r[g]; });
                           return row;
                         });
@@ -5810,7 +6015,7 @@ function App({ forceVisitor = false }) {
                         origGroups.forEach((g, i) => {
                           newScatterData[transGroups[i]] = (multiSeries.seriesScatterData[g] || []).map(d => ({
                             ...d,
-                            [chart.x]: DATA_TRANSLATIONS_FR_AR[String(d[chart.x] || '')] ?? d[chart.x],
+                            [chartXKey]: translateDataValue(d[chartXKey]),
                           }));
                         });
                         multiSeries = { ...multiSeries, groupValues: transGroups, seriesData: newSeriesData, seriesScatterData: newScatterData };
@@ -5829,14 +6034,17 @@ function App({ forceVisitor = false }) {
                         {/* Visitor-visible filters controls (only shown when configured) */}
                         {visitorFiltersList && visitorFiltersList.length > 0 && (
                           <div className="mb-4 p-3 bg-[#fff8ef] border border-[#e5cf9d] rounded-xl inline-block max-w-full">
-                            <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Filtres du graphe</div>
+                            <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">
+                              {isArabicDataView ? 'مرشحات المخطط' : 'Filtres du graphe'}
+                            </div>
                             <div className="flex flex-wrap items-center gap-2">
                             {(visitorFiltersList || []).map((vf, idx) => {
                               const col = (typeof vf === 'string') ? vf : (vf && vf.column) || '';
+                              const colLabel = isArabicDataView ? getLocalizedColumnLabel(col) : col;
                               const currentVal = (chartVisitorFilters[chart.id] || {})[col] || (vf && vf.default) || '';
                               return (
                                 <div key={`${chart.id}-vf-${idx}`} className="flex items-center gap-1.5">
-                                  <label className="font-semibold text-xs text-[#4d1734] shrink-0">{col || 'Colonne'}</label>
+                                  <label className="font-semibold text-xs text-[#4d1734] shrink-0">{colLabel || 'Colonne'}</label>
                                   <select
                                     className="min-w-[140px] max-w-[220px] px-2.5 py-1.5 border border-[#d3b883] rounded-md bg-white text-[#4d1734] text-sm font-medium outline-none focus:border-[#7A0A4A] focus:ring-1 focus:ring-[#f0d6e4]"
                                     value={currentVal}
@@ -5847,8 +6055,8 @@ function App({ forceVisitor = false }) {
                                       setChartVisitorFilters(newMap);
                                     }}
                                   >
-                                    <option value="">-- Tous --</option>
-                                    {col && getUniqueValuesForColumn(col).map(v => <option key={v} value={v}>{v}</option>)}
+                                    <option value="">{isArabicDataView ? '-- الكل --' : '-- Tous --'}</option>
+                                    {col && getUniqueValuesForColumn(col).map(v => <option key={v} value={v}>{isArabicDataView ? translateDataValue(v) : v}</option>)}
                                   </select>
                                 </div>
                               );
@@ -5857,11 +6065,11 @@ function App({ forceVisitor = false }) {
                           </div>
                         )}
 
-                        {chart.title && (
-                          <h3 className="text-2xl md:text-[30px] font-extrabold text-center mb-3 text-[#4d1734]">{chart.title}</h3>
+                        {chartTitle && (
+                          <h3 className="text-2xl md:text-[30px] font-extrabold text-center mb-3 text-[#4d1734]">{chartTitle}</h3>
                         )}
 
-                        <div className="h-64 w-full mt-4 bg-white border border-[#eedab0] rounded-xl p-2">
+                        <div className={`${chartContainerHeightClass} w-full mt-4 bg-white border border-[#eedab0] rounded-xl p-3 md:p-4`}>
                           <ResponsiveContainer width="100%" height="100%">
                             {chart.type === 'Histogramme' ? (
                               multiSeries ? (
@@ -5870,8 +6078,8 @@ function App({ forceVisitor = false }) {
                                   return (
                                     <BarChart data={multiSeries.seriesData}>
                                       <CartesianGrid strokeDasharray="3 3" />
-                                      <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
-                                      <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                      <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
+                                      <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                       <Tooltip content={<CustomTooltip />} />
                                       <Legend />
                                       {multiSeries.groupValues.map((g, idx) => (
@@ -5883,10 +6091,10 @@ function App({ forceVisitor = false }) {
                               ) : (
                                 <BarChart data={chartData} barCategoryGap="18%" barGap={6}>
                                   <CartesianGrid strokeDasharray="3 3" />
-                                  <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
-                                  <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                  <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
+                                  <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
-                                  <Bar dataKey={chart.y} fill="#7A0A4A" />
+                                  <Bar dataKey={chartYKey} fill="#7A0A4A" />
                                 </BarChart>
                               )
                             ) : chart.type === 'Courbes' ? (
@@ -5896,8 +6104,8 @@ function App({ forceVisitor = false }) {
                                   return (
                                     <LineChart data={multiSeries.seriesData}>
                                       <CartesianGrid strokeDasharray="3 3" />
-                                      <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
-                                      <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                      <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
+                                      <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                       <Tooltip content={<CustomTooltip />} />
                                       <Legend />
                                       {multiSeries.groupValues.map((g, idx) => (
@@ -5909,10 +6117,10 @@ function App({ forceVisitor = false }) {
                               ) : (
                                 <LineChart data={chartData}>
                                   <CartesianGrid strokeDasharray="3 3" />
-                                  <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
-                                  <YAxis label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                  <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
+                                  <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
-                                  <Line type="monotone" dataKey={chart.y} stroke="#7A0A4A" strokeWidth={3} />
+                                  <Line type="monotone" dataKey={chartYKey} stroke="#7A0A4A" strokeWidth={3} />
                                 </LineChart>
                               )
                             ) : chart.type === 'Nuage de points' ? (
@@ -5922,8 +6130,8 @@ function App({ forceVisitor = false }) {
                                   return (
                                     <ScatterChart>
                                       <CartesianGrid strokeDasharray="3 3" />
-                                      <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
-                                      <YAxis dataKey={chart.y} label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                      <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
+                                      <YAxis dataKey={chartYKey} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                       <Tooltip content={<CustomTooltip />} />
                                       <Legend />
                                       {multiSeries.groupValues.map((g, idx) => (
@@ -5935,8 +6143,8 @@ function App({ forceVisitor = false }) {
                               ) : (
                                 <ScatterChart>
                                   <CartesianGrid strokeDasharray="3 3" />
-                                  <XAxis dataKey={chart.x} label={{ value: chart.x_label || chart.x, position: 'insideBottom', offset: -5 }} />
-                                  <YAxis dataKey={chart.y} label={{ value: chart.y_label || selectedSubTheme.type_unite || '', angle: -90, position: 'insideLeft' }} />
+                                  <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
+                                  <YAxis dataKey={chartYKey} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
                                   <Scatter data={chartData} fill="#7A0A4A" />
                                 </ScatterChart>
@@ -5945,7 +6153,6 @@ function App({ forceVisitor = false }) {
                               (() => {
                                 const map = {};
                                 if (multiSeries) {
-                                  // aggregate across all X to get totals per group
                                   const pieData = multiSeries.groupValues.map(g => {
                                     let total = 0;
                                     multiSeries.seriesData.forEach(d => { total += Number(d[g] || 0); });
@@ -5953,8 +6160,8 @@ function App({ forceVisitor = false }) {
                                   }).filter(d => d.value > 0);
                                   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
                                   return (
-                                    <PieChart>
-                                      <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8" label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                                    <PieChart margin={{ top: 28, right: 96, bottom: 44, left: 96 }}>
+                                      <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={92} fill="#8884d8" labelLine={{ stroke: '#b45309', strokeWidth: 1.25 }} label={renderPieChartLabel}>
                                         {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
                                       </Pie>
                                         <Tooltip content={<CustomTooltip />} />
@@ -5963,15 +6170,15 @@ function App({ forceVisitor = false }) {
                                   );
                                 }
                                 chartData.forEach(r => {
-                                  const key = r[chart.x] ?? 'N/A';
-                                  const val = parseFloat(r[chart.y]) || 0;
+                                  const key = r[chartXKey] ?? 'N/A';
+                                  const val = parseFloat(r[chartYKey]) || 0;
                                   map[key] = (map[key] || 0) + val;
                                 });
                                 const pieData = Object.keys(map).map(k => ({ name: k, value: map[k] }));
                                 const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91'];
                                 return (
-                                  <PieChart>
-                                    <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={80} fill="#8884d8" label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}>
+                                  <PieChart margin={{ top: 28, right: 96, bottom: 44, left: 96 }}>
+                                    <Pie dataKey="value" data={pieData} nameKey="name" outerRadius={92} fill="#8884d8" labelLine={{ stroke: '#b45309', strokeWidth: 1.25 }} label={renderPieChartLabel}>
                                       {pieData.map((entry, idx) => <Cell key={`cell-${idx}`} fill={COLORS[idx % COLORS.length]} />)}
                                     </Pie>
                                     <Tooltip content={<CustomTooltip />} />
@@ -5983,9 +6190,9 @@ function App({ forceVisitor = false }) {
                             )}
                           </ResponsiveContainer>
                         </div>
-                        {chart.mesure && (
+                        {chartMesure && (
                           <div className="mt-4 px-4 py-3 bg-[#f7f8fb] border border-[#d8dee9] rounded-lg text-sm text-[#4b5563] italic">
-                            {chart.mesure}
+                            {chartMesure}
                           </div>
                         )}
                       </div>
@@ -5998,7 +6205,7 @@ function App({ forceVisitor = false }) {
                 {canEdit && (
                   <button 
                     onClick={() => {
-                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', x_label: '', y_label: '' });
+                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', x_label: '', y_label: '' });
                       setIsModalOpen(true);
                     }}
                     className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
@@ -6210,7 +6417,7 @@ function App({ forceVisitor = false }) {
                     return;
                   }
 
-                  await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${selectedSubTheme.id}/`, {
+                  await axios.patch(`${API_BASE}/sousthemes/${selectedSubTheme.id}/`, {
                     niveau_geo: advancedConfig.niveau_geo,
                     type_unite: advancedConfig.type_unite,
                     est_sommable: advancedConfig.est_sommable,
@@ -6328,22 +6535,6 @@ function App({ forceVisitor = false }) {
                     return String(val);
                   };
 
-                  const parseInputToObject = (txt) => {
-                    if (!txt && txt !== '') return {};
-                    if (typeof txt === 'object') return txt;
-                    try { return JSON.parse(txt); } catch (_) {}
-                    const obj = {};
-                    const parts = String(txt).split(',').map(p => p.trim()).filter(Boolean);
-                    parts.forEach(part => {
-                      const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
-                      if (sep) {
-                        const [k, v] = part.split(sep).map(s => s.trim());
-                        if (k && v) obj[k] = v;
-                      }
-                    });
-                    return obj;
-                  };
-
                   return (
                     <input
                       className="w-full p-2 border-2 border-black rounded"
@@ -6361,29 +6552,12 @@ function App({ forceVisitor = false }) {
               <button onClick={() => setConfigModalOpen(false)} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
               <button onClick={async () => {
                 try {
-                  // normalize modalVisitorDefaultFilters before sending
-                  let parsedDefaults = modalVisitorDefaultFilters;
-                  if (typeof parsedDefaults === 'string' && parsedDefaults.trim()) {
-                    try {
-                      parsedDefaults = JSON.parse(parsedDefaults);
-                    } catch (e) {
-                      const obj = {};
-                      const parts = parsedDefaults.split(',').map(p => p.trim()).filter(Boolean);
-                      parts.forEach(part => {
-                        const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
-                        if (sep) {
-                          const [k, v] = part.split(sep).map(s => s.trim());
-                          if (k && v) obj[k] = v;
-                        }
-                      });
-                      if (Object.keys(obj).length > 0) parsedDefaults = obj;
-                    }
-                  }
+                  const parsedDefaults = canonicalizeVisitorDefaults(modalVisitorDefaultFilters);
 
                   // parse the text fields into arrays (only on save)
-                  const parsedCols = String(modalVisitorColsText || '').split(',').map(s => s.trim()).filter(s => s !== '');
-                  const parsedFilters = String(modalVisitorFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== '');
-                  const parsedHierarchy = String(modalVisitorHierarchyText || '').split(',').map(s => s.trim()).filter(s => s !== '');
+                  const parsedCols = normalizeConfiguredColumns(String(modalVisitorColsText || '').split(',').map(s => s.trim()).filter(s => s !== ''));
+                  const parsedFilters = normalizeConfiguredColumns(String(modalVisitorFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== ''));
+                  const parsedHierarchy = normalizeConfiguredColumns(String(modalVisitorHierarchyText || '').split(',').map(s => s.trim()).filter(s => s !== ''));
 
                   const payload = {
                     visitor_visible_columns: parsedCols,
@@ -6399,11 +6573,11 @@ function App({ forceVisitor = false }) {
                     showToast('Configuration visiteur enregistrée (en attente de validation admin)', 'success');
                   } else {
                     // Admin: apply directly to the SousTheme
-                    await axios.patch(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`, payload);
+                    await axios.patch(`${API_BASE}/sousthemes/${configSubTheme.id}/`, payload);
                     showToast('Configuration visiteur enregistrée', 'success');
                     // fetch the updated sous-thème and update local state so the view refreshes immediately
                     try {
-                      const freshRes = await axios.get(`http://127.0.0.1:8000/api/sousthemes/${configSubTheme.id}/`);
+                      const freshRes = await axios.get(`${API_BASE}/sousthemes/${configSubTheme.id}/`);
                       const freshSubTheme = freshRes.data;
                       selectSubTheme(freshSubTheme);
                       // also refresh the themes list to keep things in sync
@@ -6413,7 +6587,7 @@ function App({ forceVisitor = false }) {
                       if (freshTheme) setSelectedTheme(freshTheme);
                       // additionally refresh public themes so visitor view can update if needed
                       try {
-                        const pub = await axios.get('http://127.0.0.1:8000/api/public-themes/');
+                        const pub = await axios.get(`${API_BASE}/public-themes/`);
                         setPublicThemes(pub.data);
                         if (typeof window !== 'undefined' && window.location.pathname.includes('/visiteur')) {
                           setThemes(pub.data);
@@ -6432,12 +6606,15 @@ function App({ forceVisitor = false }) {
                   }
 
                   // update modal state to reflect saved values
-                  setModalVisitorCols(parsedCols);
-                  setModalVisitorFilters(parsedFilters);
-                  setModalVisitorHierarchy(parsedHierarchy);
-                  setModalVisitorColsText(parsedCols.join(', '));
-                  setModalVisitorFiltersText(parsedFilters.join(', '));
-                  setModalVisitorHierarchyText(parsedHierarchy.join(', '));
+                  const displayCols = localizeConfiguredColumns(parsedCols, 'fr');
+                  const displayFilters = localizeConfiguredColumns(parsedFilters, 'fr');
+                  const displayHierarchy = localizeConfiguredColumns(parsedHierarchy, 'fr');
+                  setModalVisitorCols(displayCols);
+                  setModalVisitorFilters(displayFilters);
+                  setModalVisitorHierarchy(displayHierarchy);
+                  setModalVisitorColsText(displayCols.join(', '));
+                  setModalVisitorFiltersText(displayFilters.join(', '));
+                  setModalVisitorHierarchyText(displayHierarchy.join(', '));
                   setVisitorTableView(modalVisitorDefaultView === 'vertical' ? 'vertical' : 'horizontal');
                   setConfigModalOpen(false);
                 } catch (err) {
@@ -6460,7 +6637,7 @@ function App({ forceVisitor = false }) {
               if (!managedChart) {
                 return (
                   <div className="text-center">
-                    <p className="text-red-600 font-bold">⚠️ Graphique non trouvé</p>
+                    <p className="text-red-600 font-bold">⚠ Graphique non trouvé</p>
                     <p className="text-gray-700 mb-2">ID: {manageRowsModalChartId}</p>
                     <p className="text-gray-600 text-sm mb-4">Graphiques: {savedCharts.length}</p>
                     <button onClick={() => setManageRowsModalChartId(null)} className="bg-gray-200 px-4 py-2 border-2 border-black rounded font-bold">Fermer</button>
@@ -6813,3 +6990,8 @@ function App({ forceVisitor = false }) {
 }
 
 export default App;
+
+
+
+
+

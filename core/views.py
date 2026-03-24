@@ -8,6 +8,7 @@ import unicodedata
 import pandas as pd
 import string
 import random
+from collections import defaultdict
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
@@ -26,6 +27,62 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+
+ARABIC_CHAR_RE = re.compile(r'[\u0600-\u06FF]')
+
+SEMANTIC_LABELS = {
+    'year': {'fr': 'Annee', 'ar': 'السنة'},
+    'value': {'fr': 'Valeur', 'ar': 'القيمة'},
+    'province': {'fr': 'Province', 'ar': 'الإقليم'},
+    'region': {'fr': 'Region', 'ar': 'الجهة'},
+    'milieu': {'fr': 'Milieu', 'ar': 'الوسط'},
+    'sexe': {'fr': 'Sexe', 'ar': 'الجنس'},
+    'etat_matrimonial': {'fr': 'Etat_Matrimonial', 'ar': 'الحالة_الاجتماعية'},
+    'dimension': {'fr': 'Dimension', 'ar': 'البعد'},
+}
+
+SEMANTIC_VOCAB_RAW = {
+    'year': {
+        'annee', 'année', 'annees', 'années', 'year', 'years', 'periode', 'période', 'period', 'date',
+        'annee 2020', 'année 2020', 'سنة', 'السنة', 'سنوات', 'السنوات', 'الفترة', 'التاريخ'
+    },
+    'value': {
+        'valeur', 'value', 'values', 'montant', 'effectif', 'nombre', 'taux', 'ratio', 'pourcentage',
+        'measure', 'mesure', 'count', 'amount', 'القيمة', 'قيمة', 'النسبة', 'نسبة', 'المؤشر', 'العدد'
+    },
+    'province': {
+        'province', 'prefecture', 'préfecture', 'provinces', 'prefectures', 'territoire', 'territoires',
+        'azilal', 'beni mellal', 'fquih ben salah', 'khenifra', 'khouribga',
+        'إقليم', 'الإقليم', 'الأقاليم', 'العمالة', 'العمالات',
+        'ازيلال', 'أزيلال', 'بني ملال', 'الفقيه بن صالح', 'خنيفرة', 'خريبكة'
+    },
+    'region': {
+        'region', 'région', 'regions', 'régions', 'territoire regional', 'territoire régional',
+        'beni mellal khenifra', 'casablanca settat', 'rabat sale kenitra', 'fes meknes',
+        'جهة', 'الجهة', 'الجهات', 'بني ملال خنيفرة', 'الدار البيضاء سطات', 'الرباط سلا القنيطرة'
+    },
+    'milieu': {
+        'milieu', 'zone', 'zones', 'rural', 'urbaine', 'urbain', 'rurale', 'rurales', 'urbaines',
+        'وسط', 'الوسط', 'مجال', 'المجال', 'قروي', 'حضري'
+    },
+    'sexe': {
+        'sexe', 'sex', 'genre', 'gender', 'masculin', 'feminin', 'féminin', 'homme', 'femme',
+        'masculine', 'feminine',
+        'ذكر', 'أنثى', 'انثى', 'مذكر', 'مؤنث', 'مؤنثة', 'ذكور', 'إناث', 'اناث',
+        'الجنس', 'النوع', 'النوع الاجتماعي'
+    },
+    'etat_matrimonial': {
+        'etat matrimonial', 'état matrimonial', 'statut matrimonial', 'situation matrimoniale',
+        'celibataire', 'célibataire', 'celibataires', 'célibataires', 'marie', 'marié', 'maries', 'mariés',
+        'divorce', 'divorcé', 'divorces', 'divorcés', 'veuf', 'veuve', 'veuves', 'veufs',
+        'الحالة الاجتماعية', 'الحاله الاجتماعيه', 'أعزب', 'عزاب', 'العزاب', 'متزوج', 'متزوجون', 'متزوجين',
+        'مطلق', 'مطلقون', 'مطلقين', 'أرمل', 'ارمل', 'أرامل', 'ارامل'
+    },
+    'dimension': {
+        'dimension', 'dim', 'axis', 'axe', 'category', 'categorie', 'catégorie', 'modalite', 'modalité', 'modalities',
+        'البعد', 'الابعاد', 'الفئة', 'الفئات', 'التصنيف', 'المستوى'
+    },
+}
 
 # Temporary hardcoded credentials for quick testing (to be removed later).
 HARDCODED_HF_TOKEN = "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"
@@ -80,7 +137,7 @@ def _fallback_map_rows(df, expected_columns):
         'region': ['region', 'région'],
         'province': ['province', 'prefecture', 'préfecture'],
         'milieu': ['milieu', 'zone'],
-        'sexe': ['sexe', 'sex', 'genre'],
+        'sexe': ['sexe', 'sex', 'genre', 'gender', 'مذكر', 'مؤنث', 'ذكر', 'أنثى', 'انثى'],
     }
 
     normalized_alias = {}
@@ -436,14 +493,93 @@ def _normalize_merged_headers_to_wide(df_raw):
 
 def _normalize_semantic_token(value):
     text = ' '.join(str(value or '').strip().split()).lower()
-    text = unicodedata.normalize('NFKD', text).encode('ascii', 'ignore').decode('ascii')
-    text = re.sub(r'[^a-z0-9 ]+', ' ', text)
-    text = re.sub(r'\s+', ' ', text).strip()
-    return text
+    if not text:
+        return ''
+
+    text = unicodedata.normalize('NFKC', text)
+    text = re.sub(r'[\u0640\u200f\u200e]', '', text)
+
+    latin_chunks = []
+    arabic_chunks = []
+    for chunk in re.split(r'\s+', text):
+        if not chunk:
+            continue
+        if ARABIC_CHAR_RE.search(chunk):
+            cleaned = re.sub(r'[^\u0600-\u06FF0-9]+', ' ', chunk)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            if cleaned:
+                arabic_chunks.append(cleaned)
+        else:
+            cleaned = unicodedata.normalize('NFKD', chunk).encode('ascii', 'ignore').decode('ascii')
+            cleaned = re.sub(r'[^a-z0-9]+', ' ', cleaned)
+            cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+            if cleaned:
+                latin_chunks.append(cleaned)
+
+    return ' '.join([*latin_chunks, *arabic_chunks]).strip()
 
 
-def _infer_dimension_name_from_modalities(modalities):
-    """Infer a stable business dimension name from modality labels."""
+SEMANTIC_VOCAB = {
+    key: {_normalize_semantic_token(token) for token in values if _normalize_semantic_token(token)}
+    for key, values in SEMANTIC_VOCAB_RAW.items()
+}
+
+
+def _semantic_label_for_key(key, lang='fr'):
+    labels = SEMANTIC_LABELS.get(key) or SEMANTIC_LABELS['dimension']
+    return labels.get(lang) or labels.get('fr') or key
+
+
+def _contains_arabic(value):
+    return bool(ARABIC_CHAR_RE.search(str(value or '')))
+
+
+def _detect_dataframe_language(df):
+    arabic_score = 0
+    latin_score = 0
+    sample_texts = [str(c or '') for c in getattr(df, 'columns', [])]
+    try:
+        for col in getattr(df, 'columns', [])[:8]:
+            sample_texts.extend([_cell_to_text(v) for v in df[col].tolist()[:20]])
+    except Exception:
+        pass
+
+    for text in sample_texts:
+        arabic_score += len(ARABIC_CHAR_RE.findall(str(text or '')))
+        latin_score += len(re.findall(r'[A-Za-z]', str(text or '')))
+    return 'ar' if arabic_score > latin_score else 'fr'
+
+
+def _is_year_like_values(values):
+    cleaned = [_cell_to_text(v) for v in (values or []) if _cell_to_text(v)]
+    if len(cleaned) < 2:
+        return False
+    year_like_count = sum(1 for v in cleaned if re.fullmatch(r'(19|20)\d{2}', v))
+    return (year_like_count / float(len(cleaned))) >= 0.8
+
+
+def _semantic_key_from_label(label):
+    tokens = {
+        _normalize_semantic_token(part)
+        for part in re.split(r'[_\-:/]+', str(label or '').strip())
+        if _normalize_semantic_token(part)
+    }
+    if not tokens:
+        return None
+
+    best_key = None
+    best_score = 0
+    for key, vocab in SEMANTIC_VOCAB.items():
+        overlap = len(tokens.intersection(vocab))
+        if overlap > best_score:
+            best_key = key
+            best_score = overlap
+    if best_score <= 0:
+        return None
+    return best_key
+
+
+def _infer_dimension_key_from_modalities(modalities):
     normalized_modalities = {
         _normalize_semantic_token(re.sub(r'[_\-:/]+', ' ', str(col or '').strip()))
         for col in (modalities or [])
@@ -451,56 +587,110 @@ def _infer_dimension_name_from_modalities(modalities):
     }
     normalized_modalities = {m for m in normalized_modalities if m}
     if len(normalized_modalities) < 2:
-        return 'Dimension'
+        return None, 0
 
-    taxonomy = {
-        'Milieu': {
-            'total', 'rural', 'urbain', 'urbaine', 'urbaines', 'rurale', 'rurales'
-        },
-        'Sexe': {
-            'masculin', 'feminin', 'homme', 'hommes', 'femme', 'femmes', 'total'
-        },
-        'Etat_Matrimonial': {
-            'celibataire', 'celibataires', 'marie', 'maries', 'divorce', 'divorces',
-            'veuf', 'veufs', 'veuve', 'veuves', 'total'
-        },
-        'Province': {
-            'azilal', 'beni mellal', 'beni mellal', 'fquih ben salah', 'khenifra',
-            'khouribga', 'settat', 'berrechid', 'el jadida', 'safi', 'essaouira',
-            'marrakech', 'youssoufia', 'tinghir', 'ouarzazate', 'zagora', 'taroudannt',
-            'agadir ida ou tanane', 'chtouka ait baha', 'inezgane ait melloul',
-            'al haouz', 'chichaoua', 'rehamna', 'oujda angad', 'nador', 'driouch',
-            'berkane', 'taourirt', 'jerada', 'figuig', 'tetouan', 'larache',
-            'chefchaouen', 'al hoceima', 'tanger assilah', 'ouazzane', 'fahs anjra',
-            'meknes', 'fes', 'taounate', 'taza', 'ifrane', 'sidi kacem',
-            'sidi slimane', 'khemisset', 'rabat', 'sale', 'skhirate temara',
-            'kenitra', 'casablanca', 'mohammedia', 'nouaceur', 'mediouna'
-        },
-        'Region': {
-            'tanger tetouan al hoceima', 'l oriental', 'fes meknes',
-            'rabat sale kenitra', 'beni mellal khenifra', 'casablanca settat',
-            'marrakech safi', 'draa tafilalet', 'souss massa', 'guelmim oued noun',
-            'laayoune sakia el hamra', 'dakhla oued ed dahab'
-        },
-    }
-
-    best_name = 'Dimension'
+    best_key = None
     best_score = 0
-
-    for candidate_dim, vocab in taxonomy.items():
-        normalized_vocab = {_normalize_semantic_token(v) for v in vocab}
-        overlap = len(normalized_modalities.intersection(normalized_vocab))
+    for candidate_key in ('milieu', 'sexe', 'etat_matrimonial', 'province', 'region'):
+        vocab = SEMANTIC_VOCAB.get(candidate_key, set())
+        overlap = len(normalized_modalities.intersection(vocab))
         if overlap > best_score:
+            best_key = candidate_key
             best_score = overlap
-            best_name = candidate_dim
 
-    # Require enough evidence to avoid false positives.
     if best_score >= 2:
-        return best_name
-    return 'Dimension'
+        return best_key, best_score
+    return None, 0
 
 
-def _normalize_wide_metrics_to_long(df):
+def _infer_dimension_name_from_modalities(modalities, lang='fr'):
+    key, score = _infer_dimension_key_from_modalities(modalities)
+    if key and score >= 2:
+        return _semantic_label_for_key(key, lang)
+    return _semantic_label_for_key('dimension', lang)
+
+
+def _build_ai_column_profiles(df):
+    if df is None or df.empty:
+        return []
+
+    work = df.copy()
+    work.columns = [str(c or '').strip() for c in work.columns]
+    value_col = _pick_value_column(work)
+    profiles = []
+
+    for idx, col in enumerate(work.columns):
+        values = [_cell_to_text(v) for v in work[col].tolist() if _cell_to_text(v)]
+        sample_values = values[:200]
+        unique_values = list(dict.fromkeys(sample_values))
+        header_key = _semantic_key_from_label(col)
+        modality_key, modality_score = _infer_dimension_key_from_modalities(unique_values)
+        is_value = col == value_col
+        is_year = header_key == 'year' or _is_year_like_values(sample_values)
+        semantic_key = None
+
+        if is_value:
+            semantic_key = 'value'
+        elif is_year:
+            semantic_key = 'year'
+        elif header_key and header_key != 'dimension':
+            semantic_key = header_key
+        elif modality_key and modality_score >= 2:
+            semantic_key = modality_key
+
+        unique_ratio = (len(set(unique_values)) / float(max(1, len(sample_values)))) if sample_values else 0.0
+        profiles.append({
+            'index': idx,
+            'name': col,
+            'header_key': header_key,
+            'semantic_key': semantic_key,
+            'modality_key': modality_key,
+            'is_value': is_value,
+            'is_year': is_year,
+            'unique_ratio': unique_ratio,
+            'sample_values': unique_values,
+        })
+
+    if not any(p['semantic_key'] == 'province' for p in profiles):
+        fallback_candidates = [
+            p for p in profiles
+            if not p['is_value'] and not p['is_year'] and not p['semantic_key'] and p['unique_ratio'] >= 0.45
+        ]
+        if fallback_candidates:
+            fallback_candidates[0]['semantic_key'] = 'province'
+
+    return profiles
+
+
+def _stabilize_ai_analytical_table(df):
+    if df is None or df.empty:
+        return df
+
+    lang = _detect_dataframe_language(df)
+    work = df.copy().fillna('')
+    profiles = _build_ai_column_profiles(work)
+    new_columns = []
+    seen = defaultdict(int)
+
+    for profile in profiles:
+        target = profile['name']
+        semantic_key = profile['semantic_key']
+        if semantic_key:
+            target = _semantic_label_for_key(semantic_key, lang)
+        elif profile['header_key'] == 'dimension' and profile['modality_key']:
+            target = _semantic_label_for_key(profile['modality_key'], lang)
+
+        target = re.sub(r'\s+', '_', str(target or '').strip()).strip('_') or f'col_{profile["index"] + 1}'
+        seen[target] += 1
+        if seen[target] > 1:
+            target = f'{target}_{seen[target]}'
+        new_columns.append(target)
+
+    work.columns = new_columns
+    return work
+
+
+def _normalize_wide_metrics_to_long(df, lang='fr'):
     """
     Convert a wide table like:
       Annees | Milieu_Total | Milieu_rural | Milieu_urbain
@@ -562,7 +752,7 @@ def _normalize_wide_metrics_to_long(df):
             pref_norm = _normalize_name(pref)
             prefix_counts[pref_norm] = prefix_counts.get(pref_norm, 0) + 1
 
-    dim_name = 'Dimension'
+    dim_name = _semantic_label_for_key('dimension', lang)
     selected_prefix_norm = None
     if prefix_counts:
         selected_prefix_norm = max(prefix_counts.items(), key=lambda kv: kv[1])[0]
@@ -575,8 +765,8 @@ def _normalize_wide_metrics_to_long(df):
                     break
 
     # If no explicit prefix was found, infer a semantic dimension name.
-    if dim_name == 'Dimension':
-        dim_name = _infer_dimension_name_from_modalities(measure_cols)
+    if dim_name == _semantic_label_for_key('dimension', lang):
+        dim_name = _infer_dimension_name_from_modalities(measure_cols, lang=lang)
 
     dim_name = re.sub(r'\s+', '_', str(dim_name).strip()) or 'Dimension'
     if dim_name in id_cols:
@@ -598,14 +788,14 @@ def _normalize_wide_metrics_to_long(df):
 
             rec = dict(base)
             rec[dim_name] = modality
-            rec['Valeur'] = int(num) if float(num).is_integer() else num
+            rec[_semantic_label_for_key('value', lang)] = int(num) if float(num).is_integer() else num
             records.append(rec)
 
     if not records:
         return None
 
     long_df = pd.DataFrame(records)
-    ordered_cols = [*id_cols, dim_name, 'Valeur']
+    ordered_cols = [*id_cols, dim_name, _semantic_label_for_key('value', lang)]
     ordered_cols = [c for c in ordered_cols if c in long_df.columns]
     long_df = long_df[ordered_cols]
     return long_df
@@ -631,10 +821,13 @@ def _normalize_import_dataframe(excel_file, use_ai=True):
                 warnings.append('Normalisation entetes fusionnes appliquee')
 
     if use_ai:
-        long_df = _normalize_wide_metrics_to_long(df)
+        lang = _detect_dataframe_language(df)
+        long_df = _normalize_wide_metrics_to_long(df, lang=lang)
         if long_df is not None:
             df = long_df
             warnings.append('Normalisation large->long appliquee (dimension + Valeur)')
+        df = _stabilize_ai_analytical_table(df)
+        warnings.append('Stabilisation semantique IA appliquee')
 
     df = df.fillna('')
     df.columns = [str(c or '').strip() for c in df.columns]
@@ -879,6 +1072,115 @@ def _schema_overlap_ratio(cols_a, cols_b):
     return len(a.intersection(b)) / float(max(1, len(a)))
 
 
+def _resolve_column_reference(ref, profiles):
+    ref_text = str(ref or '').strip()
+    if not ref_text:
+        return ''
+
+    by_normalized = {
+        _normalize_column_name(profile['name']): profile['name']
+        for profile in (profiles or [])
+        if str(profile.get('name') or '').strip()
+    }
+    direct = by_normalized.get(_normalize_column_name(ref_text))
+    if direct:
+        return direct
+
+    ref_key = _semantic_key_from_label(ref_text)
+    if ref_key:
+        matches = [p['name'] for p in (profiles or []) if p.get('semantic_key') == ref_key]
+        if len(matches) == 1:
+            return matches[0]
+        if matches:
+            return matches[0]
+
+    if ref_key == 'dimension':
+        candidates = [
+            p['name'] for p in (profiles or [])
+            if not p.get('is_value') and not p.get('is_year') and p.get('semantic_key') not in ('province', 'region')
+        ]
+        if len(candidates) == 1:
+            return candidates[0]
+
+    return ''
+
+
+def _default_filter_columns_from_profiles(profiles):
+    return [p['name'] for p in (profiles or []) if not p.get('is_value')]
+
+
+def _reconcile_column_list(values, profiles, fallback_default=False):
+    resolved = []
+    for value in (values or []):
+        match = _resolve_column_reference(value, profiles)
+        if match and match not in resolved:
+            resolved.append(match)
+    if not resolved and fallback_default:
+        return _default_filter_columns_from_profiles(profiles)
+    return resolved
+
+
+def _reconcile_default_filters(default_filters, profiles):
+    if not isinstance(default_filters, dict):
+        return {}
+    output = {}
+    for key, value in default_filters.items():
+        resolved_key = _resolve_column_reference(key, profiles)
+        if resolved_key:
+            output[resolved_key] = value
+    return output
+
+
+def _reconcile_chart_configs(charts_config, profiles):
+    reconciled = []
+    for chart in (charts_config or []):
+        if not isinstance(chart, dict):
+            continue
+        updated = dict(chart)
+        for field in ('x', 'y', 'group_by', 'filter_column'):
+            resolved = _resolve_column_reference(updated.get(field, ''), profiles)
+            if resolved:
+                updated[field] = resolved
+
+        filters = []
+        for item in updated.get('filters', []) or []:
+            if not isinstance(item, dict):
+                continue
+            resolved = _resolve_column_reference(item.get('column', ''), profiles)
+            if not resolved:
+                continue
+            filters.append({**item, 'column': resolved})
+        updated['filters'] = filters
+
+        visible_filters = []
+        for item in updated.get('visible_filters', []) or []:
+            if isinstance(item, str):
+                resolved = _resolve_column_reference(item, profiles)
+                if resolved:
+                    visible_filters.append(resolved)
+                continue
+            if isinstance(item, dict):
+                resolved = _resolve_column_reference(item.get('column', ''), profiles)
+                if resolved:
+                    visible_filters.append({**item, 'column': resolved})
+        updated['visible_filters'] = visible_filters
+        reconciled.append(updated)
+    return reconciled
+
+
+def _reconcile_ai_generated_config(st, df):
+    profiles = _build_ai_column_profiles(df)
+    if not profiles:
+        return
+
+    st.filtres_disponibles = _reconcile_column_list(st.filtres_disponibles or [], profiles, fallback_default=True)
+    st.visitor_filters = _reconcile_column_list(st.visitor_filters or [], profiles, fallback_default=bool(st.visitor_filters))
+    st.visitor_visible_columns = _reconcile_column_list(st.visitor_visible_columns or [], profiles, fallback_default=False)
+    st.visitor_pivot_columns = _reconcile_column_list(st.visitor_pivot_columns or [], profiles, fallback_default=False)
+    st.visitor_default_filters = _reconcile_default_filters(st.visitor_default_filters or {}, profiles)
+    st.charts_config = _reconcile_chart_configs(st.charts_config or [], profiles)
+
+
 class InfoBannerView(APIView):
     """Message global INFOS: lecture publique, écriture réservée aux admins."""
 
@@ -1121,9 +1423,11 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             # chart-level visitor-visible filters (array of {column, default} or simple column names)
             'visible_filters': data.get('visible_filters', []),
             'title': data.get('title', ''),
+            'title_ar': data.get('title_ar', ''),
             'x_label': data.get('x_label', ''),
             'y_label': data.get('y_label', ''),
             'group_by': data.get('group_by', ''),
+            'mesure_ar': data.get('mesure_ar', ''),
         }
         config = st.charts_config or []
         config.append(new_chart)
@@ -1155,9 +1459,11 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     ch['filters'] = data.get('filters', ch.get('filters', []))
                     ch['visible_filters'] = data.get('visible_filters', ch.get('visible_filters', []))
                     ch['title'] = data.get('title', ch.get('title', ''))
+                    ch['title_ar'] = data.get('title_ar', ch.get('title_ar', ''))
                     ch['x_label'] = data.get('x_label', ch.get('x_label', ''))
                     ch['y_label'] = data.get('y_label', ch.get('y_label', ''))
                     ch['group_by'] = data.get('group_by', ch.get('group_by', ''))
+                    ch['mesure_ar'] = data.get('mesure_ar', ch.get('mesure_ar', ''))
                     config[i] = ch
                     st.charts_config = config
                     st.save()
@@ -1211,7 +1517,6 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         try:
             use_ai = str(request.data.get('use_ai', 'false')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
-            warnings = []
 
             if st.data_is_bilingual and not arabic_file:
                 return Response(
@@ -1224,30 +1529,8 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
-            df = pd.read_excel(excel_file)
-            excel_file.seek(0)
-            df_raw = pd.read_excel(excel_file, header=None)
-
-            normalized_df = None
-            if _is_bad_header_shape(df.columns):
-                normalized_df = _normalize_cross_table_to_flat(df_raw)
-                if normalized_df is not None:
-                    df = normalized_df
-                    warnings.append('Normalisation croisee->plate appliquee')
-                else:
-                    normalized_df = _normalize_merged_headers_to_wide(df_raw)
-                    if normalized_df is not None:
-                        df = normalized_df
-                        warnings.append('Normalisation entetes fusionnes appliquee')
-
-            # Optional AI-like unpivot for wide metric columns -> long format.
-            if use_ai:
-                long_df = _normalize_wide_metrics_to_long(df)
-                if long_df is not None:
-                    df = long_df
-                    warnings.append('Normalisation large->long appliquee (dimension + Valeur)')
-
-            df = df.fillna('')
+            df, warnings = _normalize_import_dataframe(excel_file, use_ai=use_ai)
+            normalized_df = df
             incoming_columns = [str(c) for c in df.columns]
 
             existing_rows = list(st.data_json or [])
@@ -1318,6 +1601,9 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             else:
                 st.data_json = merged
                 st.columns_order = final_columns
+
+            if use_ai:
+                _reconcile_ai_generated_config(st, mapped_df)
             st.save()
 
             return Response(
@@ -1398,6 +1684,8 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 st.data_json_i18n = {}
                 st.data_is_bilingual = False
 
+            _reconcile_ai_generated_config(st, mapped_df)
+
             st.save()
             response = {
                 'message': 'Import intelligent reussi',
@@ -1460,6 +1748,8 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 'validation_report': report,
             }
             st.data_is_bilingual = True
+            if use_ai:
+                _reconcile_ai_generated_config(st, df_fr)
             st.save()
 
             return Response(
