@@ -33,11 +33,12 @@ class SousThemeSerializer(serializers.ModelSerializer):
     class Meta:
         model = SousTheme
         fields = [
-            'id', 'nom', 'nom_ar', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns_order', 'columns', 'charts_config',
+            'id', 'nom', 'nom_ar', 'nom_en', 'ordre', 'is_visible', 'archived', 'categorie', 'data', 'data_json', 'columns_order', 'columns', 'charts_config',
             'data_json_i18n', 'data_is_bilingual',
             # Métadonnées éditables côté front
             'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
             'definition_text_ar', 'unite_text_ar', 'indication_text_ar', 'source_text_ar', 'periodicite_text_ar', 'couverture_text_ar',
+            'definition_text_en', 'unite_text_en', 'indication_text_en', 'source_text_en', 'periodicite_text_en', 'couverture_text_en',
             # Nouveaux champs
             'niveau_geo', 'type_unite', 'est_sommable', 'filtres_disponibles'
             , 'visitor_visible_columns', 'visitor_filters', 'visitor_default_filters', 'visitor_pivot_columns', 'visitor_default_view'
@@ -139,7 +140,7 @@ class CategorieSerializer(serializers.ModelSerializer):
     
     class Meta:
         model = Categorie
-        fields = ['id', 'nom', 'nom_ar', 'ordre', 'theme', 'sous_themes', 'is_visible']
+        fields = ['id', 'nom', 'nom_ar', 'nom_en', 'ordre', 'theme', 'sous_themes', 'is_visible']
 
 class ThemeSerializer(serializers.ModelSerializer):
     # Relation vers les sous-thèmes
@@ -153,6 +154,7 @@ class ThemeSerializer(serializers.ModelSerializer):
             'id', 
             'titre', 
             'titre_ar',
+            'titre_en',
             'theme_image',
             'ordre', 
             'is_visible', 
@@ -172,7 +174,13 @@ class ThemeSerializer(serializers.ModelSerializer):
             'indication_text_ar',
             'source_text_ar',
             'periodicite_text_ar',
-            'couverture_text_ar'
+            'couverture_text_ar',
+            'definition_text_en',
+            'unite_text_en',
+            'indication_text_en',
+            'source_text_en',
+            'periodicite_text_en',
+            'couverture_text_en'
         ]
 
     def validate_titre(self, value):
@@ -278,16 +286,22 @@ class SiteContentSerializer(serializers.ModelSerializer):
             'about_text',
             'about_title_ar',
             'about_text_ar',
+            'about_title_en',
+            'about_text_en',
             'contact_title',
             'contact_title_ar',
+            'contact_title_en',
             'contact_email',
             'contact_phone',
             'contact_address',
             'contact_address_ar',
+            'contact_address_en',
             'contact_hours',
             'contact_hours_ar',
+            'contact_hours_en',
             'useful_links',
             'useful_links_ar',
+            'useful_links_en',
             'updated_at',
             'updated_by',
             'updated_by_name',
@@ -298,14 +312,20 @@ class SiteContentSerializer(serializers.ModelSerializer):
             'about_text': {'required': False, 'allow_blank': True},
             'about_title_ar': {'required': False, 'allow_blank': True},
             'about_text_ar': {'required': False, 'allow_blank': True},
+            'about_title_en': {'required': False, 'allow_blank': True},
+            'about_text_en': {'required': False, 'allow_blank': True},
             'contact_title': {'required': False, 'allow_blank': True},
             'contact_title_ar': {'required': False, 'allow_blank': True},
+            'contact_title_en': {'required': False, 'allow_blank': True},
             'contact_email': {'required': False, 'allow_blank': True},
             'contact_phone': {'required': False, 'allow_blank': True},
             'contact_address': {'required': False, 'allow_blank': True},
             'contact_address_ar': {'required': False, 'allow_blank': True},
+            'contact_address_en': {'required': False, 'allow_blank': True},
             'contact_hours': {'required': False, 'allow_blank': True},
             'contact_hours_ar': {'required': False, 'allow_blank': True},
+            'contact_hours_en': {'required': False, 'allow_blank': True},
             'useful_links': {'required': False},
             'useful_links_ar': {'required': False},
+            'useful_links_en': {'required': False},
         }

@@ -77,6 +77,7 @@ const resources = {
       meta_coverage: 'Couverture',
       french_label: 'Français',
       arabic_label: 'Arabe',
+      english_label: 'Anglais',
 
       /* Pages */
       useful_links: 'Liens utiles',
@@ -91,6 +92,7 @@ const resources = {
       /* Languages */
       lang_fr: 'Français',
       lang_ar: 'عربية',
+      lang_en: 'English',
 
       /* Theme */
       theme_step: 'THÈME',
@@ -171,6 +173,7 @@ const resources = {
       meta_coverage: 'التغطية',
       french_label: 'الفرنسية',
       arabic_label: 'العربية',
+      english_label: 'الإنجليزية',
 
       /* Pages */
       useful_links: 'روابط مفيدة',
@@ -185,9 +188,106 @@ const resources = {
       /* Languages */
       lang_fr: 'Français',
       lang_ar: 'عربية',
+      lang_en: 'English',
 
       /* Theme */
       theme_step: 'الموضوع',
+    },
+  },
+  en: {
+    translation: {
+      /* Navigation */
+      menu: 'Menu',
+      nav_themes: 'Themes',
+      nav_indicators: 'Indicators',
+      nav_about: 'About',
+      nav_contact: 'Contact',
+      nav_links: 'Useful links',
+      nav_admin: 'Admin space',
+      nav_saisisseur: 'Data entry space',
+
+      /* Header */
+      app_title: 'Regional Database of Beni Mellal-Khenifra',
+      language: 'LANGUAGE',
+      settings: 'Settings',
+      logout: 'Logout',
+      infos: 'INFO',
+      manage_infos: 'Manage info',
+
+      /* Search */
+      search_theme: 'Search a theme...',
+      search_indicator: 'Search an indicator...',
+      search_subtheme: 'Search a sub-theme...',
+      search_generic: 'Search bar',
+
+      /* Actions */
+      back: 'Back',
+      close: 'Close',
+      save: 'Save',
+      saving: 'Saving...',
+      apply: 'Apply',
+      clear: 'Clear',
+      add_theme: 'Add theme',
+      add_link: '+ Add link',
+      delete: 'Delete',
+      choose_category: 'Choose a category',
+      metadata: 'Metadata',
+
+      /* Data tabs */
+      tab_table: 'TABLE',
+      tab_charts: 'CHARTS',
+      filters_available: 'Available filters',
+      advanced_config: 'Advanced configuration',
+      download: 'Download',
+      horizontal_view: 'Horizontal view',
+      vertical_view: 'Vertical view',
+      show_more_rows: 'Show more rows',
+      show_all_table: 'Show full table',
+      reduce_table: 'Reduce table',
+      export_xlsx: 'Export XLSX',
+      export_csv: 'Export CSV',
+      export_txt: 'Export TXT',
+      row_count: '{{count}} row(s)',
+      hierarchy_count: '{{count}} hierarchical level(s)',
+      period_count: '{{count}} period(s)',
+      latest_period: 'Latest period: {{value}}',
+      selected_count: '{{count}} selected',
+      options_count: '{{count}} option(s)',
+      all: 'All',
+      all_option: '-- All --',
+      total: 'Total',
+      no_table_to_export: 'No table to export',
+      export_view_horizontal: 'horizontal',
+      export_view_vertical: 'vertical',
+      export_view_flat: 'table',
+      export_subtheme_title: 'Sub-theme: {{name}} ({{view}})',
+      meta_definition: 'Definition',
+      meta_unit: 'Unit',
+      meta_periodicity: 'Periodicity',
+      meta_indication: 'Indication',
+      meta_source: 'Source',
+      meta_coverage: 'Coverage',
+      french_label: 'French',
+      arabic_label: 'Arabic',
+      english_label: 'English',
+
+      /* Pages */
+      useful_links: 'Useful links',
+      about_default: 'About the platform',
+      about_coming_soon: 'About content will be available soon.',
+      contact_default: 'Contact',
+      email: 'Email',
+      phone: 'Phone',
+      address: 'Address',
+      hours: 'Hours',
+
+      /* Languages */
+      lang_fr: 'Français',
+      lang_ar: 'عربية',
+      lang_en: 'English',
+
+      /* Theme */
+      theme_step: 'THEME',
     },
   },
 };

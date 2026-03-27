@@ -304,6 +304,16 @@ export default function ChartModal({ isOpen, onClose, currentChartConfig, setCur
             />
           </div>
 
+          <div>
+            <label className="block font-bold mb-1">Measure / note in English (optional):</label>
+            <textarea
+              className="w-full p-2 border-2 border-black rounded-lg h-20 outline-none"
+              value={currentChartConfig.mesure_en || ''}
+              onChange={e => setCurrentChartConfig({...currentChartConfig, mesure_en: e.target.value})}
+              placeholder="Graph note in English..."
+            />
+          </div>
+
           <div className="grid grid-cols-1 gap-3">
             <div>
               <label className="block font-bold mb-1">Titre du graphique (affiché au-dessus) :</label>
@@ -325,6 +335,17 @@ export default function ChartModal({ isOpen, onClose, currentChartConfig, setCur
                 onChange={e => setCurrentChartConfig({...currentChartConfig, title_ar: e.target.value})}
                 placeholder="العنوان بالعربية"
                 dir="rtl"
+              />
+            </div>
+
+            <div>
+              <label className="block font-bold mb-1">Title in English (optional):</label>
+              <input
+                type="text"
+                className="w-full p-2 border-2 border-black rounded-lg bg-white"
+                value={currentChartConfig.title_en || ''}
+                onChange={e => setCurrentChartConfig({...currentChartConfig, title_en: e.target.value})}
+                placeholder="Chart title in English"
               />
             </div>
 

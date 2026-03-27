@@ -10,7 +10,7 @@ import { DATA_TRANSLATIONS_FR_AR } from './i18n';
 
 const API_BASE = 'http://127.0.0.1:8000/api';
 const INFO_BANNER_CACHE_KEY = 'info_banner_cache';
-const DEFAULT_INFO_BANNER_ITEMS = [{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', url: '' }];
+const DEFAULT_INFO_BANNER_ITEMS = [{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', text_en: '', url: '' }];
 
 const readInfoBannerCache = () => {
   try {
@@ -105,6 +105,13 @@ const LangSelector = ({ t, i18n }) => {
             {i18n.language === 'ar' && <span>✔</span>}
             العربية
           </button>
+          <button
+            onClick={() => { i18n.changeLanguage('en'); setOpen(false); }}
+            className={`w-full text-left px-3 py-2 text-xs hover:bg-[#f7e8cf] flex items-center gap-2 ${i18n.language === 'en' ? 'font-bold text-[#7A0A4A]' : 'text-[#6B3150]'}`}
+          >
+            {i18n.language === 'en' && <span>✔</span>}
+            English
+          </button>
         </div>
       )}
     </div>
@@ -116,16 +123,22 @@ function App({ forceVisitor = false }) {
   const createMetadataState = () => ({
     definition_text: '',
     definition_text_ar: '',
+    definition_text_en: '',
     unite_text: '',
     unite_text_ar: '',
+    unite_text_en: '',
     indication_text: '',
     indication_text_ar: '',
+    indication_text_en: '',
     source_text: '',
     source_text_ar: '',
+    source_text_en: '',
     periodicite_text: '',
     periodicite_text_ar: '',
+    periodicite_text_en: '',
     couverture_text: '',
     couverture_text_ar: '',
+    couverture_text_en: '',
   });
 
   // --- RTL + language restriction ---
@@ -174,7 +187,7 @@ function App({ forceVisitor = false }) {
   const [selectedTheme, setSelectedTheme] = useState(null);
   const [selectedSubTheme, setSelectedSubTheme] = useState(null);
   const [selectedCategorie, setSelectedCategorie] = useState(null);
-  const [themeData, setThemeData] = useState({ titre: '', titre_ar: '', nbSousThemes: 1, statut: 'Public' });
+  const [themeData, setThemeData] = useState({ titre: '', titre_ar: '', titre_en: '', nbSousThemes: 1, statut: 'Public' });
   const [themeImageFile, setThemeImageFile] = useState(null);
   const [themeImagePreview, setThemeImagePreview] = useState('');
   const [openThemeMenu, setOpenThemeMenu] = useState(null);
@@ -191,6 +204,7 @@ function App({ forceVisitor = false }) {
   const [actionModalType, setActionModalType] = useState('rename');
   const [actionModalValue, setActionModalValue] = useState('');
   const [actionModalValueAr, setActionModalValueAr] = useState('');
+  const [actionModalValueEn, setActionModalValueEn] = useState('');
   const [actionModalThemeId, setActionModalThemeId] = useState(null);
   const [actionModalCategorieId, setActionModalCategorieId] = useState(null);
   const [rows, setRows] = useState([]);
@@ -221,7 +235,7 @@ function App({ forceVisitor = false }) {
   const [isSmartImporting, setIsSmartImporting] = useState(false);
   const [isAppending, setIsAppending] = useState(false);
   const [isAppendingAI, setIsAppendingAI] = useState(false);
-  const [importDialog, setImportDialog] = useState({ open: false, mode: null, file: null, fileAr: null });
+  const [importDialog, setImportDialog] = useState({ open: false, mode: null, file: null, fileAr: null, fileEn: null });
   const [showAll, setShowAll] = useState(false);
   const [activeDataTab, setActiveDataTab] = useState('tableau');
   const [visitorTableView, setVisitorTableView] = useState('horizontal');
@@ -237,12 +251,16 @@ function App({ forceVisitor = false }) {
     x: '', 
     y: '', 
     mesure: '', 
+    mesure_ar: '',
+    mesure_en: '',
     filter_column: '', 
     filter_value: '', 
     filter_mode: 'include',
     filters: [],  // Nouveaux filtres multiples
     visible_filters: [], // chart-level visitor-visible filters
     title: '',
+    title_ar: '',
+    title_en: '',
     x_label: '',
     y_label: '',
     group_by: ''
@@ -260,12 +278,12 @@ function App({ forceVisitor = false }) {
   const [useCategories, setUseCategories] = useState(false);
   const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
   const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
-  const [categoryNames, setCategoryNames] = useState([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
+  const [categoryNames, setCategoryNames] = useState([{ nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }]);
   const [expandedCategories, setExpandedCategories] = useState({});
   const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
   const [infoBannerText, setInfoBannerText] = useState(() => readInfoBannerCache()[0]?.text || DEFAULT_INFO_BANNER_ITEMS[0].text);
   const [infoBannerItems, setInfoBannerItems] = useState(() => readInfoBannerCache());
-  const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', text_ar: '', url: '' }]);
+  const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', text_ar: '', text_en: '', url: '' }]);
   const [showInfoBannerEditor, setShowInfoBannerEditor] = useState(false);
   const [savingInfoBanner, setSavingInfoBanner] = useState(false);
   const [loadingInfoBanner, setLoadingInfoBanner] = useState(true);
@@ -274,32 +292,44 @@ function App({ forceVisitor = false }) {
     about_text: '',
     about_title_ar: 'حول المنصة',
     about_text_ar: '',
+    about_title_en: 'About the platform',
+    about_text_en: '',
     contact_title: 'Contact',
     contact_title_ar: 'اتصل بنا',
+    contact_title_en: 'Contact',
     contact_email: '',
     contact_phone: '',
     contact_address: '',
     contact_address_ar: '',
+    contact_address_en: '',
     contact_hours: '',
     contact_hours_ar: '',
+    contact_hours_en: '',
     useful_links: [],
     useful_links_ar: [],
+    useful_links_en: [],
   });
   const [siteContentDraft, setSiteContentDraft] = useState({
     about_title: 'A propos de la plateforme',
     about_text: '',
     about_title_ar: 'حول المنصة',
     about_text_ar: '',
+    about_title_en: 'About the platform',
+    about_text_en: '',
     contact_title: 'Contact',
     contact_title_ar: 'اتصل بنا',
+    contact_title_en: 'Contact',
     contact_email: '',
     contact_phone: '',
     contact_address: '',
     contact_address_ar: '',
+    contact_address_en: '',
     contact_hours: '',
     contact_hours_ar: '',
+    contact_hours_en: '',
     useful_links: [],
     useful_links_ar: [],
+    useful_links_en: [],
   });
   const [savingSiteContent, setSavingSiteContent] = useState(false);
 
@@ -318,9 +348,17 @@ function App({ forceVisitor = false }) {
   const siteContentApi = `${API_BASE}/site-content/`;
   const isInfoMenu = ['Contact', 'APropos', 'LiensUtiles'].includes(activeMenu);
   const canUseTranslatedDataView = isVisitor || pathHasAdmin || isSaisisseurRoute;
-  const isArabicDataView = canUseTranslatedDataView && i18n.language === 'ar';
+  const activeDataLanguage = (canUseTranslatedDataView && (i18n.language === 'ar' || i18n.language === 'en'))
+    ? i18n.language
+    : 'fr';
+  const isArabicDataView = activeDataLanguage === 'ar';
   const isArabicVisitor = isVisitor && i18n.language === 'ar';
-  const localeCode = isArabicDataView ? 'ar-MA' : 'fr-FR';
+  const localeCode = activeDataLanguage === 'ar' ? 'ar-MA' : activeDataLanguage === 'en' ? 'en-GB' : 'fr-FR';
+  const hasEnglishI18nData = Boolean(
+    selectedSubTheme?.data_json_i18n?.source_columns?.en &&
+    Array.isArray(selectedSubTheme?.data_json_i18n?.source_columns?.en) &&
+    selectedSubTheme.data_json_i18n.source_columns.en.length > 0
+  );
 
   const normalizeDataToken = (value) => String(value ?? '')
     .normalize('NFD')
@@ -352,8 +390,9 @@ function App({ forceVisitor = false }) {
       Object.entries(colLabels).forEach(([code, labels]) => {
         const fr = String(labels?.fr || '').trim();
         const ar = String(labels?.ar || '').trim();
-        columnLabelsByCode[code] = { code, fr, ar };
-        [code, fr, ar].forEach((token) => {
+        const en = String(labels?.en || '').trim();
+        columnLabelsByCode[code] = { code, fr, ar, en };
+        [code, fr, ar, en].forEach((token) => {
           const normalized = normalizeDataToken(token);
           if (normalized) columnCodeByToken[normalized] = code;
         });
@@ -370,8 +409,9 @@ function App({ forceVisitor = false }) {
         Object.entries(mapping).forEach(([valueCode, labels]) => {
           const fr = String(labels?.fr || '').trim();
           const ar = String(labels?.ar || '').trim();
-          const entry = { code: valueCode, fr, ar };
-          [valueCode, fr, ar].forEach((token) => {
+          const en = String(labels?.en || '').trim();
+          const entry = { code: valueCode, fr, ar, en };
+          [valueCode, fr, ar, en].forEach((token) => {
             const normalized = normalizeDataToken(token);
             if (!normalized) return;
             valueLabelsByColumn[columnCode][normalized] = entry;
@@ -416,7 +456,7 @@ function App({ forceVisitor = false }) {
 
   const getLocalizedColumnLabel = (columnIdentifier, langOverride = null) => {
     const fallback = (columnIdentifier === null || columnIdentifier === undefined) ? '' : String(columnIdentifier);
-    const targetLang = langOverride || (isArabicDataView ? 'ar' : 'fr');
+    const targetLang = langOverride || activeDataLanguage;
     const columnCode = getCanonicalColumnCode(columnIdentifier);
     if (!columnCode) {
       if (targetLang === 'ar' && DATA_TRANSLATIONS_FR_AR[fallback] !== undefined) return DATA_TRANSLATIONS_FR_AR[fallback];
@@ -429,7 +469,7 @@ function App({ forceVisitor = false }) {
   const getLocalizedValueLabel = (columnIdentifier, valueIdentifier, langOverride = null) => {
     if (valueIdentifier === null || valueIdentifier === undefined || valueIdentifier === '—') return valueIdentifier;
     const rawValue = String(valueIdentifier);
-    const targetLang = langOverride || (isArabicDataView ? 'ar' : 'fr');
+    const targetLang = langOverride || activeDataLanguage;
     const columnCode = getCanonicalColumnCode(columnIdentifier) || String(columnIdentifier || '').trim();
     const normalizedValue = normalizeDataToken(valueIdentifier);
     const columnMapping = bilingualLabelLookup.valueLabelsByColumn[columnCode] || {};
@@ -513,11 +553,24 @@ function App({ forceVisitor = false }) {
   // Translate a data value (column name or cell value) from French → Arabic.
   // Safe to call on any value: numbers and '—' are returned unchanged.
   const translateDataValue = (val) => {
-    if (!isArabicDataView) return (val === null || val === undefined) ? '' : String(val);
+    if (activeDataLanguage === 'fr') return (val === null || val === undefined) ? '' : String(val);
     if (val === null || val === undefined || val === '—') return val;
     const s = String(val);
-    if (bilingualLabelLookup.frToAr[s] !== undefined) return bilingualLabelLookup.frToAr[s];
-    return DATA_TRANSLATIONS_FR_AR[s] !== undefined ? DATA_TRANSLATIONS_FR_AR[s] : s;
+    const normalized = normalizeDataToken(s);
+    const columnCode = getCanonicalColumnCode(s);
+    if (columnCode) {
+      const labels = bilingualLabelLookup.columnLabelsByCode[columnCode] || {};
+      return labels[activeDataLanguage] || labels.fr || s;
+    }
+    const valueEntry = bilingualLabelLookup.globalValueLabels[normalized];
+    if (valueEntry) {
+      return valueEntry[activeDataLanguage] || valueEntry.fr || s;
+    }
+    if (activeDataLanguage === 'ar') {
+      if (bilingualLabelLookup.frToAr[s] !== undefined) return bilingualLabelLookup.frToAr[s];
+      return DATA_TRANSLATIONS_FR_AR[s] !== undefined ? DATA_TRANSLATIONS_FR_AR[s] : s;
+    }
+    return s;
   };
 
   const parseAssignmentNotes = (rawNotes) => {
@@ -528,17 +581,20 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const getLocalizedValue = (item, frKey, arKey) => {
+  const getLocalizedValue = (item, frKey, arKey, enKey = null) => {
     if (!item) return '';
-    if (isArabicDataView) {
+    if (activeDataLanguage === 'ar') {
       return item?.[arKey] || item?.[frKey] || '';
+    }
+    if (activeDataLanguage === 'en' && enKey) {
+      return item?.[enKey] || item?.[frKey] || item?.[arKey] || '';
     }
     return item?.[frKey] || '';
   };
 
-  const getThemeDisplayTitle = (theme) => getLocalizedValue(theme, 'titre', 'titre_ar');
-  const getCategoryDisplayName = (category) => getLocalizedValue(category, 'nom', 'nom_ar');
-  const getSubThemeDisplayName = (subTheme) => getLocalizedValue(subTheme, 'nom', 'nom_ar');
+  const getThemeDisplayTitle = (theme) => getLocalizedValue(theme, 'titre', 'titre_ar', 'titre_en');
+  const getCategoryDisplayName = (category) => getLocalizedValue(category, 'nom', 'nom_ar', 'nom_en');
+  const getSubThemeDisplayName = (subTheme) => getLocalizedValue(subTheme, 'nom', 'nom_ar', 'nom_en');
   const headerSearchTerm = String(visitorHeaderSearch || '').trim().toLowerCase();
   const visitorSubThemeSearchResults = (() => {
     if (!isVisitor || !headerSearchTerm) return [];
@@ -547,15 +603,18 @@ function App({ forceVisitor = false }) {
     (themes || []).forEach((theme) => {
       const themeTitleFr = String(theme?.titre || '').trim();
       const themeTitleAr = String(theme?.titre_ar || '').trim();
+      const themeTitleEn = String(theme?.titre_en || '').trim();
 
       const pushCandidate = (subTheme, category = null) => {
         if (!subTheme?.id) return;
 
         const subNameFr = String(subTheme?.nom || '').trim();
         const subNameAr = String(subTheme?.nom_ar || '').trim();
+        const subNameEn = String(subTheme?.nom_en || '').trim();
         const catNameFr = String(category?.nom || '').trim();
         const catNameAr = String(category?.nom_ar || '').trim();
-        const haystack = `${subNameFr} ${subNameAr} ${themeTitleFr} ${themeTitleAr} ${catNameFr} ${catNameAr}`.toLowerCase();
+        const catNameEn = String(category?.nom_en || '').trim();
+        const haystack = `${subNameFr} ${subNameAr} ${subNameEn} ${themeTitleFr} ${themeTitleAr} ${themeTitleEn} ${catNameFr} ${catNameAr} ${catNameEn}`.toLowerCase();
         if (!haystack.includes(headerSearchTerm)) return;
 
         const key = String(subTheme.id);
@@ -566,10 +625,13 @@ function App({ forceVisitor = false }) {
           categoryId: category?.id || null,
           subNameFr,
           subNameAr,
+          subNameEn,
           themeTitleFr,
           themeTitleAr,
+          themeTitleEn,
           catNameFr,
           catNameAr,
+          catNameEn,
         });
       };
 
@@ -590,11 +652,12 @@ function App({ forceVisitor = false }) {
     { key: 'couverture_text', labelKey: 'meta_coverage', multiline: true },
   ];
 
-  const getLocalizedMetadataValue = (item, key) => getLocalizedValue(item, key, `${key}_ar`);
+  const getLocalizedMetadataValue = (item, key) => getLocalizedValue(item, key, `${key}_ar`, `${key}_en`);
 
   const buildMetadataState = (item) => metadataFieldConfigs.reduce((acc, field) => {
     acc[field.key] = item?.[field.key] || '';
     acc[`${field.key}_ar`] = item?.[`${field.key}_ar`] || '';
+    acc[`${field.key}_en`] = item?.[`${field.key}_en`] || '';
     return acc;
   }, createMetadataState());
 
@@ -625,7 +688,7 @@ function App({ forceVisitor = false }) {
       {metadataFieldConfigs.map(({ key, labelKey }) => (
         <div key={key} className="space-y-2">
           <div className="font-semibold">{t(labelKey)}</div>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
             <div>
               <div className="text-xs font-bold uppercase tracking-wide text-gray-600">{t('french_label')}</div>
               <textarea
@@ -645,6 +708,15 @@ function App({ forceVisitor = false }) {
                 onChange={e => setMetaState({ ...metaState, [`${key}_ar`]: e.target.value })}
               />
             </div>
+            <div>
+              <div className="text-xs font-bold uppercase tracking-wide text-gray-600">{t('english_label')}</div>
+              <textarea
+                placeholder={`${t(labelKey)} (${t('english_label')})`}
+                className="mt-1 w-full p-2 border-2 border-black rounded min-h-[100px]"
+                value={metaState[`${key}_en`]}
+                onChange={e => setMetaState({ ...metaState, [`${key}_en`]: e.target.value })}
+              />
+            </div>
           </div>
         </div>
       ))}
@@ -662,7 +734,8 @@ function App({ forceVisitor = false }) {
         if (url && !/^https?:\/\//i.test(url)) {
           url = `https://${url}`;
         }
-        return { text, text_ar, url };
+        const text_en = String(item?.text_en || '').trim();
+        return { text, text_ar, text_en, url };
       })
       .filter(Boolean);
   };
@@ -754,16 +827,22 @@ function App({ forceVisitor = false }) {
       meta: {
         definition_text: selectedSubTheme?.definition_text || '',
         definition_text_ar: selectedSubTheme?.definition_text_ar || '',
+        definition_text_en: selectedSubTheme?.definition_text_en || '',
         unite_text: selectedSubTheme?.unite_text || '',
         unite_text_ar: selectedSubTheme?.unite_text_ar || '',
+        unite_text_en: selectedSubTheme?.unite_text_en || '',
         indication_text: selectedSubTheme?.indication_text || '',
         indication_text_ar: selectedSubTheme?.indication_text_ar || '',
+        indication_text_en: selectedSubTheme?.indication_text_en || '',
         source_text: selectedSubTheme?.source_text || '',
         source_text_ar: selectedSubTheme?.source_text_ar || '',
+        source_text_en: selectedSubTheme?.source_text_en || '',
         periodicite_text: selectedSubTheme?.periodicite_text || '',
         periodicite_text_ar: selectedSubTheme?.periodicite_text_ar || '',
+        periodicite_text_en: selectedSubTheme?.periodicite_text_en || '',
         couverture_text: selectedSubTheme?.couverture_text || '',
         couverture_text_ar: selectedSubTheme?.couverture_text_ar || '',
+        couverture_text_en: selectedSubTheme?.couverture_text_en || '',
       },
       visitor_defaults: selectedSubTheme?.visitor_default_filters || modalVisitorDefaultFilters || {},
       advancedConfig: {
@@ -888,7 +967,7 @@ function App({ forceVisitor = false }) {
         const fallbackMessage = String(res?.data?.message || '').trim();
         const normalizedInfos = payloadInfos.length > 0
           ? payloadInfos
-          : (fallbackMessage ? [{ text: fallbackMessage, text_ar: '', url: '' }] : []);
+          : (fallbackMessage ? [{ text: fallbackMessage, text_ar: '', text_en: '', url: '' }] : []);
 
         if (normalizedInfos.length > 0) {
           setInfoBannerItems(normalizedInfos);
@@ -915,16 +994,22 @@ function App({ forceVisitor = false }) {
           about_text: String(res?.data?.about_text || ''),
           about_title_ar: String(res?.data?.about_title_ar || 'حول المنصة'),
           about_text_ar: String(res?.data?.about_text_ar || ''),
+          about_title_en: String(res?.data?.about_title_en || 'About the platform'),
+          about_text_en: String(res?.data?.about_text_en || ''),
           contact_title: String(res?.data?.contact_title || 'Contact'),
           contact_title_ar: String(res?.data?.contact_title_ar || 'اتصل بنا'),
+          contact_title_en: String(res?.data?.contact_title_en || 'Contact'),
           contact_email: String(res?.data?.contact_email || ''),
           contact_phone: String(res?.data?.contact_phone || ''),
           contact_address: String(res?.data?.contact_address || ''),
           contact_address_ar: String(res?.data?.contact_address_ar || ''),
+          contact_address_en: String(res?.data?.contact_address_en || ''),
           contact_hours: String(res?.data?.contact_hours || ''),
           contact_hours_ar: String(res?.data?.contact_hours_ar || ''),
+          contact_hours_en: String(res?.data?.contact_hours_en || ''),
           useful_links: Array.isArray(res?.data?.useful_links) ? res.data.useful_links : [],
           useful_links_ar: Array.isArray(res?.data?.useful_links_ar) ? res.data.useful_links_ar : [],
+          useful_links_en: Array.isArray(res?.data?.useful_links_en) ? res.data.useful_links_en : [],
         };
         setSiteContent(payload);
         setSiteContentDraft(payload);
@@ -1640,6 +1725,7 @@ function App({ forceVisitor = false }) {
         ...siteContentDraft,
         useful_links: sanitizeUsefulLinks(siteContentDraft.useful_links),
         useful_links_ar: sanitizeUsefulLinks(siteContentDraft.useful_links_ar),
+        useful_links_en: sanitizeUsefulLinks(siteContentDraft.useful_links_en),
       };
       const res = await axios.put(siteContentApi, payload);
       const saved = {
@@ -1647,16 +1733,22 @@ function App({ forceVisitor = false }) {
         about_text: String(res?.data?.about_text || payload.about_text || ''),
         about_title_ar: String(res?.data?.about_title_ar || payload.about_title_ar || 'حول المنصة'),
         about_text_ar: String(res?.data?.about_text_ar || payload.about_text_ar || ''),
+        about_title_en: String(res?.data?.about_title_en || payload.about_title_en || 'About the platform'),
+        about_text_en: String(res?.data?.about_text_en || payload.about_text_en || ''),
         contact_title: String(res?.data?.contact_title || payload.contact_title || 'Contact'),
         contact_title_ar: String(res?.data?.contact_title_ar || payload.contact_title_ar || 'اتصل بنا'),
+        contact_title_en: String(res?.data?.contact_title_en || payload.contact_title_en || 'Contact'),
         contact_email: String(res?.data?.contact_email || payload.contact_email || ''),
         contact_phone: String(res?.data?.contact_phone || payload.contact_phone || ''),
         contact_address: String(res?.data?.contact_address || payload.contact_address || ''),
         contact_address_ar: String(res?.data?.contact_address_ar || payload.contact_address_ar || ''),
+        contact_address_en: String(res?.data?.contact_address_en || payload.contact_address_en || ''),
         contact_hours: String(res?.data?.contact_hours || payload.contact_hours || ''),
         contact_hours_ar: String(res?.data?.contact_hours_ar || payload.contact_hours_ar || ''),
+        contact_hours_en: String(res?.data?.contact_hours_en || payload.contact_hours_en || ''),
         useful_links: Array.isArray(res?.data?.useful_links) ? res.data.useful_links : payload.useful_links,
         useful_links_ar: Array.isArray(res?.data?.useful_links_ar) ? res.data.useful_links_ar : payload.useful_links_ar,
+        useful_links_en: Array.isArray(res?.data?.useful_links_en) ? res.data.useful_links_en : payload.useful_links_en,
       };
       setSiteContent(saved);
       setSiteContentDraft(saved);
@@ -1856,7 +1948,7 @@ function App({ forceVisitor = false }) {
     return categoriesInTheme.some(cat => normalizeEntityName(cat.nom) === normalized && Number(cat.id) !== Number(excludeCategoryId));
   };
 
-  const renameTheme = async (id, newName, newNameAr = '') => {
+  const renameTheme = async (id, newName, newNameAr = '', newNameEn = '') => {
     const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom du thème est requis');
@@ -1867,7 +1959,11 @@ function App({ forceVisitor = false }) {
       return;
     }
     try {
-      await axios.patch(`${API_BASE}/themes/${id}/`, { titre: cleanedName, titre_ar: String(newNameAr || '').trim() });
+      await axios.patch(`${API_BASE}/themes/${id}/`, {
+        titre: cleanedName,
+        titre_ar: String(newNameAr || '').trim(),
+        titre_en: String(newNameEn || '').trim(),
+      });
       alert('Thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -1875,7 +1971,7 @@ function App({ forceVisitor = false }) {
     } catch (err) { console.error(err); alert(err.response?.data?.titre?.[0] || err.response?.data?.error || 'Erreur lors du renommage'); }
   };
 
-  const addSubTheme = async (themeId, name, categorieId = null, nameAr = '') => {
+  const addSubTheme = async (themeId, name, categorieId = null, nameAr = '', nameEn = '') => {
     const cleanedName = String(name || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom du sous-thème est requis');
@@ -1887,7 +1983,11 @@ function App({ forceVisitor = false }) {
     }
     try {
       const theme = themes.find(t => t.id === themeId);
-      const payload = { nom: cleanedName, nom_ar: String(nameAr || '').trim() };
+      const payload = {
+        nom: cleanedName,
+        nom_ar: String(nameAr || '').trim(),
+        nom_en: String(nameEn || '').trim(),
+      };
       if (categorieId) {
         payload.categorie = categorieId;
         // Si on ajoute à une catégorie, hériter la visibilité de la catégorie
@@ -1908,7 +2008,7 @@ function App({ forceVisitor = false }) {
     } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors de l\'ajout du sous-thème'); }
   };
 
-  const addCategorie = async (themeId, name, nameAr = '') => {
+  const addCategorie = async (themeId, name, nameAr = '', nameEn = '') => {
     const cleanedName = String(name || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom de la catégorie est requis');
@@ -1922,7 +2022,14 @@ function App({ forceVisitor = false }) {
       const theme = themes.find(t => t.id === themeId);
       const ordre = theme?.categories?.length || 0;
       // Ensure the new category inherits the theme's visibility status
-      const payload = { nom: cleanedName, nom_ar: String(nameAr || '').trim(), theme: themeId, ordre, is_visible: theme?.is_visible ?? true };
+      const payload = {
+        nom: cleanedName,
+        nom_ar: String(nameAr || '').trim(),
+        nom_en: String(nameEn || '').trim(),
+        theme: themeId,
+        ordre,
+        is_visible: theme?.is_visible ?? true,
+      };
       await axios.post(`${API_BASE}/categories/`, payload);
       alert('Catégorie ajoutée');
       const themesRes = await axios.get(themesApiBase);
@@ -1932,7 +2039,7 @@ function App({ forceVisitor = false }) {
     } catch (err) { console.error(err); alert(err.response?.data?.nom?.[0] || err.response?.data?.error || 'Erreur lors de l\'ajout de la catégorie'); }
   };
 
-  const renameCategorie = async (categorieId, newName, newNameAr = '') => {
+  const renameCategorie = async (categorieId, newName, newNameAr = '', newNameEn = '') => {
     const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom de la catégorie est requis');
@@ -1951,6 +2058,7 @@ function App({ forceVisitor = false }) {
       await axios.patch(`${API_BASE}/categories/${categorieId}/`, {
         nom: cleanedName,
         nom_ar: String(newNameAr || '').trim(),
+        nom_en: String(newNameEn || '').trim(),
       });
       alert('Catégorie renommée');
 
@@ -1970,7 +2078,7 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const renameSubTheme = async (id, newName, newNameAr = '') => {
+  const renameSubTheme = async (id, newName, newNameAr = '', newNameEn = '') => {
     const cleanedName = String(newName || '').trim().replace(/\s+/g, ' ');
     if (!cleanedName) {
       alert('Le nom du sous-thème est requis');
@@ -1985,7 +2093,11 @@ function App({ forceVisitor = false }) {
       return;
     }
     try {
-      await axios.patch(`${API_BASE}/sousthemes/${id}/`, { nom: cleanedName, nom_ar: String(newNameAr || '').trim() });
+      await axios.patch(`${API_BASE}/sousthemes/${id}/`, {
+        nom: cleanedName,
+        nom_ar: String(newNameAr || '').trim(),
+        nom_en: String(newNameEn || '').trim(),
+      });
       alert('Sous-thème renommé');
       const res = await axios.get(themesApiBase);
       setThemes(res.data);
@@ -2253,12 +2365,12 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const executeClassicImport = async (file, fileAr = null) => {
+  const executeClassicImport = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
       const imported = await readExcelRows(file);
       if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
       await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
       setEditTableColumns(imported.columns);
       setEditTableRows(imported.rows);
@@ -2271,6 +2383,7 @@ function App({ forceVisitor = false }) {
       const fd = new FormData();
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
       fd.append('free_schema', 'true');
       const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/import/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
@@ -2281,12 +2394,12 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const executeSmartImport = async (file, fileAr = null) => {
+  const executeSmartImport = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
       const imported = await readExcelRows(file);
       if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
 
       const targetColumns = (editTableColumns && editTableColumns.length > 0)
         ? editTableColumns
@@ -2321,6 +2434,7 @@ function App({ forceVisitor = false }) {
       const fd = new FormData();
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
       fd.append('free_schema', 'true');
       const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/import-smart/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
@@ -2331,12 +2445,12 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const executeClassicAppend = async (file, fileAr = null) => {
+  const executeClassicAppend = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
       const imported = await readExcelRows(file);
       if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
       const existingRows = editTableRows || [];
       const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
       if (existingColumns.length > 0) {
@@ -2359,6 +2473,7 @@ function App({ forceVisitor = false }) {
       const fd = new FormData();
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
       fd.append('use_ai', 'false');
       const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/append/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
@@ -2370,12 +2485,12 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const executeSmartAppend = async (file, fileAr = null) => {
+  const executeSmartAppend = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
       const imported = await readExcelRows(file);
       if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr) throw new Error('La version arabe n\'est pas prise en charge en brouillon saisisseur.');
+      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
       const existingRows = editTableRows || [];
       const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
       const sourceByNorm = new Map((imported.columns || []).map((c) => [normalizeCol(c), c]));
@@ -2400,6 +2515,7 @@ function App({ forceVisitor = false }) {
       const fd = new FormData();
       fd.append('file', file);
       if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
       fd.append('use_ai', 'true');
       const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/append/`, fd);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
@@ -2418,26 +2534,31 @@ function App({ forceVisitor = false }) {
     return { title: 'Ajouter avec IA', description: 'Ajout avec remappage IA. Si le sous-theme est bilingue, le fichier arabe devient obligatoire.' };
   };
 
-  const openImportDialog = (mode) => setImportDialog({ open: true, mode, file: null, fileAr: null });
-  const closeImportDialog = () => setImportDialog({ open: false, mode: null, file: null, fileAr: null });
+  const openImportDialog = (mode) => setImportDialog({ open: true, mode, file: null, fileAr: null, fileEn: null });
+  const closeImportDialog = () => setImportDialog({ open: false, mode: null, file: null, fileAr: null, fileEn: null });
   const isCurrentImportBusy = isReplacing || isSmartImporting || isAppending || isAppendingAI;
 
   const handleConfirmImportDialog = async () => {
-    const { mode, file, fileAr } = importDialog;
+    const { mode, file, fileAr, fileEn } = importDialog;
     if (!file) {
       alert('Le fichier principal est obligatoire.');
       return;
     }
 
+    if (hasEnglishI18nData && !fileEn) {
+      alert('Ce sous-thème contient déjà des données EN. Le fichier anglais est obligatoire.');
+      return;
+    }
+
     try {
       if (mode === 'replace') {
-        await executeClassicImport(file, fileAr || null);
+        await executeClassicImport(file, fileAr || null, fileEn || null);
       } else if (mode === 'smart-replace') {
-        await executeSmartImport(file, fileAr || null);
+        await executeSmartImport(file, fileAr || null, fileEn || null);
       } else if (mode === 'append') {
-        await executeClassicAppend(file, fileAr || null);
+        await executeClassicAppend(file, fileAr || null, fileEn || null);
       } else if (mode === 'append-smart') {
-        await executeSmartAppend(file, fileAr || null);
+        await executeSmartAppend(file, fileAr || null, fileEn || null);
       }
       closeImportDialog();
     } catch (err) {
@@ -2960,12 +3081,16 @@ function App({ forceVisitor = false }) {
 
       // Translate the selected value to the current language before comparing,
       // so a previously-selected "Masculin" still matches "ط°ظƒط±" after AR switch, etc.
-      const localizedSelectedValue = isArabicDataView ? getLocalizedValueLabel(key, selectedValue) : String(selectedValue ?? '');
+      const localizedSelectedValue = activeDataLanguage !== 'fr'
+        ? getLocalizedValueLabel(key, selectedValue)
+        : String(selectedValue ?? '');
 
       if (Array.isArray(selectedValue)) {
         if (selectedValue.length === 0) return true;
         return selectedValue.some(sv => {
-          const lv = isArabicDataView ? getLocalizedValueLabel(key, sv) : String(sv ?? '');
+          const lv = activeDataLanguage !== 'fr'
+            ? getLocalizedValueLabel(key, sv)
+            : String(sv ?? '');
           return String(sv) === String(rowVal) || String(lv) === String(rowVal);
         });
       }
@@ -2996,11 +3121,11 @@ function App({ forceVisitor = false }) {
         ? localizeConfiguredColumns(selectedSubTheme.visitor_visible_columns)
         : fallbackColumns;
     }
-    if (isArabicDataView) {
+    if (activeDataLanguage !== 'fr') {
       return localizeConfiguredColumns(fallbackColumns);
     }
     return fallbackColumns;
-  }, [selectedSubTheme, isVisitor, isArabicDataView, i18n.language]);
+  }, [selectedSubTheme, isVisitor, activeDataLanguage, i18n.language]);
 
   const filtersForRender = React.useMemo(() => {
     if (!selectedSubTheme) return [];
@@ -3008,11 +3133,11 @@ function App({ forceVisitor = false }) {
       const raw = (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
       return localizeConfiguredColumns(raw);
     }
-    if (isArabicDataView) {
+    if (activeDataLanguage !== 'fr') {
       return localizeConfiguredColumns(selectedSubTheme.filtres_disponibles || []);
     }
     return selectedSubTheme.filtres_disponibles || [];
-  }, [selectedSubTheme, isVisitor, isArabicDataView, i18n.language]);
+  }, [selectedSubTheme, isVisitor, activeDataLanguage, i18n.language]);
 
   const visitorMatrix = React.useMemo(() => {
     if (!isVisitor || !selectedSubTheme) return null;
@@ -3277,7 +3402,7 @@ function App({ forceVisitor = false }) {
         setSavedCharts(nextCharts);
         await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
         setIsModalOpen(false);
-        setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', x_label: '', y_label: '', group_by: '' });
+        setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', mesure_en: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', title_en: '', x_label: '', y_label: '', group_by: '' });
         return;
       }
 
@@ -3295,10 +3420,12 @@ function App({ forceVisitor = false }) {
           visible_filters: currentChartConfig.visible_filters || [],
           title: currentChartConfig.title || '',
           title_ar: currentChartConfig.title_ar || '',
+          title_en: currentChartConfig.title_en || '',
           x_label: currentChartConfig.x_label || '',
           y_label: currentChartConfig.y_label || '',
           group_by: currentChartConfig.group_by || '',
           mesure_ar: currentChartConfig.mesure_ar || '',
+          mesure_en: currentChartConfig.mesure_en || '',
         });
         const updated = res.data;
         setSavedCharts(prev => prev.map(c => c.id === updated.id ? updated : c));
@@ -3316,10 +3443,12 @@ function App({ forceVisitor = false }) {
           visible_filters: currentChartConfig.visible_filters || [],
           title: currentChartConfig.title || '',
           title_ar: currentChartConfig.title_ar || '',
+          title_en: currentChartConfig.title_en || '',
           x_label: currentChartConfig.x_label || '',
           y_label: currentChartConfig.y_label || '',
           group_by: currentChartConfig.group_by || '',
           mesure_ar: currentChartConfig.mesure_ar || '',
+          mesure_en: currentChartConfig.mesure_en || '',
         });
         const created = res.data;
         setSavedCharts(prev => [...prev, created]);
@@ -3333,7 +3462,7 @@ function App({ forceVisitor = false }) {
       setSavedCharts(freshSubTheme.charts_config || []);
 
       setIsModalOpen(false);
-      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', x_label: '', y_label: '', group_by: '' });
+      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', mesure_en: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', title_en: '', x_label: '', y_label: '', group_by: '' });
     } catch (err) {
       console.error('Erreur en sauvegarde du graphique', err);
       alert('Erreur lors de la sauvegarde du graphique');
@@ -3617,6 +3746,7 @@ function App({ forceVisitor = false }) {
             initialRows.push({
               sousTheme: '', 
               sousTheme_ar: '',
+                  sousTheme_en: '',
               unite: '', 
               definition: '', 
               indicateur: '', 
@@ -3633,6 +3763,7 @@ function App({ forceVisitor = false }) {
       initialRows = Array.from({ length: themeData.nbSousThemes }, () => ({
         sousTheme: '', 
         sousTheme_ar: '',
+        sousTheme_en: '',
         unite: '', 
         definition: '', 
         indicateur: '', 
@@ -3713,6 +3844,7 @@ function App({ forceVisitor = false }) {
     const formData = new FormData();
     formData.append('titre', cleanedThemeTitle);
     formData.append('titre_ar', String(themeData.titre_ar || '').trim());
+    formData.append('titre_en', String(themeData.titre_en || '').trim());
     formData.append('statut', themeData.statut);
     if (themeImageFile) formData.append('theme_image', themeImageFile);
     
@@ -3722,6 +3854,7 @@ function App({ forceVisitor = false }) {
       categoryNames.filter(c => c.nom.trim()).forEach((cat, idx) => {
         formData.append(`categories[${idx}][nom]`, cat.nom);
         formData.append(`categories[${idx}][nom_ar]`, String(cat.nom_ar || '').trim());
+        formData.append(`categories[${idx}][nom_en]`, String(cat.nom_en || '').trim());
         formData.append(`categories[${idx}][ordre]`, idx);
       });
     }
@@ -3730,6 +3863,7 @@ function App({ forceVisitor = false }) {
       const cleanedSubTheme = String(row.sousTheme || '').trim().replace(/\s+/g, ' ');
       formData.append(`lignes[${i}][sousTheme]`, cleanedSubTheme);
       formData.append(`lignes[${i}][sousTheme_ar]`, String(row.sousTheme_ar || '').trim());
+      formData.append(`lignes[${i}][sousTheme_en]`, String(row.sousTheme_en || '').trim());
       formData.append(`lignes[${i}][unite]`, row.unite);
       formData.append(`lignes[${i}][indicateur]`, row.indicateur);
       formData.append(`lignes[${i}][definition]`, row.definition);
@@ -3753,10 +3887,10 @@ function App({ forceVisitor = false }) {
       alert("Enregistré !");
       setFormStep(0);
       setUseCategories(false);
-      setCategoryNames([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
+      setCategoryNames([{ nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }]);
       setThemeImageFile(null);
       setThemeImagePreview('');
-      setThemeData({ titre: '', titre_ar: '', nbSousThemes: 1, statut: 'Public' });
+      setThemeData({ titre: '', titre_ar: '', titre_en: '', nbSousThemes: 1, statut: 'Public' });
       setRows([]);
     } catch (err) { console.error(err.response?.data || err); alert("Erreur : " + (err.response?.data?.error || err.message)); }
   };
@@ -3992,7 +4126,11 @@ function App({ forceVisitor = false }) {
       <div className="flex-1 min-w-0 h-screen flex flex-col overflow-hidden">
         <div className={`bg-[var(--color-primary)] px-4 md:px-6 py-3 border-b border-[#9b2b64] flex items-center gap-3 shadow-[0_6px_18px_rgba(17,24,39,0.14)] relative min-w-0 ${isVisitor ? 'min-h-[64px]' : ''}`}>
           <h1 className={`text-white font-bold text-center tracking-wide leading-tight ${isVisitor ? 'text-[18px] md:text-[24px] w-full px-8 md:px-0 md:absolute md:left-1/2 md:-translate-x-1/2 md:w-[min(62vw,820px)] pointer-events-none break-words' : 'text-[24px] md:text-[32px] flex-1 min-w-0 break-words'}`}>
-            {i18n.language === 'ar' ? 'قاعدة المعطيات الجهوية لبني ملال-خنيفرة' : 'Base de Données Région Béni Mellal-Khénifra'}
+            {i18n.language === 'ar'
+              ? 'قاعدة المعطيات الجهوية لبني ملال-خنيفرة'
+              : i18n.language === 'en'
+                ? 'Regional Data Platform - Beni Mellal-Khenifra'
+                : 'Base de Données Région Béni Mellal-Khénifra'}
           </h1>
           {/* Header search + language selector */}
           {(isVisitor || pathHasAdmin || isSaisisseurRoute) && (
@@ -4021,9 +4159,21 @@ function App({ forceVisitor = false }) {
                     <div className={`absolute ${isArabicVisitor ? 'left-0' : 'right-0'} mt-1 w-full bg-[#fffaf2] border border-[#B84C83] rounded-md shadow-lg max-h-72 overflow-y-auto`}>
                       {visitorSubThemeSearchResults.length > 0 ? (
                         visitorSubThemeSearchResults.map((result) => {
-                          const subLabel = isArabicVisitor ? (result.subNameAr || result.subNameFr) : (result.subNameFr || result.subNameAr);
-                          const themeLabel = isArabicVisitor ? (result.themeTitleAr || result.themeTitleFr) : (result.themeTitleFr || result.themeTitleAr);
-                          const catLabel = isArabicVisitor ? (result.catNameAr || result.catNameFr) : (result.catNameFr || result.catNameAr);
+                          const subLabel = i18n.language === 'ar'
+                            ? (result.subNameAr || result.subNameFr || result.subNameEn)
+                            : i18n.language === 'en'
+                              ? (result.subNameEn || result.subNameFr || result.subNameAr)
+                              : (result.subNameFr || result.subNameAr || result.subNameEn);
+                          const themeLabel = i18n.language === 'ar'
+                            ? (result.themeTitleAr || result.themeTitleFr || result.themeTitleEn)
+                            : i18n.language === 'en'
+                              ? (result.themeTitleEn || result.themeTitleFr || result.themeTitleAr)
+                              : (result.themeTitleFr || result.themeTitleAr || result.themeTitleEn);
+                          const catLabel = i18n.language === 'ar'
+                            ? (result.catNameAr || result.catNameFr || result.catNameEn)
+                            : i18n.language === 'en'
+                              ? (result.catNameEn || result.catNameFr || result.catNameAr)
+                              : (result.catNameFr || result.catNameAr || result.catNameEn);
 
                           return (
                             <button
@@ -4085,7 +4235,12 @@ function App({ forceVisitor = false }) {
                 }
 
                 const renderTickerItem = (item, idx, copyIdx) => {
-                  const text = String((isVisitor && i18n.language === 'ar') ? (item?.text_ar || item?.text || '') : (item?.text || '')).trim();
+                  const localizedText = i18n.language === 'ar'
+                    ? (item?.text_ar || item?.text || '')
+                    : i18n.language === 'en'
+                      ? (item?.text_en || item?.text || item?.text_ar || '')
+                      : (item?.text || '');
+                  const text = String(localizedText).trim();
                   const url = String(item?.url || '').trim();
                   if (!text) return null;
 
@@ -4224,9 +4379,11 @@ function App({ forceVisitor = false }) {
             <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
               <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
                 <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">
-                  {(isVisitor && i18n.language === 'ar')
+                  {i18n.language === 'ar'
                     ? (siteContent.about_title_ar || siteContent.about_title || t('about_default'))
-                    : (siteContent.about_title || t('about_default'))}
+                    : i18n.language === 'en'
+                      ? (siteContent.about_title_en || siteContent.about_title || siteContent.about_title_ar || t('about_default'))
+                      : (siteContent.about_title || t('about_default'))}
                 </h2>
                 {canEdit && userRole === 'ADMIN' ? (
                   <div className="space-y-4">
@@ -4258,6 +4415,19 @@ function App({ forceVisitor = false }) {
                       placeholder="نص صفحة حول للزوار (عربي)"
                       dir="rtl"
                     />
+                    <input
+                      type="text"
+                      value={siteContentDraft.about_title_en || ''}
+                      onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, about_title_en: e.target.value }))}
+                      className="w-full p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                      placeholder="About page title (English)"
+                    />
+                    <textarea
+                      value={siteContentDraft.about_text_en || ''}
+                      onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, about_text_en: e.target.value }))}
+                      className="w-full min-h-[220px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                      placeholder="About page text for visitors (English)"
+                    />
                     <div className="flex justify-end">
                       <button
                         onClick={saveSiteContent}
@@ -4270,9 +4440,11 @@ function App({ forceVisitor = false }) {
                   </div>
                 ) : (
                   <div className="leading-8 text-[#243447] whitespace-pre-wrap">
-                    {(isVisitor && i18n.language === 'ar')
+                    {i18n.language === 'ar'
                       ? (siteContent.about_text_ar || siteContent.about_text || t('about_coming_soon'))
-                      : (siteContent.about_text || t('about_coming_soon'))}
+                      : i18n.language === 'en'
+                        ? (siteContent.about_text_en || siteContent.about_text || siteContent.about_text_ar || t('about_coming_soon'))
+                        : (siteContent.about_text || t('about_coming_soon'))}
                   </div>
                 )}
               </div>
@@ -4283,20 +4455,25 @@ function App({ forceVisitor = false }) {
             <div className="w-full min-h-[calc(100vh-320px)] flex items-center justify-center px-2 md:px-6 py-6">
               <div className="w-full max-w-5xl bg-gradient-to-b from-[#fffdf8] to-white border-2 border-[#D6B978] rounded-2xl shadow-[0_14px_30px_rgba(16,78,116,0.16)] p-7 space-y-6">
                 <h2 className="text-3xl md:text-4xl font-extrabold text-[#7A0A4A] border-b border-[#E7D2A1] pb-3 tracking-tight">
-                  {(isVisitor && i18n.language === 'ar')
+                  {i18n.language === 'ar'
                     ? (siteContent.contact_title_ar || siteContent.contact_title || t('contact_default'))
-                    : (siteContent.contact_title || t('contact_default'))}
+                    : i18n.language === 'en'
+                      ? (siteContent.contact_title_en || siteContent.contact_title || siteContent.contact_title_ar || t('contact_default'))
+                      : (siteContent.contact_title || t('contact_default'))}
                 </h2>
                 {canEdit && userRole === 'ADMIN' ? (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                     <input type="text" value={siteContentDraft.contact_title || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_title: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Titre de la page Contact" />
                     <input type="text" value={siteContentDraft.contact_title_ar || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_title_ar: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="عنوان صفحة اتصل بنا (عربي)" dir="rtl" />
+                    <input type="text" value={siteContentDraft.contact_title_en || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_title_en: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Contact page title (English)" />
                     <input type="email" value={siteContentDraft.contact_email || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_email: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Email de contact" />
                     <input type="text" value={siteContentDraft.contact_phone || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_phone: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Telephone" />
                     <input type="text" value={siteContentDraft.contact_hours || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_hours: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Horaires" />
                     <input type="text" value={siteContentDraft.contact_hours_ar || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_hours_ar: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="ساعات العمل (عربي)" dir="rtl" />
+                    <input type="text" value={siteContentDraft.contact_hours_en || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_hours_en: e.target.value }))} className="p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Working hours (English)" />
                     <textarea value={siteContentDraft.contact_address || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_address: e.target.value }))} className="md:col-span-2 min-h-[120px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Adresse postale" />
                     <textarea value={siteContentDraft.contact_address_ar || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_address_ar: e.target.value }))} className="md:col-span-2 min-h-[120px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="العنوان البريدي (عربي)" dir="rtl" />
+                    <textarea value={siteContentDraft.contact_address_en || ''} onChange={(e) => setSiteContentDraft((prev) => ({ ...prev, contact_address_en: e.target.value }))} className="md:col-span-2 min-h-[120px] p-3 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]" placeholder="Postal address (English)" />
                     <div className="md:col-span-2 flex justify-end">
                       <button
                         onClick={saveSiteContent}
@@ -4311,8 +4488,8 @@ function App({ forceVisitor = false }) {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-[#243447]">
                     <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('email')}</div><div>{siteContent.contact_email || 'contact@hcp.ma'}</div></div>
                     <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('phone')}</div><div>{siteContent.contact_phone || '-'}</div></div>
-                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('address')}</div><div className="whitespace-pre-wrap">{(isVisitor && i18n.language === 'ar') ? (siteContent.contact_address_ar || siteContent.contact_address || '-') : (siteContent.contact_address || '-')}</div></div>
-                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('hours')}</div><div>{(isVisitor && i18n.language === 'ar') ? (siteContent.contact_hours_ar || siteContent.contact_hours || '-') : (siteContent.contact_hours || '-')}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('address')}</div><div className="whitespace-pre-wrap">{i18n.language === 'ar' ? (siteContent.contact_address_ar || siteContent.contact_address || '-') : i18n.language === 'en' ? (siteContent.contact_address_en || siteContent.contact_address || siteContent.contact_address_ar || '-') : (siteContent.contact_address || '-')}</div></div>
+                    <div className="bg-[#f8fafc] border border-[#d8e4ec] rounded-xl p-4"><div className="font-semibold text-[#7A0A4A]">{t('hours')}</div><div>{i18n.language === 'ar' ? (siteContent.contact_hours_ar || siteContent.contact_hours || '-') : i18n.language === 'en' ? (siteContent.contact_hours_en || siteContent.contact_hours || siteContent.contact_hours_ar || '-') : (siteContent.contact_hours || '-')}</div></div>
                   </div>
                 )}
               </div>
@@ -4394,6 +4571,40 @@ function App({ forceVisitor = false }) {
                         </button>
                       </div>
                     ))}
+                    <div className="pt-2 text-sm font-semibold text-[#7A0A4A]">English</div>
+                    {(siteContentDraft.useful_links_en || []).map((link, idx) => (
+                      <div key={`link-en-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1.4fr_auto] gap-2 items-center">
+                        <input
+                          type="text"
+                          value={link?.label || ''}
+                          onChange={(e) => setSiteContentDraft((prev) => {
+                            const next = [...(prev.useful_links_en || [])];
+                            next[idx] = { ...(next[idx] || {}), label: e.target.value };
+                            return { ...prev, useful_links_en: next };
+                          })}
+                          placeholder="Label"
+                          className="p-2 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                        />
+                        <input
+                          type="text"
+                          value={link?.url || ''}
+                          onChange={(e) => setSiteContentDraft((prev) => {
+                            const next = [...(prev.useful_links_en || [])];
+                            next[idx] = { ...(next[idx] || {}), url: e.target.value };
+                            return { ...prev, useful_links_en: next };
+                          })}
+                          placeholder="https://example.ma"
+                          className="p-2 border border-[#CCB47F] rounded-xl outline-none focus:border-[#7A0A4A]"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links_en: (prev.useful_links_en || []).filter((_, i) => i !== idx) }))}
+                          className="px-3 py-2 rounded-xl border border-red-300 text-red-700 hover:bg-red-50"
+                        >
+                          Supprimer
+                        </button>
+                      </div>
+                    ))}
                     <div className="flex flex-wrap gap-2 justify-between">
                       <div className="flex gap-2">
                         <button
@@ -4411,6 +4622,13 @@ function App({ forceVisitor = false }) {
                         >
                           إضافة رابط (AR)
                         </button>
+                        <button
+                          type="button"
+                          onClick={() => setSiteContentDraft((prev) => ({ ...prev, useful_links_en: [...(prev.useful_links_en || []), { label: '', url: '' }] }))}
+                          className="px-4 py-2 rounded-xl border border-[#CCB47F] bg-[#f8f3e7] text-[#7A0A4A] font-semibold hover:bg-[#f2e9d2]"
+                        >
+                          Add link (EN)
+                        </button>
                       </div>
                       <button
                         onClick={saveSiteContent}
@@ -4423,7 +4641,12 @@ function App({ forceVisitor = false }) {
                   </div>
                 ) : (
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                    {((isVisitor && i18n.language === 'ar') ? (siteContent.useful_links_ar || siteContent.useful_links || []) : (siteContent.useful_links || [])).map((link, idx) => (
+                    {(i18n.language === 'ar'
+                      ? (siteContent.useful_links_ar || siteContent.useful_links || [])
+                      : i18n.language === 'en'
+                        ? (siteContent.useful_links_en || siteContent.useful_links || siteContent.useful_links_ar || [])
+                        : (siteContent.useful_links || [])
+                    ).map((link, idx) => (
                       <a
                         key={`pub-link-${idx}`}
                         href={link?.url}
@@ -4735,6 +4958,7 @@ function App({ forceVisitor = false }) {
                                   setActionModalType('rename_categorie');
                                   setActionModalValue(cat?.nom || '');
                                   setActionModalValueAr(cat?.nom_ar || '');
+                                  setActionModalValueEn(cat?.nom_en || '');
                                   setActionModalThemeId(cat.id);
                                   setShowActionModal(true);
                                   setOpenCategorieMenu(null);
@@ -4772,7 +4996,7 @@ function App({ forceVisitor = false }) {
                 <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: actionMenuPos.left, top: actionMenuPos.top, zIndex: 9999 }}>
                   <div className="w-56 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
                     <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
-                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('rename'); setActionModalValue(t?.titre || ''); setActionModalValueAr(t?.titre_ar || ''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('rename'); setActionModalValue(t?.titre || ''); setActionModalValueAr(t?.titre_ar || ''); setActionModalValueEn(t?.titre_en || ''); setActionModalThemeId(openActionMenu); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Renommer
                     </button>
@@ -4788,7 +5012,7 @@ function App({ forceVisitor = false }) {
                         Supprimer l'image du thème
                       </button>
                     )}
-                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalValueAr(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalValueAr(''); setActionModalValueEn(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Ajouter un sous-thème
                     </button>
@@ -4801,6 +5025,7 @@ function App({ forceVisitor = false }) {
                             setActionModalType('add_categorie'); 
                             setActionModalValue(''); 
                             setActionModalValueAr(''); 
+                            setActionModalValueEn(''); 
                             setActionModalThemeId(openActionMenu); 
                             setShowActionModal(true); 
                             setOpenActionMenu(null); 
@@ -4850,6 +5075,13 @@ function App({ forceVisitor = false }) {
                  <input type="text" dir="rtl" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
                    value={themeData.titre_ar || ''}
                    onChange={e => setThemeData({...themeData, titre_ar: e.target.value})} />
+               </div>
+
+               <div className="flex items-center gap-6">
+                 <label className="text-xl w-64 font-bold">Theme title (EN)</label>
+                 <input type="text" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
+                   value={themeData.titre_en || ''}
+                   onChange={e => setThemeData({...themeData, titre_en: e.target.value})} />
                </div>
 
                <div className="flex items-center gap-6">
@@ -4911,7 +5143,7 @@ function App({ forceVisitor = false }) {
                    checked={useCategories}
                    onChange={e => {
                      setUseCategories(e.target.checked);
-                     if (!e.target.checked) setCategoryNames([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
+                     if (!e.target.checked) setCategoryNames([{ nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }]);
                    }}
                    className="w-6 h-6 cursor-pointer"
                  />
@@ -4922,7 +5154,7 @@ function App({ forceVisitor = false }) {
                    <div className="flex justify-between items-center">
                      <label className="text-lg font-bold">Configuration des catégories</label>
                      <button 
-                       onClick={() => setCategoryNames([...categoryNames, { nom: '', nom_ar: '', nbSousThemes: 1 }])}
+                       onClick={() => setCategoryNames([...categoryNames, { nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }])}
                        className="bg-green-500 text-white px-3 py-1 rounded-md font-bold hover:bg-green-600"
                      >
                        + Ajouter une catégorie
@@ -4955,6 +5187,17 @@ function App({ forceVisitor = false }) {
                              }}
                              className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
                              placeholder={`الاسم العربي للفئة ${idx + 1}`}
+                           />
+                           <input 
+                             type="text"
+                             value={cat.nom_en || ''}
+                             onChange={e => {
+                               const newCats = [...categoryNames];
+                               newCats[idx].nom_en = e.target.value;
+                               setCategoryNames(newCats);
+                             }}
+                             className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
+                             placeholder={`English category name ${idx + 1}`}
                            />
                            <div className="flex items-center gap-2">
                              <label className="font-semibold whitespace-nowrap">Sous-thèmes:</label>
@@ -5024,7 +5267,7 @@ function App({ forceVisitor = false }) {
                        <table className="w-full border-collapse">
                          <thead className="bg-gray-50">
                            <tr className="border-b border-black">
-                             {['Sous - thème*', 'Sous-thème (AR)', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
+                             {['Sous - thème*', 'Sous-thème (AR)', 'Sub-theme (EN)', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
                                <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
                              ))}
                            </tr>
@@ -5036,6 +5279,7 @@ function App({ forceVisitor = false }) {
                                <tr key={globalIdx} className="border-b border-black">
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme} onChange={e => {const r = [...rows]; r[globalIdx].sousTheme = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" dir="rtl" className="w-full outline-none text-xs" value={row.sousTheme_ar || ''} onChange={e => {const r = [...rows]; r[globalIdx].sousTheme_ar = e.target.value; setRows(r);}} /></td>
+                                 <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme_en || ''} onChange={e => {const r = [...rows]; r[globalIdx].sousTheme_en = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.unite} onChange={e => {const r = [...rows]; r[globalIdx].unite = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.definition} onChange={e => {const r = [...rows]; r[globalIdx].definition = e.target.value; setRows(r);}} /></td>
                                  <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.indicateur} onChange={e => {const r = [...rows]; r[globalIdx].indicateur = e.target.value; setRows(r);}} /></td>
@@ -5062,7 +5306,7 @@ function App({ forceVisitor = false }) {
                    <table className="w-full border-collapse">
                      <thead className="bg-gray-50">
                        <tr className="border-b border-black">
-                         {['Sous - thème*', 'Sous-thème (AR)', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
+                         {['Sous - thème*', 'Sous-thème (AR)', 'Sub-theme (EN)', 'Unité*', 'Définition*', 'Indicateur*', 'Source*', 'Périodicité*', 'Data*'].map(h => (
                            <th key={h} className="border-r border-black p-2 text-sm font-bold">{h}</th>
                          ))}
                        </tr>
@@ -5072,6 +5316,7 @@ function App({ forceVisitor = false }) {
                          <tr key={i} className="border-b border-black">
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme} onChange={e => {const r = [...rows]; r[i].sousTheme = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" dir="rtl" className="w-full outline-none text-xs" value={row.sousTheme_ar || ''} onChange={e => {const r = [...rows]; r[i].sousTheme_ar = e.target.value; setRows(r);}} /></td>
+                           <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.sousTheme_en || ''} onChange={e => {const r = [...rows]; r[i].sousTheme_en = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.unite} onChange={e => {const r = [...rows]; r[i].unite = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.definition} onChange={e => {const r = [...rows]; r[i].definition = e.target.value; setRows(r);}} /></td>
                            <td className="border-r border-black p-1"><input type="text" className="w-full outline-none text-xs" value={row.indicateur} onChange={e => {const r = [...rows]; r[i].indicateur = e.target.value; setRows(r);}} /></td>
@@ -5255,7 +5500,7 @@ function App({ forceVisitor = false }) {
                       {(() => {
                         const sortedCats = (selectedTheme.categories || []).slice().sort((a, b) => a.ordre - b.ordre);
                         const allSubThemes = sortedCats.flatMap(cat =>
-                          (cat.sous_themes || []).map(st => ({ ...st, category_id: cat.id, category_name: cat.nom, category_name_ar: cat.nom_ar }))
+                          (cat.sous_themes || []).map(st => ({ ...st, category_id: cat.id, category_name: cat.nom, category_name_ar: cat.nom_ar, category_name_en: cat.nom_en }))
                         );
                         const scopedSubThemes = String(selectedVisitorCategoryId) === 'all'
                           ? allSubThemes
@@ -5289,7 +5534,7 @@ function App({ forceVisitor = false }) {
                               {st.archived && (
                                 <div className="absolute top-2 left-2 bg-red-600 text-white px-2 py-1 rounded-full text-xs font-bold">🚫</div>
                               )}
-                              <div className="text-sm opacity-80 mb-2">{(isVisitor && i18n.language === 'ar') ? (st.category_name_ar || st.category_name) : st.category_name}</div>
+                              <div className="text-sm opacity-80 mb-2">{i18n.language === 'ar' ? (st.category_name_ar || st.category_name || st.category_name_en) : i18n.language === 'en' ? (st.category_name_en || st.category_name || st.category_name_ar) : (st.category_name || st.category_name_ar || st.category_name_en)}</div>
                               <div className="text-[20px] leading-tight">
                                 <span>{getSubThemeDisplayName(st)}</span>
                               </div>
@@ -5597,7 +5842,11 @@ function App({ forceVisitor = false }) {
                             {(() => {
                               const cur = dynamicFilters[filterCol];
                               if (Array.isArray(cur) && cur.length > 0) return t('selected_count', { count: cur.length });
-                              if (cur && !Array.isArray(cur)) return String(cur);
+                              if (cur && !Array.isArray(cur)) {
+                                return activeDataLanguage !== 'fr'
+                                  ? getLocalizedValueLabel(filterCol, cur)
+                                  : String(cur);
+                              }
                               return t('all_option');
                             })()}
                           </button>
@@ -5624,7 +5873,7 @@ function App({ forceVisitor = false }) {
                                           });
                                         }}
                                       />
-                                      <span>{val}</span>
+                                      <span>{activeDataLanguage !== 'fr' ? getLocalizedValueLabel(filterCol, val) : val}</span>
                                     </label>
                                   );
                                 })}
@@ -5976,8 +6225,16 @@ function App({ forceVisitor = false }) {
                     const chartGroupByKey = chart.group_by ? getLocalizedColumnLabel(chart.group_by) : '';
                     const chartXAxisLabel = translateDataValue(chart.x_label || chart.x);
                     const chartYAxisLabel = translateDataValue(chart.y_label || (selectedSubTheme?.type_unite || ''));
-                    const chartTitle = (isArabicDataView && chart.title_ar) ? chart.title_ar : chart.title;
-                    const chartMesure = (isArabicDataView && chart.mesure_ar) ? chart.mesure_ar : chart.mesure;
+                    const chartTitle = activeDataLanguage === 'ar'
+                      ? (chart.title_ar || chart.title)
+                      : activeDataLanguage === 'en'
+                        ? (chart.title_en || chart.title)
+                        : chart.title;
+                    const chartMesure = activeDataLanguage === 'ar'
+                      ? (chart.mesure_ar || chart.mesure)
+                      : activeDataLanguage === 'en'
+                        ? (chart.mesure_en || chart.mesure)
+                        : chart.mesure;
                     // Apply per-chart visitor-only filters (do not affect table)
                     const visitorFiltersList = chart.visible_filters || [];
                     const visitorValues = chartVisitorFilters[chart.id] || {};
@@ -6241,7 +6498,7 @@ function App({ forceVisitor = false }) {
                 {canEdit && (
                   <button 
                     onClick={() => {
-                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', x_label: '', y_label: '' });
+                      setCurrentChartConfig({ id: null, type: 'Histogramme', x: '', y: '', mesure: '', mesure_ar: '', mesure_en: '', filter_column: '', filter_value: '', filter_mode: 'include', filters: [], visible_filters: [], title: '', title_ar: '', title_en: '', x_label: '', y_label: '' });
                       setIsModalOpen(true);
                     }}
                     className="w-full py-6 border-4 border-dashed border-orange-300 rounded-2xl text-orange-400 font-black text-2xl hover:bg-orange-50 transition-all"
@@ -6300,7 +6557,7 @@ function App({ forceVisitor = false }) {
                   <button onClick={closeImportDialog} className="self-start rounded-lg border border-[#d0b17b] bg-white px-3 py-1.5 text-sm font-semibold text-[#5a2436] hover:bg-[#f8ecd8]">Fermer</button>
                 </div>
 
-                <div className="mt-4 grid gap-4 md:grid-cols-2">
+                <div className="mt-4 grid gap-4 md:grid-cols-3">
                   <div>
                     <label className="block text-sm font-bold text-[#5a2436] mb-1">Fichier principal</label>
                     <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, file: e.target.files?.[0] || null }))} />
@@ -6313,11 +6570,18 @@ function App({ forceVisitor = false }) {
                     <div className="mt-1 text-xs text-gray-600">Optionnelle pour un sous-theme monolingue. Obligatoire si le sous-theme est deja bilingue.</div>
                     {importDialog.fileAr && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileAr.name}</div>}
                   </div>
+                  <div>
+                    <label className="block text-sm font-bold text-[#5a2436] mb-1">Version anglaise du meme tableau</label>
+                    <input type="file" accept=".xlsx,.xls" disabled={isSaisisseur} className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-400" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileEn: e.target.files?.[0] || null }))} />
+                    <div className="mt-1 text-xs text-gray-600">Optionnelle si EN absent. Obligatoire si le sous-theme contient deja une version EN.</div>
+                    {importDialog.fileEn && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileEn.name}</div>}
+                  </div>
                 </div>
 
                 <div className="mt-4 rounded-xl border border-[#ecd29f] bg-white px-4 py-3 text-sm text-[#6b4b3b]">
                   <div>Mode: <span className="font-semibold text-[#5a2436]">{getImportModeMeta(importDialog.mode).title}</span></div>
                   <div className="mt-1">Verification bilingue: <span className="font-semibold text-[#5a2436]">{importDialog.fileAr ? 'activee' : 'desactivee'}</span></div>
+                  <div className="mt-1">Verification anglaise: <span className="font-semibold text-[#5a2436]">{importDialog.fileEn ? 'activee' : 'desactivee'}</span></div>
                 </div>
 
                 <div className="mt-4 flex gap-3">
@@ -6842,7 +7106,7 @@ function App({ forceVisitor = false }) {
         <div onClick={(e) => e.stopPropagation()} style={{ position: 'fixed', left: subActionMenuPos.left, top: subActionMenuPos.top, zIndex: 9999 }}>
           <div className="w-48 bg-white rounded-lg shadow-2xl border border-gray-200 max-h-96 overflow-y-auto">
             <div className="px-3 py-2 border-b text-sm font-semibold text-gray-700">Actions</div>
-            <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); setActionModalType('rename_subtheme'); setActionModalValue(st?.nom || ''); setActionModalValueAr(st?.nom_ar || ''); setActionModalThemeId(openSubActionMenu); setShowActionModal(true); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+            <button onClick={(e) => { e.stopPropagation(); const st = (selectedTheme?.sous_themes || []).find(s => s.id === openSubActionMenu) || themes.flatMap(t => t.sous_themes || []).find(s => s.id === openSubActionMenu); setActionModalType('rename_subtheme'); setActionModalValue(st?.nom || ''); setActionModalValueAr(st?.nom_ar || ''); setActionModalValueEn(st?.nom_en || ''); setActionModalThemeId(openSubActionMenu); setShowActionModal(true); setOpenSubActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M3 21v-3" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M7 14l9-9 3 3-9 9H7v-3z" stroke="#374151" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
               Renommer
             </button>
@@ -6888,6 +7152,7 @@ function App({ forceVisitor = false }) {
             <h2 className="text-xl font-black mb-4 text-center">{actionModalType === 'rename' ? 'Renommer le thème' : actionModalType === 'rename_subtheme' ? 'Renommer le sous-thème' : actionModalType === 'rename_categorie' ? 'Renommer la catégorie' : actionModalType === 'add_categorie' ? 'Ajouter une catégorie' : 'Ajouter un sous-thème'}</h2>
             <input className="w-full p-2 border-2 border-black rounded mb-3" value={actionModalValue} onChange={e => setActionModalValue(e.target.value)} placeholder={actionModalType === 'rename' ? 'Nouveau nom du thème' : actionModalType === 'rename_subtheme' ? 'Nouveau nom du sous-thème' : actionModalType === 'rename_categorie' ? 'Nouveau nom de la catégorie' : actionModalType === 'add_categorie' ? 'Nom de la catégorie' : 'Nom du sous-thème'} />
             <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValueAr} onChange={e => setActionModalValueAr(e.target.value)} placeholder={actionModalType === 'rename' ? 'الاسم العربي للموضوع' : actionModalType === 'rename_subtheme' ? 'الاسم العربي للموضوع الفرعي' : actionModalType === 'rename_categorie' ? 'الاسم العربي للفئة' : actionModalType === 'add_categorie' ? 'الاسم العربي للفئة' : 'الاسم العربي للموضوع الفرعي'} dir="rtl" />
+            <input className="w-full p-2 border-2 border-black rounded mb-4" value={actionModalValueEn} onChange={e => setActionModalValueEn(e.target.value)} placeholder={actionModalType === 'rename' ? 'English theme title' : actionModalType === 'rename_subtheme' ? 'English sub-theme title' : actionModalType === 'rename_categorie' ? 'English category name' : actionModalType === 'add_categorie' ? 'English category name' : 'English sub-theme name'} />
             
             {actionModalType === 'add_subtheme' && (() => {
               const currentTheme = themes.find(t => t.id === actionModalThemeId);
@@ -6912,25 +7177,27 @@ function App({ forceVisitor = false }) {
             })()}
             
             <div className="flex gap-4">
-              <button onClick={() => { setShowActionModal(false); setActionModalCategorieId(null); setActionModalValueAr(''); }} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
+              <button onClick={() => { setShowActionModal(false); setActionModalCategorieId(null); setActionModalValueAr(''); setActionModalValueEn(''); }} className="flex-1 bg-gray-200 py-2 border-2 border-black rounded-xl font-bold">Annuler</button>
               <button onClick={async () => {
                 const cleanedModalValue = String(actionModalValue || '').trim().replace(/\s+/g, ' ');
                 const cleanedModalValueAr = String(actionModalValueAr || '').trim().replace(/\s+/g, ' ');
+                const cleanedModalValueEn = String(actionModalValueEn || '').trim().replace(/\s+/g, ' ');
                 if (!cleanedModalValue) { alert('Le nom est requis'); return; }
-                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
-                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
-                else if (actionModalType === 'rename_categorie') { await renameCategorie(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
-                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, cleanedModalValue, cleanedModalValueAr); }
+                if (actionModalType === 'rename') { await renameTheme(actionModalThemeId, cleanedModalValue, cleanedModalValueAr, cleanedModalValueEn); }
+                else if (actionModalType === 'rename_subtheme') { await renameSubTheme(actionModalThemeId, cleanedModalValue, cleanedModalValueAr, cleanedModalValueEn); }
+                else if (actionModalType === 'rename_categorie') { await renameCategorie(actionModalThemeId, cleanedModalValue, cleanedModalValueAr, cleanedModalValueEn); }
+                else if (actionModalType === 'add_categorie') { await addCategorie(actionModalThemeId, cleanedModalValue, cleanedModalValueAr, cleanedModalValueEn); }
                 else { 
                   const currentTheme = themes.find(t => t.id === actionModalThemeId);
                   if (currentTheme && currentTheme.categories && currentTheme.categories.length > 0 && !actionModalCategorieId) {
                     return alert('Veuillez sélectionner une catégorie');
                   }
-                  await addSubTheme(actionModalThemeId, cleanedModalValue, actionModalCategorieId, cleanedModalValueAr); 
+                  await addSubTheme(actionModalThemeId, cleanedModalValue, actionModalCategorieId, cleanedModalValueAr, cleanedModalValueEn); 
                 }
                 setShowActionModal(false);
                 setActionModalCategorieId(null);
                 setActionModalValueAr('');
+                setActionModalValueEn('');
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Valider</button>
             </div>
           </div>
@@ -6953,7 +7220,7 @@ function App({ forceVisitor = false }) {
 
             <div className="space-y-3">
               {(infoBannerDraftItems || []).map((item, idx) => (
-                <div key={`info-editor-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_auto] gap-2">
+                <div key={`info-editor-${idx}`} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_1fr_1fr_auto] gap-2">
                   <input
                     type="text"
                     value={item?.text || ''}
@@ -6967,6 +7234,13 @@ function App({ forceVisitor = false }) {
                     onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text_ar: e.target.value } : it))}
                     placeholder="عنوان المعلومة بالعربية"
                     dir="rtl"
+                    className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
+                  />
+                  <input
+                    type="text"
+                    value={item?.text_en || ''}
+                    onChange={(e) => setInfoBannerDraftItems((prev) => prev.map((it, i) => i === idx ? { ...it, text_en: e.target.value } : it))}
+                    placeholder="Info title in English"
                     className="bg-white text-[var(--color-primary)] px-3 py-2 rounded-lg font-medium border border-[var(--color-border)] outline-none focus:border-[#B03372]"
                   />
                   <input
@@ -6991,7 +7265,7 @@ function App({ forceVisitor = false }) {
             <div className="flex flex-wrap items-center justify-end gap-2 mt-5">
               <button
                 type="button"
-                onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', text_ar: '', url: '' }])}
+                  onClick={() => setInfoBannerDraftItems((prev) => [...(prev || []), { text: '', text_ar: '', text_en: '', url: '' }])}
                 className="px-4 py-2 rounded-xl font-semibold border bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]"
               >
                 + Ajouter info

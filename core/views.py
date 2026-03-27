@@ -272,14 +272,27 @@ def _build_non_empty_metadata(sub_theme, language):
         'periodicite': _clean_text(sub_theme.periodicite_text_ar),
         'couverture': _clean_text(sub_theme.couverture_text_ar),
     }
+    en_fields = {
+        'definition': _clean_text(getattr(sub_theme, 'definition_text_en', '')),
+        'unite': _clean_text(getattr(sub_theme, 'unite_text_en', '')),
+        'indication': _clean_text(getattr(sub_theme, 'indication_text_en', '')),
+        'source': _clean_text(getattr(sub_theme, 'source_text_en', '')),
+        'periodicite': _clean_text(getattr(sub_theme, 'periodicite_text_en', '')),
+        'couverture': _clean_text(getattr(sub_theme, 'couverture_text_en', '')),
+    }
 
     fr_non_empty = {k: v for k, v in fr_fields.items() if v}
     ar_non_empty = {k: v for k, v in ar_fields.items() if v}
+    en_non_empty = {k: v for k, v in en_fields.items() if v}
 
     if language == 'ar':
         return {'ar': ar_non_empty}
+    if language == 'en':
+        return {'en': en_non_empty}
     if language == 'both':
         return {'fr': fr_non_empty, 'ar': ar_non_empty}
+    if language == 'all':
+        return {'fr': fr_non_empty, 'ar': ar_non_empty, 'en': en_non_empty}
     return {'fr': fr_non_empty}
 
 
@@ -340,7 +353,12 @@ def _build_bilingual_table(sub_theme, language, max_rows=60):
             'truncated': mono['truncated'],
         }
 
-    requested_langs = ['fr', 'ar'] if language == 'both' else [language]
+    if language == 'both':
+        requested_langs = ['fr', 'ar']
+    elif language == 'all':
+        requested_langs = ['fr', 'ar', 'en']
+    else:
+        requested_langs = [language]
     tables = {}
 
     for lang in requested_langs:
@@ -381,7 +399,7 @@ def _build_bilingual_table(sub_theme, language, max_rows=60):
 
 
 def _build_report_table_payload(sub_theme, language='fr', table_view='horizontal', max_rows=60):
-    if language not in ('fr', 'ar', 'both'):
+    if language not in ('fr', 'ar', 'en', 'both', 'all'):
         language = 'fr'
     if table_view not in ('horizontal', 'vertical'):
         table_view = 'horizontal'
@@ -1080,19 +1098,22 @@ def _pick_value_column(df):
     return best_col
 
 
-def _build_bilingual_payload(df_fr, df_ar):
+def _build_bilingual_payload(df_fr, df_ar, df_en=None):
     """
     Build canonical bilingual dataset from two aligned FR/AR analytical tables.
     Returns: payload, validation_report
     """
     cols_fr = [str(c) for c in df_fr.columns]
     cols_ar = [str(c) for c in df_ar.columns]
+    cols_en = [str(c) for c in df_en.columns] if df_en is not None else []
 
     report = {
         'rows_fr': int(len(df_fr)),
         'rows_ar': int(len(df_ar)),
+        'rows_en': int(len(df_en)) if df_en is not None else 0,
         'cols_fr': int(len(cols_fr)),
         'cols_ar': int(len(cols_ar)),
+        'cols_en': int(len(cols_en)) if cols_en else 0,
         'value_mismatches': 0,
         'matched': False,
         'errors': [],
@@ -1109,6 +1130,14 @@ def _build_bilingual_payload(df_fr, df_ar):
     if len(cols_fr) != len(cols_ar):
         report['errors'].append('Le nombre de colonnes FR/AR est different.')
         return None, report
+
+    if df_en is not None:
+        if len(df_fr) != len(df_en):
+            report['errors'].append('Le nombre de lignes FR/EN est different.')
+            return None, report
+        if len(cols_fr) != len(cols_en):
+            report['errors'].append('Le nombre de colonnes FR/EN est different.')
+            return None, report
 
     value_col_fr = _pick_value_column(df_fr)
     if not value_col_fr:
@@ -1136,11 +1165,29 @@ def _build_bilingual_payload(df_fr, df_ar):
         report['mismatch_samples'] = mismatches[:20]
         return None, report
 
+    if df_en is not None:
+        mismatches_en = []
+        for ridx in range(len(df_fr)):
+            fr_num = _parse_number(df_fr.iloc[ridx, value_col_idx])
+            en_num = _parse_number(df_en.iloc[ridx, value_col_idx])
+            if fr_num is None and en_num is None:
+                continue
+            if fr_num is None or en_num is None:
+                mismatches_en.append({'row': ridx + 1, 'fr': df_fr.iloc[ridx, value_col_idx], 'en': df_en.iloc[ridx, value_col_idx]})
+                continue
+            if abs(float(fr_num) - float(en_num)) > 1e-9:
+                mismatches_en.append({'row': ridx + 1, 'fr': fr_num, 'en': en_num})
+        if mismatches_en:
+            report['errors'].append('Les valeurs numeriques FR/EN ne correspondent pas.')
+            report['mismatch_samples_en'] = mismatches_en[:20]
+            return None, report
+
     canonical_columns = []
     column_labels = {}
     used_cols = set()
     for idx, fr_col in enumerate(cols_fr):
         ar_col = cols_ar[idx]
+        en_col = cols_en[idx] if cols_en else fr_col
         base_code = _safe_code_from_label(fr_col, f'col_{idx + 1}')
         code = base_code
         suffix = 2
@@ -1149,7 +1196,7 @@ def _build_bilingual_payload(df_fr, df_ar):
             suffix += 1
         used_cols.add(code)
         canonical_columns.append(code)
-        column_labels[code] = {'fr': fr_col, 'ar': ar_col}
+        column_labels[code] = {'fr': fr_col, 'ar': ar_col, 'en': en_col}
 
     value_col_code = canonical_columns[value_col_idx]
     value_labels = {}
@@ -1160,6 +1207,7 @@ def _build_bilingual_payload(df_fr, df_ar):
         for cidx, col_code in enumerate(canonical_columns):
             fr_val = df_fr.iloc[ridx, cidx]
             ar_val = df_ar.iloc[ridx, cidx]
+            en_val = df_en.iloc[ridx, cidx] if df_en is not None else fr_val
 
             if cidx == value_col_idx:
                 parsed = _parse_number(fr_val)
@@ -1168,6 +1216,7 @@ def _build_bilingual_payload(df_fr, df_ar):
 
             fr_txt = _cell_to_text(fr_val)
             ar_txt = _cell_to_text(ar_val)
+            en_txt = _cell_to_text(en_val)
             val_code_base = _safe_code_from_label(fr_txt, 'val')
             existing = value_labels.setdefault(col_code, {})
             val_code = val_code_base
@@ -1179,6 +1228,7 @@ def _build_bilingual_payload(df_fr, df_ar):
             existing[val_code] = {
                 'fr': fr_txt,
                 'ar': ar_txt or fr_txt,
+                'en': en_txt or fr_txt,
             }
             row_obj[col_code] = val_code
 
@@ -1193,11 +1243,16 @@ def _build_bilingual_payload(df_fr, df_ar):
         'column_labels': column_labels,
         'value_labels': value_labels,
         'rows': rows,
-        'source_columns': {'fr': cols_fr, 'ar': cols_ar},
+        'source_columns': {
+            'fr': cols_fr,
+            'ar': cols_ar,
+            'en': cols_en,
+        },
         'build_info': {
             'row_count': len(rows),
             'value_column_fr': value_col_fr,
             'value_column_ar': value_col_ar,
+            'value_column_en': cols_en[value_col_idx] if cols_en else value_col_fr,
         },
     }
     return payload, report
@@ -1249,9 +1304,9 @@ def _merge_bilingual_payloads(existing_payload, incoming_payload):
     return existing
 
 
-def _maybe_build_bilingual_payload(df_fr, file_ar, use_ai=True):
+def _maybe_build_bilingual_payload(df_fr, file_ar, file_en=None, use_ai=True):
     if not file_ar:
-        return None, None, []
+        return None, None, [], []
 
     try:
         file_ar.seek(0)
@@ -1259,8 +1314,24 @@ def _maybe_build_bilingual_payload(df_fr, file_ar, use_ai=True):
         pass
 
     df_ar, warnings_ar = _normalize_import_dataframe(file_ar, use_ai=use_ai)
-    payload, report = _build_bilingual_payload(df_fr, df_ar)
-    return payload, report, warnings_ar
+    warnings_en = []
+    df_en = None
+    if file_en:
+        try:
+            file_en.seek(0)
+        except Exception:
+            pass
+        df_en, warnings_en = _normalize_import_dataframe(file_en, use_ai=use_ai)
+
+    payload, report = _build_bilingual_payload(df_fr, df_ar, df_en=df_en)
+    return payload, report, warnings_ar, warnings_en
+
+
+def _has_english_i18n_payload(sub_theme):
+    payload = sub_theme.data_json_i18n or {}
+    source_columns = payload.get('source_columns') or {}
+    cols_en = source_columns.get('en') or []
+    return bool(cols_en)
 
 
 def _is_bad_header_shape(columns):
@@ -1410,7 +1481,7 @@ class InfoBannerView(APIView):
         # expose it as a single info item.
         infos = banner.infos if isinstance(banner.infos, list) else []
         if not infos and str(banner.message or '').strip():
-            infos = [{'text': str(banner.message).strip(), 'text_ar': '', 'url': ''}]
+            infos = [{'text': str(banner.message).strip(), 'text_ar': '', 'text_en': '', 'url': ''}]
             banner.infos = infos
             banner.save(update_fields=['infos', 'updated_at'])
 
@@ -1418,10 +1489,11 @@ class InfoBannerView(APIView):
         for item in infos:
             text = str((item or {}).get('text', '')).strip()
             text_ar = str((item or {}).get('text_ar', '')).strip()
+            text_en = str((item or {}).get('text_en', '')).strip()
             url = str((item or {}).get('url', '')).strip()
             if not text:
                 continue
-            normalized_infos.append({'text': text, 'text_ar': text_ar, 'url': url})
+            normalized_infos.append({'text': text, 'text_ar': text_ar, 'text_en': text_en, 'url': url})
 
         if normalized_infos != infos:
             banner.infos = normalized_infos
@@ -1441,15 +1513,16 @@ class InfoBannerView(APIView):
             for item in raw_infos:
                 text = str((item or {}).get('text', '')).strip()
                 text_ar = str((item or {}).get('text_ar', '')).strip()
+                text_en = str((item or {}).get('text_en', '')).strip()
                 url = str((item or {}).get('url', '')).strip()
                 if not text:
                     continue
-                normalized_infos.append({'text': text, 'text_ar': text_ar, 'url': url})
+                normalized_infos.append({'text': text, 'text_ar': text_ar, 'text_en': text_en, 'url': url})
         else:
             # Legacy support: payload with single message
             legacy_message = str(request.data.get('message', '')).strip()
             if legacy_message:
-                normalized_infos = [{'text': legacy_message, 'text_ar': '', 'url': ''}]
+                normalized_infos = [{'text': legacy_message, 'text_ar': '', 'text_en': '', 'url': ''}]
 
         if not normalized_infos:
             return Response({'error': 'Au moins une information valide est requise.'}, status=status.HTTP_400_BAD_REQUEST)
@@ -1484,14 +1557,22 @@ class SiteContentView(APIView):
                 'تُيسر المنصة الجهوية للمندوبية السامية للتخطيط الولوج إلى الإحصائيات الترابية، '
                 'وعرض المؤشرات، ونشر معلومات موثوقة لدعم اتخاذ القرار العمومي.'
             ),
+            'about_title_en': 'About the platform',
+            'about_text_en': (
+                'The regional HCP platform provides access to territorial statistics, '
+                'indicator visualizations, and reliable information to support public decision-making.'
+            ),
             'contact_title': 'Contact',
             'contact_title_ar': 'اتصل بنا',
+            'contact_title_en': 'Contact',
             'contact_email': 'contact@hcp.ma',
             'contact_phone': '+212 5 23 00 00 00',
             'contact_address': 'Direction Régionale HCP\nBéni Mellal - Khénifra',
             'contact_address_ar': 'المديرية الجهوية للمندوبية السامية للتخطيط\nبني ملال - خنيفرة',
+            'contact_address_en': 'HCP Regional Directorate\nBéni Mellal - Khénifra',
             'contact_hours': 'Lundi - Vendredi, 08:30 - 16:30',
             'contact_hours_ar': 'الاثنين - الجمعة، 08:30 - 16:30',
+            'contact_hours_en': 'Monday - Friday, 08:30 - 16:30',
             'useful_links': [
                 {'label': 'Haut-Commissariat au Plan', 'url': 'https://www.hcp.ma'},
                 {'label': 'Portail du Gouvernement', 'url': 'https://www.maroc.ma'},
@@ -1501,6 +1582,11 @@ class SiteContentView(APIView):
                 {'label': 'المندوبية السامية للتخطيط', 'url': 'https://www.hcp.ma'},
                 {'label': 'البوابة الرسمية للحكومة', 'url': 'https://www.maroc.ma'},
                 {'label': 'البيانات المفتوحة - المغرب', 'url': 'https://www.data.gov.ma'},
+            ],
+            'useful_links_en': [
+                {'label': 'High Commission for Planning', 'url': 'https://www.hcp.ma'},
+                {'label': 'Government Portal', 'url': 'https://www.maroc.ma'},
+                {'label': 'Open Data Morocco', 'url': 'https://www.data.gov.ma'},
             ],
         }
 
@@ -1638,10 +1724,12 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             'visible_filters': data.get('visible_filters', []),
             'title': data.get('title', ''),
             'title_ar': data.get('title_ar', ''),
+            'title_en': data.get('title_en', ''),
             'x_label': data.get('x_label', ''),
             'y_label': data.get('y_label', ''),
             'group_by': data.get('group_by', ''),
             'mesure_ar': data.get('mesure_ar', ''),
+            'mesure_en': data.get('mesure_en', ''),
         }
         config = st.charts_config or []
         config.append(new_chart)
@@ -1674,10 +1762,12 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     ch['visible_filters'] = data.get('visible_filters', ch.get('visible_filters', []))
                     ch['title'] = data.get('title', ch.get('title', ''))
                     ch['title_ar'] = data.get('title_ar', ch.get('title_ar', ''))
+                    ch['title_en'] = data.get('title_en', ch.get('title_en', ''))
                     ch['x_label'] = data.get('x_label', ch.get('x_label', ''))
                     ch['y_label'] = data.get('y_label', ch.get('y_label', ''))
                     ch['group_by'] = data.get('group_by', ch.get('group_by', ''))
                     ch['mesure_ar'] = data.get('mesure_ar', ch.get('mesure_ar', ''))
+                    ch['mesure_en'] = data.get('mesure_en', ch.get('mesure_en', ''))
                     config[i] = ch
                     st.charts_config = config
                     st.save()
@@ -1690,6 +1780,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         st = self.get_object()
         excel_file = request.FILES.get('file')
         arabic_file = request.FILES.get('file_ar')
+        english_file = request.FILES.get('file_en')
         if not excel_file:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         try:
@@ -1698,14 +1789,19 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
+            if _has_english_i18n_payload(st) and not english_file:
+                return Response(
+                    {'error': 'Ce sous-theme contient deja une version EN. Le fichier anglais correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
 
             df, warnings = _normalize_import_dataframe(excel_file, use_ai=False)
-            payload, report, warnings_ar = _maybe_build_bilingual_payload(df, arabic_file, use_ai=False)
+            payload, report, warnings_ar, warnings_en = _maybe_build_bilingual_payload(df, arabic_file, english_file, use_ai=False)
 
             if arabic_file:
                 if payload is None:
                     return Response(
-                        {'error': 'Validation bilingue echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar}},
+                        {'error': 'Validation i18n echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
                 _persist_bilingual_table(st, df, payload, report)
@@ -1715,7 +1811,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             response = {'message': 'Import réussi', 'data': st.data_json, 'warnings': warnings}
             if arabic_file:
                 response['validation_report'] = report
-                response['warnings'] = {'fr': warnings, 'ar': warnings_ar}
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
             return Response(response, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception('Erreur import excel')
@@ -1727,6 +1823,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         st = self.get_object()
         excel_file = request.FILES.get('file')
         arabic_file = request.FILES.get('file_ar')
+        english_file = request.FILES.get('file_en')
         if not excel_file:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
         try:
@@ -1737,9 +1834,14 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe est obligatoire pour tout ajout.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
-            if arabic_file and not st.data_is_bilingual and list(st.data_json or []):
+            if _has_english_i18n_payload(st) and not english_file:
                 return Response(
-                    {'error': 'Ajout bilingue sur un sous-theme monolingue non supporte. Faites d\'abord un remplacement bilingue complet.'},
+                    {'error': 'Ce sous-theme contient deja des donnees EN. Le fichier anglais est obligatoire pour tout ajout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (arabic_file or english_file) and not st.data_is_bilingual and list(st.data_json or []):
+                return Response(
+                    {'error': 'Ajout i18n sur un sous-theme monolingue non supporte. Faites d\'abord un remplacement complet FR/AR(/EN).'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1796,10 +1898,10 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             merged = existing_rows + mapped_rows
 
             if arabic_file:
-                payload, report, warnings_ar = _maybe_build_bilingual_payload(mapped_df, arabic_file, use_ai=use_ai)
+                payload, report, warnings_ar, warnings_en = _maybe_build_bilingual_payload(mapped_df, arabic_file, english_file, use_ai=use_ai)
                 if payload is None:
                     return Response(
-                        {'error': 'Validation bilingue echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar}},
+                        {'error': 'Validation i18n echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}},
                         status=status.HTTP_400_BAD_REQUEST,
                     )
 
@@ -1811,7 +1913,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     'validation_report': {'matched': True, 'rows_total': len(merged_payload.get('rows') or [])},
                 }
                 st.data_is_bilingual = True
-                warnings = {'fr': warnings, 'ar': warnings_ar}
+                warnings = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
             else:
                 st.data_json = merged
                 st.columns_order = final_columns
@@ -1839,6 +1941,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         st = self.get_object()
         excel_file = request.FILES.get('file')
         arabic_file = request.FILES.get('file_ar')
+        english_file = request.FILES.get('file_en')
         if not excel_file:
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -1846,6 +1949,11 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             if st.data_is_bilingual and not arabic_file:
                 return Response(
                     {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if _has_english_i18n_payload(st) and not english_file:
+                return Response(
+                    {'error': 'Ce sous-theme contient deja une version EN. Le fichier anglais correspondant est obligatoire pour le remplacer.'},
                     status=status.HTTP_400_BAD_REQUEST,
                 )
 
@@ -1881,13 +1989,13 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     mapped_df = pd.DataFrame(mapped_rows, columns=expected_columns)
 
             if arabic_file:
-                payload, report, warnings_ar = _maybe_build_bilingual_payload(mapped_df, arabic_file, use_ai=True)
+                payload, report, warnings_ar, warnings_en = _maybe_build_bilingual_payload(mapped_df, arabic_file, english_file, use_ai=True)
                 if payload is None:
                     return Response(
                         {
-                            'error': 'Validation bilingue echouee.',
+                            'error': 'Validation i18n echouee.',
                             'validation_report': report,
-                            'warnings': {'fr': warnings, 'ar': warnings_ar},
+                            'warnings': {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en},
                         },
                         status=status.HTTP_400_BAD_REQUEST,
                     )
@@ -1909,7 +2017,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             }
             if arabic_file:
                 response['validation_report'] = report
-                response['warnings'] = {'fr': warnings, 'ar': warnings_ar}
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
             return Response(response, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception('Erreur import intelligent')
@@ -1924,6 +2032,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
         st = self.get_object()
         file_fr = request.FILES.get('file_fr')
         file_ar = request.FILES.get('file_ar')
+        file_en = request.FILES.get('file_en')
 
         if not file_fr or not file_ar:
             return Response(
@@ -1938,15 +2047,22 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             file_ar.seek(0)
             df_ar, warnings_ar = _normalize_import_dataframe(file_ar, use_ai=use_ai)
 
-            payload, report = _build_bilingual_payload(df_fr, df_ar)
+            df_en = None
+            warnings_en = []
+            if file_en:
+                file_en.seek(0)
+                df_en, warnings_en = _normalize_import_dataframe(file_en, use_ai=use_ai)
+
+            payload, report = _build_bilingual_payload(df_fr, df_ar, df_en=df_en)
             if payload is None:
                 return Response(
                     {
-                        'error': 'Validation bilingue echouee. Corrigez les ecarts FR/AR puis reimportez.',
+                        'error': 'Validation i18n echouee. Corrigez les ecarts FR/AR(/EN) puis reimportez.',
                         'validation_report': report,
                         'warnings': {
                             'fr': warnings_fr,
                             'ar': warnings_ar,
+                            'en': warnings_en,
                         },
                     },
                     status=status.HTTP_400_BAD_REQUEST,
@@ -1968,12 +2084,13 @@ class SousThemeViewSet(viewsets.ModelViewSet):
 
             return Response(
                 {
-                    'message': 'Import bilingue reussi (FR + AR) avec validation complete.',
+                    'message': 'Import i18n reussi (FR + AR + EN optionnel) avec validation complete.',
                     'columns_order': st.columns_order,
                     'validation_report': report,
                     'warnings': {
                         'fr': warnings_fr,
                         'ar': warnings_ar,
+                        'en': warnings_en,
                     },
                 },
                 status=status.HTTP_200_OK,
@@ -2035,6 +2152,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             # 1. Récupération et création du Thème
             titre = ' '.join(str(request.data.get('titre') or '').strip().split())
             titre_ar = ' '.join(str(request.data.get('titre_ar') or '').strip().split())
+            titre_en = ' '.join(str(request.data.get('titre_en') or '').strip().split())
             if not titre:
                 return Response({'error': 'Le titre du thème est requis.'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2064,6 +2182,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             nouveau_theme = Theme.objects.create(
                 titre=titre,
                 titre_ar=titre_ar or '',
+                titre_en=titre_en or '',
                 theme_image=theme_image_value,
                 is_visible=is_visible
             )
@@ -2077,6 +2196,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 while f'categories[{cat_index}][nom]' in request.data:
                     cat_nom = ' '.join(str(request.data.get(f'categories[{cat_index}][nom]') or '').strip().split())
                     cat_nom_ar = ' '.join(str(request.data.get(f'categories[{cat_index}][nom_ar]') or '').strip().split())
+                    cat_nom_en = ' '.join(str(request.data.get(f'categories[{cat_index}][nom_en]') or '').strip().split())
                     cat_ordre = request.data.get(f'categories[{cat_index}][ordre]', cat_index)
                     if cat_nom and cat_nom.strip():
                         normalized_cat_nom = _normalize_name(cat_nom)
@@ -2087,6 +2207,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                         cat_obj = Categorie.objects.create(
                             nom=cat_nom,
                             nom_ar=cat_nom_ar or '',
+                            nom_en=cat_nom_en or '',
                             theme=nouveau_theme,
                             ordre=int(cat_ordre),
                             is_visible=is_visible
@@ -2101,6 +2222,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             while f'lignes[{index}][sousTheme]' in request.data:
                 nom_st = ' '.join(str(request.data.get(f'lignes[{index}][sousTheme]') or '').strip().split())
                 nom_st_ar = ' '.join(str(request.data.get(f'lignes[{index}][sousTheme_ar]') or '').strip().split())
+                nom_st_en = ' '.join(str(request.data.get(f'lignes[{index}][sousTheme_en]') or '').strip().split())
                 if not nom_st:
                     return Response({'error': f'Le nom du sous-thème est requis (ligne {index + 1}).'}, status=status.HTTP_400_BAD_REQUEST)
 
@@ -2126,6 +2248,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 st_obj = SousTheme.objects.create(
                     nom=nom_st, 
                     nom_ar=nom_st_ar or '',
+                    nom_en=nom_st_en or '',
                     theme=nouveau_theme,
                     categorie=categorie_obj,
                     indication_text=libelle_ind or '',
@@ -2228,9 +2351,13 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 return Response({'error': 'Accès refusé : seulement les administrateurs peuvent ajouter un sous-thème depuis l\'interface thème.'}, status=status.HTTP_403_FORBIDDEN)
             theme = self.get_object()
             nom = request.data.get('nom') or request.data.get('name')
+            nom_ar = request.data.get('nom_ar') or ''
+            nom_en = request.data.get('nom_en') or ''
             if not nom:
                 return Response({'error': 'Le nom du sous-thème est requis'}, status=status.HTTP_400_BAD_REQUEST)
             nom = ' '.join(str(nom).strip().split())
+            nom_ar = ' '.join(str(nom_ar).strip().split())
+            nom_en = ' '.join(str(nom_en).strip().split())
 
             # Bloquer les doublons de sous-thèmes dans le même thème
             normalized_nom = _normalize_name(nom)
@@ -2256,7 +2383,14 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 else:
                     is_visible = theme.is_visible
             
-            st = SousTheme.objects.create(nom=nom, theme=theme, categorie=categorie_obj, is_visible=is_visible)
+            st = SousTheme.objects.create(
+                nom=nom,
+                nom_ar=nom_ar,
+                nom_en=nom_en,
+                theme=theme,
+                categorie=categorie_obj,
+                is_visible=is_visible,
+            )
             serializer = SousThemeSerializer(st)
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
@@ -2271,7 +2405,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
             theme = self.get_object()
 
             language = str(request.data.get('language', 'fr')).strip().lower()
-            if language not in ('fr', 'ar', 'both'):
+            if language not in ('fr', 'ar', 'en', 'both', 'all'):
                 language = 'fr'
             table_view = str(request.data.get('table_view', 'horizontal')).strip().lower()
             if table_view not in ('horizontal', 'vertical'):
@@ -2293,6 +2427,8 @@ class ThemeViewSet(viewsets.ModelViewSet):
                 sections.append({
                     'sub_theme_id': st.id,
                     'sub_theme_name': st.nom,
+                    'sub_theme_name_ar': st.nom_ar,
+                    'sub_theme_name_en': getattr(st, 'nom_en', None),
                     'metadata': metadata,
                     'table': table_payload,
                     'charts': list(st.charts_config or []) if include_charts else [],
@@ -2305,6 +2441,7 @@ class ThemeViewSet(viewsets.ModelViewSet):
                         'id': theme.id,
                         'title_fr': theme.titre,
                         'title_ar': theme.titre_ar,
+                        'title_en': getattr(theme, 'titre_en', None),
                     },
                     'options': {
                         'language': language,

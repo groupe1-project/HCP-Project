@@ -48,6 +48,7 @@ CustomUser.add_to_class('objects', CustomUserManager())
 class Theme(models.Model):
     titre = models.CharField(max_length=200)
     titre_ar = models.CharField(max_length=200, null=True, blank=True)
+    titre_en = models.CharField(max_length=200, null=True, blank=True)
     # Image optionnelle du thème (affichée côté visiteur)
     theme_image = models.TextField(null=True, blank=True)
     ordre = models.IntegerField(default=0)
@@ -69,6 +70,12 @@ class Theme(models.Model):
     source_text_ar = models.TextField(null=True, blank=True)
     periodicite_text_ar = models.TextField(null=True, blank=True)
     couverture_text_ar = models.TextField(null=True, blank=True)
+    definition_text_en = models.TextField(null=True, blank=True)
+    unite_text_en = models.TextField(null=True, blank=True)
+    indication_text_en = models.TextField(null=True, blank=True)
+    source_text_en = models.TextField(null=True, blank=True)
+    periodicite_text_en = models.TextField(null=True, blank=True)
+    couverture_text_en = models.TextField(null=True, blank=True)
 
     def __str__(self):
         return self.titre
@@ -76,6 +83,7 @@ class Theme(models.Model):
 class Categorie(models.Model):
     nom = models.CharField(max_length=200)
     nom_ar = models.CharField(max_length=200, null=True, blank=True)
+    nom_en = models.CharField(max_length=200, null=True, blank=True)
     theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='categories')
     ordre = models.IntegerField(default=0)
     is_visible = models.BooleanField(default=True)
@@ -92,6 +100,7 @@ class SousTheme(models.Model):
     
     nom = models.CharField(max_length=200)
     nom_ar = models.CharField(max_length=200, null=True, blank=True)
+    nom_en = models.CharField(max_length=200, null=True, blank=True)
     theme = models.ForeignKey(Theme, on_delete=models.CASCADE, related_name='sous_themes')
     # Catégorie optionnelle : si null, le sous-thème est directement sous le thème
     categorie = models.ForeignKey(Categorie, on_delete=models.CASCADE, related_name='sous_themes', null=True, blank=True)
@@ -129,6 +138,12 @@ class SousTheme(models.Model):
     source_text_ar = models.TextField(null=True, blank=True)
     periodicite_text_ar = models.TextField(null=True, blank=True)
     couverture_text_ar = models.TextField(null=True, blank=True)
+    definition_text_en = models.TextField(null=True, blank=True)
+    unite_text_en = models.TextField(null=True, blank=True)
+    indication_text_en = models.TextField(null=True, blank=True)
+    source_text_en = models.TextField(null=True, blank=True)
+    periodicite_text_en = models.TextField(null=True, blank=True)
+    couverture_text_en = models.TextField(null=True, blank=True)
     
     # Nouveaux champs pour analyse dynamique et graphiques intelligents
     # 1. Granularité géographique
@@ -271,20 +286,26 @@ class SiteContent(models.Model):
     about_text = models.TextField(default='Cette plateforme centralise les statistiques régionales pour une consultation claire, fiable et actualisée.')
     about_title_ar = models.CharField(max_length=255, default='حول المنصة')
     about_text_ar = models.TextField(default='تُيسر هذه المنصة الجهوية الولوج إلى الإحصائيات الترابية وعرض المؤشرات ونشر المعلومات الموثوقة لدعم القرار العمومي.')
+    about_title_en = models.CharField(max_length=255, null=True, blank=True)
+    about_text_en = models.TextField(null=True, blank=True)
 
     contact_title = models.CharField(max_length=255, default='Contact')
     contact_title_ar = models.CharField(max_length=255, default='اتصل بنا')
+    contact_title_en = models.CharField(max_length=255, null=True, blank=True)
     contact_email = models.EmailField(default='contact@hcp.ma')
     contact_phone = models.CharField(max_length=80, default='+212 5 23 00 00 00')
     contact_address = models.TextField(default='Direction Régionale HCP\nBéni Mellal - Khénifra')
     contact_address_ar = models.TextField(default='المديرية الجهوية للمندوبية السامية للتخطيط\nبني ملال - خنيفرة')
+    contact_address_en = models.TextField(null=True, blank=True)
     contact_hours = models.CharField(max_length=255, default='Lundi - Vendredi, 08:30 - 16:30')
     contact_hours_ar = models.CharField(max_length=255, default='الاثنين - الجمعة، 08:30 - 16:30')
+    contact_hours_en = models.CharField(max_length=255, null=True, blank=True)
 
     # Exemple: [{"label": "HCP Maroc", "url": "https://www.hcp.ma"}]
     useful_links = models.JSONField(default=list, blank=True)
     # Exemple: [{"label": "المندوبية السامية للتخطيط", "url": "https://www.hcp.ma"}]
     useful_links_ar = models.JSONField(default=list, blank=True)
+    useful_links_en = models.JSONField(default=list, blank=True)
 
     updated_at = models.DateTimeField(auto_now=True)
     updated_by = models.ForeignKey(
