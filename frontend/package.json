@@ -12,7 +12,10 @@
   "dependencies": {
     "@tailwindcss/postcss": "^4.1.18",
     "axios": "^1.13.4",
+    "docx": "^9.6.1",
     "i18next": "^25.10.2",
+    "jspdf": "^4.2.1",
+    "jspdf-autotable": "^5.0.7",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-i18next": "^16.6.0",

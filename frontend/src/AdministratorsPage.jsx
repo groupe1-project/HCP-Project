@@ -1,5 +1,18 @@
 ﻿import React, { useState, useEffect } from 'react';
 import axios from 'axios';
+import jsPDF from 'jspdf';
+import autoTable from 'jspdf-autotable';
+import {
+  Document,
+  Packer,
+  Paragraph,
+  HeadingLevel,
+  TextRun,
+  Table,
+  TableRow,
+  TableCell,
+  WidthType,
+} from 'docx';
 import {
   ResponsiveContainer,
   CartesianGrid,
@@ -63,6 +76,28 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [previewContent, setPreviewContent] = useState(null);
   const [previewTablePage, setPreviewTablePage] = useState(1);
   const [previewPageSize, setPreviewPageSize] = useState(-1);
+  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [reportTheme, setReportTheme] = useState(null);
+  const [reportOptions, setReportOptions] = useState({
+    selectedSubThemeIds: [],
+    language: 'fr',
+    includeCharts: true,
+    tableView: 'horizontal',
+  });
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [reportContext, setReportContext] = useState(null);
+  const [reportPreviewLanguage, setReportPreviewLanguage] = useState('fr');
+  const [showAdminAssistant, setShowAdminAssistant] = useState(false);
+  const [assistantInput, setAssistantInput] = useState('');
+  const [assistantLoading, setAssistantLoading] = useState(false);
+  const [assistantMessages, setAssistantMessages] = useState([
+    {
+      role: 'assistant',
+      text: "Bonjour, je suis l'assistant admin. Je peux vous aider pour les stats, archives, métadonnées et rapports.",
+      mode: 'fallback',
+      timestamp: new Date().toISOString(),
+    },
+  ]);
   const [seenSubmissionMarkers, setSeenSubmissionMarkers] = useState(() => {
     try {
       const raw = localStorage.getItem(ADMIN_SEEN_SUBMISSIONS_KEY);
@@ -505,7 +540,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       <div className="min-h-screen bg-[#f8f2f5] p-6">
         <div className="max-w-6xl mx-auto space-y-6">
           <div className="bg-[#7A0A4A] text-white py-4 px-6 font-bold text-2xl rounded-2xl shadow-[0_10px_24px_rgba(122,10,74,0.28)]">
-            🧾 Espace Saisisseur
+            Espace Saisisseur
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -798,6 +833,426 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       ...prev,
       [themeId]: !prev[themeId]
     }));
+  };
+
+  const openReportModalForTheme = (theme) => {
+    const allSubThemeIds = (theme?.sous_themes || []).map((st) => st.id);
+    setReportTheme(theme);
+    setReportOptions({
+      selectedSubThemeIds: allSubThemeIds,
+      language: 'fr',
+      includeCharts: true,
+      tableView: 'horizontal',
+    });
+    setReportContext(null);
+    setReportPreviewLanguage('fr');
+    setReportModalOpen(true);
+  };
+
+  const closeReportModal = () => {
+    setReportModalOpen(false);
+    setReportTheme(null);
+    setReportContext(null);
+  };
+
+  const toggleReportSubTheme = (subThemeId) => {
+    setReportOptions((prev) => {
+      const exists = prev.selectedSubThemeIds.includes(subThemeId);
+      return {
+        ...prev,
+        selectedSubThemeIds: exists
+          ? prev.selectedSubThemeIds.filter((id) => id !== subThemeId)
+          : [...prev.selectedSubThemeIds, subThemeId],
+      };
+    });
+  };
+
+  const generateReportContext = async () => {
+    if (!reportTheme) return;
+    if (!reportOptions.selectedSubThemeIds.length) {
+      alert('Sélectionnez au moins un sous-thème pour générer le rapport.');
+      return;
+    }
+
+    try {
+      setIsGeneratingReport(true);
+      const payload = {
+        sous_theme_ids: reportOptions.selectedSubThemeIds,
+        language: reportOptions.language,
+        include_charts: reportOptions.includeCharts,
+        table_view: reportOptions.tableView,
+      };
+      const response = await axios.post(
+        `${API_BASE}/themes/${reportTheme.id}/generate-report-context/`,
+        payload,
+        getAdminAuthConfig()
+      );
+      setReportContext(response.data);
+    } catch (error) {
+      console.error('Erreur génération rapport:', error);
+      alert(error.response?.data?.error || 'Erreur lors de la génération du rapport.');
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  const downloadReportContext = () => {
+    if (!reportContext || !reportTheme) return;
+    const safeName = String(reportTheme.titre || 'rapport').replace(/[^a-zA-Z0-9-_]+/g, '_');
+    const blob = new Blob([JSON.stringify(reportContext, null, 2)], { type: 'application/json;charset=utf-8' });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `rapport_${safeName}.json`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
+  const getReportFileBase = () => {
+    const title = reportContext?.theme?.title_fr || reportTheme?.titre || 'rapport';
+    return String(title).replace(/[^a-zA-Z0-9-_]+/g, '_');
+  };
+
+  const getSectionMetadataRows = (metadataObj) => {
+    if (!metadataObj || typeof metadataObj !== 'object') return [];
+    const rows = [];
+    Object.entries(metadataObj).forEach(([lang, fields]) => {
+      if (!fields || typeof fields !== 'object') return;
+      Object.entries(fields).forEach(([key, value]) => {
+        if (!String(value ?? '').trim()) return;
+        rows.push([`${lang.toUpperCase()} - ${key}`, String(value)]);
+      });
+    });
+    return rows;
+  };
+
+  const getSectionTableForLanguage = (section, lang) => {
+    const table = section?.table || {};
+    const view = table?.view || 'horizontal';
+    const langTables = table?.languages || {};
+    const fallbackLang = langTables[lang] ? lang : (langTables.fr ? 'fr' : Object.keys(langTables)[0]);
+    const current = langTables[fallbackLang] || {};
+    const selected = current?.[view] || { headers: [], rows: [] };
+    return {
+      lang: fallbackLang || lang,
+      view,
+      headers: Array.isArray(selected?.headers) ? selected.headers : [],
+      rows: Array.isArray(selected?.rows) ? selected.rows : [],
+    };
+  };
+
+  const getChartNames = (section, lang = 'fr') => {
+    const charts = Array.isArray(section?.charts) ? section.charts : [];
+    return charts
+      .map((chart, idx) => {
+        const fr = String(chart?.title || '').trim();
+        const ar = String(chart?.title_ar || '').trim();
+        if (lang === 'ar') return ar || fr || `Graphique ${idx + 1}`;
+        return fr || ar || `Graphique ${idx + 1}`;
+      })
+      .filter(Boolean);
+  };
+
+  const toNumericValue = (value) => {
+    const n = Number(String(value ?? '').replace(/\s/g, '').replace(',', '.'));
+    return Number.isFinite(n) ? n : null;
+  };
+
+  const tableToObjectRows = (table) => {
+    const headers = Array.isArray(table?.headers) ? table.headers : [];
+    const rows = Array.isArray(table?.rows) ? table.rows : [];
+    return rows.map((row) => {
+      const obj = {};
+      headers.forEach((h, idx) => {
+        obj[h] = row?.[idx] ?? '';
+      });
+      return obj;
+    });
+  };
+
+  const getChartSourceTable = (section) => {
+    const langs = section?.table?.languages || {};
+    if (langs?.fr?.horizontal?.headers?.length) return langs.fr.horizontal;
+    const firstLang = Object.keys(langs)[0];
+    if (firstLang && langs[firstLang]?.horizontal?.headers?.length) return langs[firstLang].horizontal;
+    return { headers: [], rows: [] };
+  };
+
+  const normalizeChartType = (type) => {
+    const t = String(type || '').toLowerCase();
+    if (t.includes('pie') || t.includes('secteur') || t.includes('camembert')) return 'pie';
+    if (t.includes('line') || t.includes('courbe')) return 'line';
+    return 'bar';
+  };
+
+  const buildSectionChartModels = (section, lang = 'fr') => {
+    const charts = Array.isArray(section?.charts) ? section.charts : [];
+    const sourceTable = getChartSourceTable(section);
+    const objRows = tableToObjectRows(sourceTable);
+    const headers = sourceTable.headers || [];
+
+    return charts.slice(0, 3).map((chart, idx) => {
+      const xKey = chart?.x || headers[0] || 'x';
+      const yKey = chart?.y || chart?.mesure || headers[1] || headers[0] || 'y';
+      const type = normalizeChartType(chart?.type);
+      const title = (lang === 'ar' ? chart?.title_ar : chart?.title) || chart?.title || chart?.title_ar || `Graphique ${idx + 1}`;
+
+      if (type === 'pie') {
+        const acc = new Map();
+        objRows.forEach((row) => {
+          const xVal = String(row?.[xKey] ?? '—');
+          const yVal = toNumericValue(row?.[yKey]);
+          if (yVal === null) return;
+          acc.set(xVal, (acc.get(xVal) || 0) + yVal);
+        });
+        const data = Array.from(acc.entries()).map(([name, value]) => ({ name, value }));
+        return { id: chart?.id || `chart-${idx}`, title, type, data: data.slice(0, 12), xKey: 'name', yKey: 'value' };
+      }
+
+      const data = objRows
+        .map((row) => ({
+          x: String(row?.[xKey] ?? ''),
+          y: toNumericValue(row?.[yKey]),
+        }))
+        .filter((row) => row.y !== null)
+        .slice(0, 40);
+
+      return { id: chart?.id || `chart-${idx}`, title, type, data, xKey: 'x', yKey: 'y' };
+    }).filter((m) => Array.isArray(m.data) && m.data.length > 0);
+  };
+
+  const exportReportPDF = () => {
+    if (!reportContext) return;
+    const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
+    const title = reportContext?.theme?.title_fr || reportTheme?.titre || 'Rapport';
+
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(18);
+    doc.text(`Rapport Administratif - ${title}`, 40, 48);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(10);
+    doc.text(`Langue: ${reportContext?.options?.language || 'fr'} | Vue tableau: ${reportContext?.options?.table_view || 'horizontal'}`, 40, 66);
+
+    let cursorY = 84;
+    (reportContext.sections || []).forEach((section, index) => {
+      if (cursorY > 700) {
+        doc.addPage();
+        cursorY = 42;
+      }
+
+      doc.setFont('helvetica', 'bold');
+      doc.setFontSize(13);
+      doc.text(`${index + 1}. ${section.sub_theme_name || 'Sous-thème'}`, 40, cursorY);
+      cursorY += 14;
+
+      const metadataRows = getSectionMetadataRows(section.metadata);
+      if (metadataRows.length) {
+        autoTable(doc, {
+          head: [['Métadonnée', 'Valeur']],
+          body: metadataRows,
+          startY: cursorY,
+          margin: { left: 40, right: 40 },
+          theme: 'grid',
+          headStyles: { fillColor: [122, 10, 74] },
+          styles: { fontSize: 9, cellPadding: 4 },
+        });
+        cursorY = doc.lastAutoTable.finalY + 10;
+      }
+
+      const langKeys = Object.keys(section?.table?.languages || {});
+      langKeys.forEach((langKey) => {
+        const table = getSectionTableForLanguage(section, langKey);
+        if (!table.headers.length) return;
+        if (cursorY > 700) {
+          doc.addPage();
+          cursorY = 42;
+        }
+        doc.setFont('helvetica', 'bold');
+        doc.setFontSize(10);
+        doc.text(`Tableau (${table.lang.toUpperCase()} - ${table.view})`, 40, cursorY);
+        cursorY += 8;
+        autoTable(doc, {
+          head: [table.headers.map((h) => String(h))],
+          body: (table.rows || []).slice(0, 12).map((r) => (r || []).map((v) => String(v ?? ''))),
+          startY: cursorY,
+          margin: { left: 40, right: 40 },
+          theme: 'striped',
+          headStyles: { fillColor: [176, 51, 114] },
+          styles: { fontSize: 8.5, cellPadding: 3.5 },
+        });
+        cursorY = doc.lastAutoTable.finalY + 10;
+      });
+
+      if (section?.charts_count) {
+        doc.setFont('helvetica', 'normal');
+        doc.setFontSize(10);
+        doc.text(`Graphes inclus: ${section.charts_count}`, 40, cursorY);
+        cursorY += 12;
+        const chartNames = getChartNames(section, reportContext?.options?.language === 'ar' ? 'ar' : 'fr').slice(0, 5);
+        if (chartNames.length) {
+          const lines = doc.splitTextToSize(`Titres: ${chartNames.join(' | ')}`, 510);
+          doc.text(lines, 40, cursorY);
+          cursorY += lines.length * 11 + 4;
+        }
+      }
+    });
+
+    doc.save(`rapport_${getReportFileBase()}.pdf`);
+  };
+
+  const exportReportWord = async () => {
+    if (!reportContext) return;
+
+    const content = [];
+    const title = reportContext?.theme?.title_fr || reportTheme?.titre || 'Rapport';
+    content.push(
+      new Paragraph({
+        text: `Rapport Administratif - ${title}`,
+        heading: HeadingLevel.HEADING_1,
+      })
+    );
+    content.push(
+      new Paragraph({
+        children: [new TextRun({ text: `Langue: ${reportContext?.options?.language || 'fr'} | Vue: ${reportContext?.options?.table_view || 'horizontal'}`, italics: true })],
+      })
+    );
+
+    (reportContext.sections || []).forEach((section, index) => {
+      content.push(
+        new Paragraph({
+          text: `${index + 1}. ${section.sub_theme_name || 'Sous-thème'}`,
+          heading: HeadingLevel.HEADING_2,
+        })
+      );
+
+      const metadataRows = getSectionMetadataRows(section.metadata);
+      if (metadataRows.length) {
+        content.push(new Paragraph({ text: 'Métadonnées:', heading: HeadingLevel.HEADING_3 }));
+        content.push(
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [
+              new TableRow({
+                children: [
+                  new TableCell({ children: [new Paragraph('Clé')] }),
+                  new TableCell({ children: [new Paragraph('Valeur')] }),
+                ],
+              }),
+              ...metadataRows.map((row) =>
+                new TableRow({
+                  children: [
+                    new TableCell({ children: [new Paragraph(String(row[0]))] }),
+                    new TableCell({ children: [new Paragraph(String(row[1]))] }),
+                  ],
+                })
+              ),
+            ],
+          })
+        );
+      }
+
+      const langKeys = Object.keys(section?.table?.languages || {});
+      langKeys.forEach((langKey) => {
+        const table = getSectionTableForLanguage(section, langKey);
+        if (!table.headers.length) return;
+        content.push(new Paragraph({ text: `Tableau (${table.lang.toUpperCase()} - ${table.view})`, heading: HeadingLevel.HEADING_3 }));
+        content.push(
+          new Table({
+            width: { size: 100, type: WidthType.PERCENTAGE },
+            rows: [
+              new TableRow({
+                children: table.headers.map((h) => new TableCell({ children: [new Paragraph(String(h))] })),
+              }),
+              ...(table.rows || []).slice(0, 12).map((row) =>
+                new TableRow({
+                  children: (row || []).map((cell) => new TableCell({ children: [new Paragraph(String(cell ?? ''))] })),
+                })
+              ),
+            ],
+          })
+        );
+      });
+
+      if (section?.charts_count) {
+        content.push(new Paragraph({ text: `Graphes inclus: ${section.charts_count}` }));
+        const chartNames = getChartNames(section, reportContext?.options?.language === 'ar' ? 'ar' : 'fr').slice(0, 8);
+        if (chartNames.length) {
+          content.push(new Paragraph({ text: `Titres: ${chartNames.join(' | ')}` }));
+        }
+      }
+    });
+
+    const doc = new Document({
+      sections: [{ children: content }],
+    });
+    const blob = await Packer.toBlob(doc);
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `rapport_${getReportFileBase()}.docx`;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
+  const sendAssistantMessage = async () => {
+    const text = assistantInput.trim();
+    if (!text || assistantLoading) return;
+
+    const userMsg = {
+      role: 'user',
+      text,
+      timestamp: new Date().toISOString(),
+    };
+    setAssistantMessages((prev) => [...prev, userMsg]);
+    setAssistantInput('');
+
+    try {
+      setAssistantLoading(true);
+      const response = await axios.post(
+        `${API_BASE}/admin-assistant/chat/`,
+        { message: text, use_ai: true },
+        getAdminAuthConfig()
+      );
+      // Si IA répond, afficher la réponse. Sinon, afficher le fallback (secours)
+      if (response?.data?.mode === 'ai') {
+        setAssistantMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            text: response?.data?.reply || 'Aucune réponse disponible.',
+            mode: 'ai',
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      } else if (response?.data?.mode === 'fallback') {
+        setAssistantMessages((prev) => [
+          ...prev,
+          {
+            role: 'assistant',
+            text: response?.data?.reply || 'Aucune réponse disponible.',
+            mode: 'fallback',
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      }
+    } catch (error) {
+      console.error('Erreur assistant admin:', error);
+      setAssistantMessages((prev) => [
+        ...prev,
+        {
+          role: 'assistant',
+          text: "Je n'arrive pas à répondre pour le moment. Réessayez dans quelques instants.",
+          mode: 'fallback',
+          timestamp: new Date().toISOString(),
+        },
+      ]);
+    } finally {
+      setAssistantLoading(false);
+    }
   };
 
   const handleAddSaisisseur = async (e) => {
@@ -1186,75 +1641,164 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
   };
 
-  return (
-    <div className="min-h-screen bg-[#f8f2f5] p-6">
-      <div className="max-w-6xl mx-auto">
-        {/* Header */}
-        <div className="bg-[#7A0A4A] text-white py-4 px-6 font-bold text-2xl border-b-4 border-[#B03372] mb-6 rounded-t-3xl shadow-[0_10px_24px_rgba(122,10,74,0.28)]">
-          🛡️ Espace d'Administration
-        </div>
+  const themeTicketAccents = [
+    {
+      themeRow: 'bg-[#fffdf8] hover:bg-[#f8f3e7]',
+      subThemeRow: 'bg-[#f8f3e7] hover:bg-[#f2e9d2]',
+      marker: 'text-[#7A0A4A]',
+      countChip: 'bg-[#f8f3e7] text-[#7A0A4A] border-[#CCB47F]'
+    },
+    {
+      themeRow: 'bg-[#fff8f8] hover:bg-[#f9e4e6]',
+      subThemeRow: 'bg-[#fbe6ea] hover:bg-[#f4cfd8]',
+      marker: 'text-[#B03372]',
+      countChip: 'bg-[#f9e3ee] text-[#7A0A4A] border-[#e4bfd0]'
+    },
+    {
+      themeRow: 'bg-[#fffaf2] hover:bg-[#f7e8cf]',
+      subThemeRow: 'bg-[#f8ecda] hover:bg-[#f2e9d2]',
+      marker: 'text-[#6E001F]',
+      countChip: 'bg-[#f8ecda] text-[#6E001F] border-[#d6b58b]'
+    },
+    {
+      themeRow: 'bg-[#f9f3f6] hover:bg-[#f2cadc]',
+      subThemeRow: 'bg-[#f9e3ee] hover:bg-[#f2cadc]',
+      marker: 'text-[#7A0A4A]',
+      countChip: 'bg-[#f2cadc] text-[#7A0A4A] border-[#e4bfd0]'
+    }
+  ];
 
-        {/* Onglets de navigation */}
-        <div className="flex gap-2 mb-6 bg-white border-2 border-b-0 border-[#d8b6c8] p-3 rounded-t-3xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
-          <button
-            onClick={() => setActiveTab('users')}
-            className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border ${
-              activeTab === 'users'
-                ? 'bg-[#7A0A4A] text-white border-[#7A0A4A] shadow-[0_8px_18px_rgba(122,10,74,0.35)]'
-                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f4e3ed]'
-            }`}
-          >
-            👥 GESTION DES SAISISSEURS
-          </button>
-          <button
-            onClick={() => setActiveTab('themes')}
-            className={`flex-1 py-3 px-6 rounded-2xl font-bold text-lg transition-all border ${
-              activeTab === 'themes'
-                ? 'bg-[#B03372] text-white border-[#B03372] shadow-[0_8px_18px_rgba(122,10,74,0.28)]'
-                : 'bg-[#f7eaf1] text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f4e3ed]'
-            }`}
-          >
-            📊 GESTION DES THEMES
-          </button>
+  return (
+    <div className="min-h-screen bg-white p-4 md:p-8">
+      <div className="max-w-7xl mx-auto space-y-5 bg-white">
+        {/* Header + Navigation */}
+        <div className="bg-[#f9f3f6] rounded-2xl shadow-[0_4px_20px_rgba(122,10,74,0.1)] border border-[#e5c9d7] overflow-hidden">
+          <div className="bg-gradient-to-r from-[#7A0A4A] to-[#B03372] px-6 py-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <div className="w-11 h-11 rounded-xl bg-white/20 flex items-center justify-center flex-shrink-0">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m5.618-4.016A11.955 11.955 0 0112 2.944a11.955 11.955 0 01-8.618 3.04A12.02 12.02 0 003 9c0 5.591 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.042-.133-2.052-.382-3.016z" />
+                </svg>
+              </div>
+              <div>
+                <h1 className="text-white font-bold text-xl leading-tight">Espace d'Administration</h1>
+                <p className="text-white/70 text-sm mt-0.5">Gestion des utilisateurs, affectations et thèmes</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 flex-shrink-0">
+              <button
+                onClick={() => setShowAdminAssistant((prev) => !prev)}
+                className={`flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold transition border ${showAdminAssistant ? 'bg-white text-[#7A0A4A] border-white' : 'bg-white/10 text-white border-white/20 hover:bg-white/20'}`}
+                title="Assistant Admin"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M9.75 17L8 21l4-2 4 2-1.75-4M4 13a8 8 0 1116 0 8 8 0 01-16 0z" />
+                </svg>
+                Assistant
+              </button>
+              <button
+                onClick={async () => { await fetchSaisisseurs(); setShowNotificationsModal(true); }}
+                className={`relative flex items-center gap-1.5 px-3 py-2 rounded-lg text-sm font-semibold transition border ${unreadSubmissionCount > 0 ? 'bg-white/20 text-white border-white/30 hover:bg-white/30' : 'bg-white/10 text-white border-white/20 hover:bg-white/20'}`}
+                disabled={loading}
+                title="Messages reçus des saisisseurs"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M15 17h5l-1.405-1.405A2.032 2.032 0 0118 14.158V11a6.002 6.002 0 00-4-5.659V5a2 2 0 10-4 0v.341C7.67 6.165 6 8.388 6 11v3.159c0 .538-.214 1.055-.595 1.436L4 17h5m6 0v1a3 3 0 11-6 0v-1m6 0H9" />
+                </svg>
+                Notifications
+                {unreadSubmissionCount > 0 && (
+                  <span className="absolute -top-1.5 -right-1.5 min-w-[18px] h-[18px] px-0.5 rounded-full bg-[#f4e3ed] text-[#7A0A4A] text-[10px] font-black flex items-center justify-center border border-white/50">
+                    {unreadSubmissionCount}
+                  </span>
+                )}
+              </button>
+              <button
+                onClick={() => setShowAddModal(true)}
+                className="flex items-center gap-1.5 px-3 py-2 bg-white text-[#7A0A4A] rounded-lg text-sm font-semibold hover:bg-[#f4e3ed] transition shadow-sm"
+                disabled={loading}
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                  <path strokeLinecap="round" strokeLinejoin="round" d="M12 4v16m8-8H4" />
+                </svg>
+                Ajouter
+              </button>
+            </div>
+          </div>
+          <div className="flex items-end gap-1 bg-[#f9f3f6] border-b border-[#f0e4ed] px-2 pt-1">
+            <button
+              onClick={() => setActiveTab('users')}
+              className={`px-6 py-3 text-sm transition-all border-b-2 -mb-px rounded-t-lg ${
+                activeTab === 'users'
+                  ? 'border-[#7A0A4A] text-[#7A0A4A] bg-white shadow-[0_-1px_10px_rgba(122,10,74,0.08)] font-bold py-3.5 scale-[1.02]'
+                  : 'border-transparent text-[#9a6f85] hover:text-[#7A0A4A] hover:border-[#d8b6c8] hover:bg-white/70 font-semibold'
+              }`}
+            >
+              Utilisateurs &amp; Affectations
+            </button>
+            <button
+              onClick={() => setActiveTab('themes')}
+              className={`px-6 py-3 text-sm transition-all border-b-2 -mb-px rounded-t-lg ${
+                activeTab === 'themes'
+                  ? 'border-[#B03372] text-[#B03372] bg-white shadow-[0_-1px_10px_rgba(122,10,74,0.08)] font-bold py-3.5 scale-[1.02]'
+                  : 'border-transparent text-[#9a6f85] hover:text-[#B03372] hover:border-[#d8b6c8] hover:bg-white/70 font-semibold'
+              }`}
+            >
+              Gestion des Thèmes
+            </button>
+          </div>
         </div>
 
         {/* Section Espace Administrateurs */}
         {activeTab === 'users' && (
           <>
-            {/* Header section */}
-            <div className="flex justify-between items-center mb-6 bg-white border-2 border-t-0 border-[#d8b6c8] px-6 py-4 rounded-b-2xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
-              <h2 className="text-2xl font-black text-[#7A0A4A]">Gestion des Utilisateurs</h2>
-              <div className="space-x-2 flex">
-                <button
-                  onClick={async () => {
-                    await fetchSaisisseurs();
-                    setShowNotificationsModal(true);
-                  }}
-                  className={`relative px-4 py-2 border rounded-xl font-bold shadow-[0_6px_14px_rgba(122,10,74,0.18)] transition ${unreadSubmissionCount > 0 ? 'bg-[#b85282] text-white border-[#991b1b] hover:bg-[#991b1b]' : 'bg-white text-[#7A0A4A] border-[#B03372] hover:bg-[#f7eaf1]'}`}
-                  disabled={loading}
-                  title="Messages reçus des saisisseurs"
-                >
-                  🔔
-                  {unreadSubmissionCount > 0 && (
-                    <span className="absolute -top-2 -right-2 inline-flex items-center justify-center min-w-6 h-6 px-1 rounded-full bg-[#FFD166] text-[#5E0738] text-xs font-black">
-                      {unreadSubmissionCount}
-                    </span>
-                  )}
-                </button>
-                <button
-                  onClick={() => setShowAddModal(true)}
-                  className="px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
-                  disabled={loading}
-                >
-                  ➕ Ajouter
-                </button>
+            {/* Statistiques rapides */}
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="bg-white rounded-xl border border-[#e5c9d7] p-4 shadow-sm flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-[#f4e3ed] flex items-center justify-center flex-shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-[#7A0A4A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0" /></svg>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[#9a6f85]">Utilisateurs</p>
+                  <p className="text-2xl font-black text-[#7A0A4A] leading-none mt-0.5">{saisisseurs.length}</p>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-[#e5c9d7] p-4 shadow-sm flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-[#f4e3ed] flex items-center justify-center flex-shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-[#B03372]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[#9a6f85]">Affectations actives</p>
+                  <p className="text-2xl font-black text-[#B03372] leading-none mt-0.5">{assignments.filter(a => a.statut !== 'Complété').length}</p>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-[#e5c9d7] p-4 shadow-sm flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-[#f4e3ed] flex items-center justify-center flex-shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-[#B03372]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[#9a6f85]">En attente</p>
+                  <p className="text-2xl font-black text-[#B03372] leading-none mt-0.5">{assignments.filter(a => a.statut === 'En attente').length}</p>
+                </div>
+              </div>
+              <div className="bg-white rounded-xl border border-[#e5c9d7] p-4 shadow-sm flex items-center gap-3">
+                <div className="w-10 h-10 rounded-lg bg-[#f4e3ed] flex items-center justify-center flex-shrink-0">
+                  <svg xmlns="http://www.w3.org/2000/svg" className="w-5 h-5 text-[#B03372]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-[#9a6f85]">Terminées</p>
+                  <p className="text-2xl font-black text-[#B03372] leading-none mt-0.5">{assignments.filter(a => a.statut === 'Complété').length}</p>
+                </div>
+              </div>
             </div>
-        </div>
 
         {/* Formulaire d'assignation */}
-        <div className="bg-white border-2 border-[#d8b6c8] p-6 mb-6 rounded-3xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
-          <h3 className="text-2xl font-black mb-4 text-[#7A0A4A]">🔗 Assigner Thème à Utilisateur</h3>
-          <div className="grid grid-cols-2 gap-4 mb-4">
+        <div className="bg-white border border-[#e5c9d7] rounded-xl shadow-sm overflow-hidden">
+          <div className="px-5 py-3 bg-[#f9f3f6] border-b border-[#e5c9d7] flex items-center gap-2">
+            <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-[#7A0A4A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+            <span className="text-sm font-semibold text-[#4d1734]">Assigner un thème à un utilisateur</span>
+          </div>
+          <div className="p-5">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4 mb-4">
             <div>
               <label className="block text-sm font-bold mb-2 text-[#7A0A4A]">Utilisateur</label>
               <select
@@ -1306,16 +1850,16 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
           </div>
           <button
             onClick={addToPendingAssignments}
-            className="w-full px-4 py-3 bg-[#B03372] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#8f245e] shadow-[0_8px_16px_rgba(122,10,74,0.28)] transition"
+            className="w-full px-4 py-2.5 bg-[#7A0A4A] text-white rounded-lg font-semibold text-sm hover:bg-[#5E0738] transition disabled:opacity-50"
             disabled={!selectedSaisisseur || !selectedTheme || loading}
           >
-            ➕ Ajouter à la Queue
+            Ajouter à la file d'attente
           </button>
 
           {/* Afficher la queue d'assignations */}
           {pendingAssignments.length > 0 && (
-            <div className="mt-6 p-4 bg-[#fcf4f8] border border-[#d8b6c8] rounded-2xl">
-              <h4 className="text-lg font-bold mb-3 text-[#7A0A4A]">📦 Assignations en Attente ({pendingAssignments.length})</h4>
+            <div className="mt-4 p-4 bg-[#f9f3f6] border border-[#e5c9d7] rounded-xl">
+              <h4 className="text-sm font-semibold mb-3 text-[#4d1734] flex items-center gap-2"><span className="inline-flex items-center justify-center w-5 h-5 rounded-full bg-[#7A0A4A] text-white text-xs font-black">{pendingAssignments.length}</span>Assignations en attente</h4>
               <div className="space-y-2 mb-4">
                 {pendingAssignments.map((assignment, idx) => (
                   <div key={idx} className="flex justify-between items-center bg-white border border-[#d8b6c8] p-3 rounded-lg">
@@ -1340,39 +1884,44 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <div className="flex gap-2">
                 <button
                   onClick={handleAssignTheme}
-                  className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
+                  className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white rounded-lg font-semibold text-sm hover:bg-[#5E0738] transition disabled:opacity-50"
                   disabled={loading}
                 >
-                  ✓ Valider les Assignations
+                  Valider les assignations
                 </button>
                 <button
                   onClick={() => {
                     setPendingAssignments([]);
                     setShowAssignmentQueue(false);
                   }}
-                  className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#f7eaf1] shadow-[0_6px_12px_rgba(122,10,74,0.15)] transition"
+                  className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#d8b6c8] rounded-lg font-semibold text-sm hover:bg-[#f7eaf1] transition"
                   disabled={loading}
                 >
-                  ✕ Annuler
+                  Annuler
                 </button>
               </div>
             </div>
           )}
+          </div>
         </div>
 
         {/* Tableau des Saisisseurs */}
-        <div className="bg-white border-2 border-[#d8b6c8] rounded-3xl overflow-hidden shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
-          <div className="px-6 py-4 bg-[#7A0A4A] text-white border-b border-[#B03372]">
-            <h2 className="text-xl font-black">📋 Utilisateurs</h2>
+        <div className="bg-white border border-[#e5c9d7] rounded-xl overflow-hidden shadow-sm">
+          <div className="px-5 py-3.5 bg-[#f9f3f6] border-b border-[#e5c9d7] flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-[#7A0A4A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+              <span className="text-sm font-semibold text-[#4d1734]">Utilisateurs</span>
+            </div>
+            <span className="text-xs text-[#9a6f85] bg-[#f4e3ed] px-2 py-0.5 rounded-full">{saisisseurs.length} membre{saisisseurs.length !== 1 ? 's' : ''}</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-[#B03372] text-white border-b border-[#a12663]">
+              <thead className="bg-[#f9f3f6] text-[#5a2048] border-b border-[#e5c9d7]">
                 <tr>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Nom</th>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Email</th>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Rôle</th>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Actions</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Nom</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Email</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Rôle</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1446,13 +1995,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             ⋮
                           </button>
                           {openMenuId === `user-${saisisseur.id}` && (
-                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '200px' }} className="w-56 bg-white rounded-lg shadow-xl border border-[#d8b6c8] overflow-y-auto">
+                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '200px' }} className="w-56 bg-[#7A0A4A] text-white rounded-lg shadow-xl border border-[#B03372] overflow-y-auto">
                               <button
                                 onClick={() => {
                                   handleResetPasswordUser(saisisseur.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm"
                               >
                                 🔒 Réinitialiser le mot de passe
                               </button>
@@ -1462,7 +2011,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleUnarchiveSaisisseur(saisisseur.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
                                 >
                                   ↩️ Désarchiver
                                 </button>
@@ -1472,7 +2021,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleArchiveSaisisseur(saisisseur.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
                                 >
                                   📦 Archiver
                                 </button>
@@ -1482,7 +2031,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleDeleteSaisisseur(saisisseur.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#ca5f8f] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] text-white/90 flex items-center gap-2 text-sm border-t border-[#B03372] rounded-b-lg"
                               >
                                 🗑️ Supprimer
                               </button>
@@ -1499,22 +2048,26 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         </div>
 
         {/* Tableau des Assignations */}
-        <div className="bg-white border-2 border-[#d8b6c8] rounded-3xl overflow-hidden shadow-[0_10px_20px_rgba(122,10,74,0.12)] mt-6">
-          <div className="px-6 py-4 bg-[#7A0A4A] text-white border-b border-[#B03372]">
-            <h2 className="text-xl font-black">🧩 Taches Affectees</h2>
+        <div className="bg-white border border-[#e5c9d7] rounded-xl overflow-hidden shadow-sm">
+          <div className="px-5 py-3.5 bg-[#f9f3f6] border-b border-[#e5c9d7] flex items-center justify-between">
+            <div className="flex items-center gap-2">
+              <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-[#7A0A4A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M9 5H7a2 2 0 00-2 2v10a2 2 0 002 2h8a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2" /></svg>
+              <span className="text-sm font-semibold text-[#4d1734]">Tâches affectées</span>
+            </div>
+            <span className="text-xs text-[#9a6f85] bg-[#f4e3ed] px-2 py-0.5 rounded-full">{assignments.length} tâche{assignments.length !== 1 ? 's' : ''}</span>
           </div>
           <div className="overflow-x-auto">
             <table className="w-full">
-              <thead className="bg-[#B03372] text-white border-b border-[#a12663]">
+              <thead className="bg-[#f9f3f6] text-[#5a2048] border-b border-[#e5c9d7]">
                 <tr>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Utilisateur</th>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Tache</th>
-                  <th className="px-4 py-3 text-center text-sm font-bold">Priorite</th>
-                  <th className="px-4 py-3 text-center text-sm font-bold">Progression</th>
-                  <th className="px-4 py-3 text-left text-sm font-bold">Date debut</th>
-                  <th className="px-4 py-3 text-left text-sm font-bold">Date fin</th>
-                  <th className="px-4 py-3 text-center text-sm font-bold">Statut</th>
-                  <th className="px-6 py-3 text-left text-sm font-bold">Actions</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Utilisateur</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Tâche</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide">Priorité</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide">Progression</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Début</th>
+                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide">Fin</th>
+                  <th className="px-4 py-3 text-center text-xs font-semibold uppercase tracking-wide">Statut</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Actions</th>
                 </tr>
               </thead>
               <tbody>
@@ -1537,15 +2090,15 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     
                     // Priority badge styling
                     const priorityStyles = {
-                      'Haute': 'bg-red-100 text-red-800 border-red-300',
-                      'Normale': 'bg-blue-100 text-blue-800 border-blue-300',
-                      'Basse': 'bg-gray-100 text-gray-600 border-gray-300'
+                      'Haute': 'bg-[#f4e3ed] text-[#7A0A4A] border-[#d8b6c8]',
+                      'Normale': 'bg-[#f9f3f6] text-[#B03372] border-[#d8b6c8]',
+                      'Basse': 'bg-white text-[#7A0A4A] border-[#d8b6c8]'
                     };
                     const priorityBadge = priorityStyles[assignment.priorite] || priorityStyles['Normale'];
                     
                     // Progress bar color
                     const progression = assignment.progression || 0;
-                    const progressColor = progression >= 75 ? 'bg-green-500' : progression >= 40 ? 'bg-yellow-500' : 'bg-blue-500';
+                    const progressColor = progression >= 75 ? 'bg-[#7A0A4A]' : progression >= 40 ? 'bg-[#B03372]' : 'bg-[#d8b6c8]';
                     
                     return (
                       <tr
@@ -1586,7 +2139,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         </td>
                         <td className="px-4 py-3 text-sm">
                           {assignment.date_completion ? (
-                            <span className="text-green-700 font-medium">
+                            <span className="text-[#7A0A4A] font-medium">
                               ✓ {formatAssignmentDate(assignment.date_completion)}
                             </span>
                           ) : (
@@ -1596,10 +2149,10 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         <td className="px-4 py-3 text-center">
                           <span className={
                             assignment.statut === 'Complété'
-                              ? 'px-2 py-1 bg-green-100 text-green-800 rounded text-xs font-medium inline-block'
+                              ? 'px-2 py-1 bg-[#f4e3ed] text-[#7A0A4A] rounded text-xs font-medium inline-block'
                               : assignment.statut === 'En attente'
-                              ? 'px-2 py-1 bg-yellow-100 text-yellow-800 rounded text-xs font-medium inline-block'
-                              : 'px-2 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium inline-block'
+                              ? 'px-2 py-1 bg-[#f9f3f6] text-[#B03372] rounded text-xs font-medium inline-block'
+                              : 'px-2 py-1 bg-white border border-[#d8b6c8] text-[#7A0A4A] rounded text-xs font-medium inline-block'
                           }>
                             {assignment.statut}
                           </span>
@@ -1646,23 +2199,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             ⋮
                           </button>
                           {openMenuId === `assign-${assignment.id}` && (
-                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '320px' }} className="w-56 bg-white rounded-lg shadow-xl border border-[#d8b6c8] overflow-y-auto">
-                              <div className="px-4 py-2 text-xs font-bold text-[#7A0A4A] border-b border-[#efdce6]">Changer la priorité</div>
+                            <div style={{ position: 'fixed', top: menuPosition.top, left: menuPosition.left, zIndex: 9999, maxHeight: '320px' }} className="w-56 bg-[#7A0A4A] text-white rounded-lg shadow-xl border border-[#B03372] overflow-y-auto">
+                              <div className="px-4 py-2 text-xs font-bold text-white border-b border-[#B03372]">Changer la priorité</div>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Haute')}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm"
                               >
                                 🔴 Haute
                               </button>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Normale')}
-                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm"
                               >
                                 🔵 Normale
                               </button>
                               <button
                                 onClick={() => handleChangePriority(assignment.id, 'Basse')}
-                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-b border-[#efdce6]"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-b border-[#B03372]"
                               >
                                 ⚪ Basse
                               </button>
@@ -1671,7 +2224,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleValidateSaisisseur(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#eefcf4] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm"
                               >
                                 ✅ Approuver la soumission
                               </button>
@@ -1680,7 +2233,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleRejectSaisisseur(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fff1f1] text-[#ca5f8f] flex items-center gap-2 text-sm"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] text-white/90 flex items-center gap-2 text-sm"
                               >
                                 🛠️ Demander des corrections
                               </button>
@@ -1689,7 +2242,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleOpenSubmissionPreview(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
                               >
                                 🔍 Aperçu de la soumission
                               </button>
@@ -1699,7 +2252,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleUnarchiveAssignment(assignment.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
                                 >
                                   ↩️ Désarchiver la tâche
                                 </button>
@@ -1709,7 +2262,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     handleArchiveAssignment(assignment.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-[#f8edf3] flex items-center gap-2 text-sm border-t border-[#efdce6]"
+                                  className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
                                 >
                                   📦 Archiver la tâche
                                 </button>
@@ -1719,7 +2272,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   handleDeleteAssignment(assignment.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#fce8ef] text-[#ca5f8f] flex items-center gap-2 text-sm border-t border-[#efdce6] rounded-b-lg"
+                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] text-white/90 flex items-center gap-2 text-sm border-t border-[#B03372] rounded-b-lg"
                               >
                                 🗑️ Supprimer
                               </button>
@@ -1740,35 +2293,52 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       {/* Section Gestion des Thèmes */}
       {activeTab === 'themes' && (
         <>
-          <div className="flex justify-between items-center mb-6 bg-white border-2 border-[#d8b6c8] px-6 py-4 rounded-3xl shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
-            <h1 className="text-3xl font-black text-[#7A0A4A]">📊 Gestion des Thèmes</h1>
-            <div className="text-lg font-bold text-[#7A0A4A] bg-[#f4e3ed] px-4 py-2 rounded-xl border border-[#d8b6c8]">
-              Total: {allThemes.length} thème(s)
-            </div>
+          {/* Statistiques thèmes */}
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+            {[
+              { label: 'Total thèmes', value: allThemes.length, color: 'text-[#7A0A4A]', bg: 'bg-[#f4e3ed]' },
+              { label: 'Publics actifs', value: allThemes.filter(t => t.is_visible && !t.archived).length, color: 'text-[#B03372]', bg: 'bg-[#f9f3f6]' },
+              { label: 'Archivés', value: allThemes.filter(t => t.archived).length, color: 'text-[#B03372]', bg: 'bg-[#f9f3f6]' },
+              { label: 'Sous-thèmes', value: allThemes.reduce((sum, t) => sum + (t.sous_themes?.length || 0), 0), color: 'text-[#B03372]', bg: 'bg-[#f9f3f6]' },
+            ].map(({ label, value, color, bg }) => (
+              <div key={label} className={`rounded-xl border border-[#e5c9d7] p-4 shadow-sm ${bg}`}>
+                <p className="text-xs font-medium text-[#9a6f85]">{label}</p>
+                <p className={`text-2xl font-black ${color} mt-1`}>{value}</p>
+              </div>
+            ))}
           </div>
 
           {/* Tableau des thèmes */}
-          <div className="bg-white border-2 border-[#d8b6c8] rounded-3xl overflow-hidden shadow-[0_10px_20px_rgba(122,10,74,0.12)]">
+          <div className="bg-white border border-[#e5c9d7] rounded-xl overflow-hidden shadow-sm">
+            <div className="px-5 py-3.5 bg-[#f9f3f6] border-b border-[#e5c9d7] flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <svg xmlns="http://www.w3.org/2000/svg" className="w-4 h-4 text-[#7A0A4A]" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}><path strokeLinecap="round" strokeLinejoin="round" d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" /></svg>
+                <span className="text-sm font-semibold text-[#4d1734]">Thèmes &amp; Sous-thèmes</span>
+              </div>
+              <span className="text-xs text-[#9a6f85] bg-[#f4e3ed] px-2 py-0.5 rounded-full">{allThemes.length} thème{allThemes.length !== 1 ? 's' : ''}</span>
+            </div>
             <table className="w-full">
-              <thead className="bg-[#7A0A4A] text-white border-b border-[#B03372]">
+              <thead className="bg-[#f9f3f6] text-[#4d1734] border-b border-[#e5c9d7]">
                 <tr>
-                  <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider w-12"></th>
-                  <th className="px-6 py-3 text-left text-sm font-bold uppercase tracking-wider">Thème</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32">Statut</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32">Archivage</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-32">Sous-thèmes</th>
-                  <th className="px-6 py-3 text-center text-sm font-bold uppercase tracking-wider w-40">Actions</th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide w-12"></th>
+                  <th className="px-5 py-3 text-left text-xs font-semibold uppercase tracking-wide">Thème</th>
+                  <th className="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wide w-28">Visibilité</th>
+                  <th className="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wide w-28">État</th>
+                  <th className="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wide w-28">S-thèmes</th>
+                  <th className="px-5 py-3 text-center text-xs font-semibold uppercase tracking-wide w-36">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
-                {allThemes.map((theme) => (
+                {allThemes.map((theme, themeIndex) => {
+                  const accent = themeTicketAccents[themeIndex % themeTicketAccents.length];
+                  return (
                   <React.Fragment key={theme.id}>
                     {/* Ligne Thème */}
-                    <tr className="hover:bg-[#fcf4f8] transition">
+                    <tr className={`${accent.themeRow} transition`}>
                       <td className="px-6 py-4">
                         <button
                           onClick={() => toggleThemeExpansion(theme.id)}
-                          className="text-[#7A0A4A] hover:text-[#5E0738] font-bold text-xl"
+                          className={`${accent.marker} font-bold text-xl`}
                         >
                           {expandedThemes[theme.id] ? '▼' : '▶'}
                         </button>
@@ -1778,7 +2348,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         <div className="text-xs text-[#9a6f85]">ID: {theme.id}</div>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${
                           theme.is_visible 
                             ? 'bg-green-100 text-green-800' 
                             : 'bg-gray-100 text-gray-800'
@@ -1787,7 +2357,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className={`px-3 py-1 rounded-full text-xs font-bold ${
+                        <span className={`px-4 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${
                           theme.archived 
                             ? 'bg-red-100 text-red-800' 
                             : 'bg-blue-100 text-blue-800'
@@ -1796,7 +2366,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                         </span>
                       </td>
                       <td className="px-6 py-4 text-center">
-                        <span className="text-[#7A0A4A] font-semibold">
+                        <span className={`inline-flex px-2.5 py-1 rounded-full border text-xs font-semibold ${accent.countChip}`}>
                           {theme.sous_themes?.length || 0}
                         </span>
                       </td>
@@ -1824,6 +2394,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                           >
                             {theme.archived ? '↩ Restaurer' : '📦 Archiver'}
                           </button>
+                          {/* Bouton rapport supprimé */}
                         </div>
                       </td>
                     </tr>
@@ -1831,11 +2402,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                     {/* Sous-thèmes (affichés si thème expandé) */}
                     {expandedThemes[theme.id] && theme.sous_themes && theme.sous_themes.length > 0 && (
                       theme.sous_themes.map((subTheme) => (
-                        <tr key={subTheme.id} className="bg-[#fcf4f8] hover:bg-[#f7eaf1] transition">
+                        <tr key={subTheme.id} className={`${accent.subThemeRow} transition`}>
                           <td className="px-6 py-3"></td>
                           <td className="px-6 py-3 pl-12">
                             <div className="flex items-center">
-                              <span className="text-[#B03372] mr-2">└─</span>
+                              <span className={`${accent.marker} mr-2`}>└─</span>
                               <div>
                                 <div className="flex items-center gap-3">
                                   <div className="font-semibold text-[#4d1734]">{subTheme.nom}</div>
@@ -1846,7 +2417,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             </div>
                           </td>
                           <td className="px-6 py-3 text-center">
-                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                            <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${
                               subTheme.is_visible 
                                 ? 'bg-green-100 text-green-800' 
                                 : 'bg-gray-100 text-gray-800'
@@ -1855,7 +2426,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             </span>
                           </td>
                           <td className="px-6 py-3 text-center">
-                            <span className={`px-2 py-1 rounded-full text-xs font-bold ${
+                            <span className={`px-3 py-1.5 rounded-full text-xs font-bold whitespace-nowrap ${
                               subTheme.archived 
                                 ? 'bg-red-100 text-red-800' 
                                 : 'bg-blue-100 text-blue-800'
@@ -1897,14 +2468,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
                     {/* Message si aucun sous-thème */}
                     {expandedThemes[theme.id] && (!theme.sous_themes || theme.sous_themes.length === 0) && (
-                      <tr className="bg-[#fcf4f8]">
+                      <tr className={accent.subThemeRow}>
                         <td colSpan="6" className="px-6 py-3 text-center text-gray-500 italic">
                           Aucun sous-thème pour ce thème
                         </td>
                       </tr>
                     )}
                   </React.Fragment>
-                ))}
+                );})}
               </tbody>
             </table>
 
@@ -1917,13 +2488,73 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         </>
       )}
 
+      {/* Modal rapport supprimée */}
+
+      {showAdminAssistant && (
+        <div className="fixed bottom-5 right-5 z-50 w-[360px] max-w-[92vw] bg-white border border-[#e5c9d7] rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.22)] overflow-hidden">
+          <div className="bg-gradient-to-r from-[#7A0A4A] to-[#B03372] px-4 py-3 flex items-center justify-between">
+            <div>
+              <div className="text-white font-bold text-sm">Assistant Admin</div>
+              <div className="text-white/75 text-[11px]">Mode secours fiable (IA optionnelle)</div>
+            </div>
+            <button onClick={() => setShowAdminAssistant(false)} className="text-white/80 hover:text-white text-lg leading-none">×</button>
+          </div>
+
+          <div className="h-72 overflow-y-auto p-3 bg-[#fffdf8] space-y-2">
+            {assistantMessages.map((msg, idx) => (
+              <div key={`assistant-msg-${idx}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${msg.role === 'user' ? 'bg-[#7A0A4A] text-white' : 'bg-white border border-[#ead3df] text-[#4d1734]'}`}>
+                  <p className="whitespace-pre-line">{msg.text}</p>
+                  {msg.role === 'assistant' && (
+                    <span className={`mt-1 inline-block text-[10px] px-1.5 py-0.5 rounded-full ${msg.mode === 'ai' ? 'bg-[#e6f7ed] text-[#1a7f4b]' : 'bg-[#fef3c7] text-[#92400e]'}`}>
+                      {msg.mode === 'ai' ? 'IA' : 'Secours'}
+                    </span>
+                  )}
+                </div>
+              </div>
+            ))}
+            {assistantLoading && (
+              <div className="text-xs text-[#8c4f6a]">Assistant en cours de réponse...</div>
+            )}
+          </div>
+
+          <div className="border-t border-[#e5c9d7] p-3 bg-white flex gap-2">
+            <input
+              type="text"
+              value={assistantInput}
+              onChange={(e) => setAssistantInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  sendAssistantMessage();
+                }
+              }}
+              placeholder="Posez une question admin..."
+              className="flex-1 px-3 py-2 border border-[#d8b6c8] rounded-lg text-sm outline-none focus:border-[#B03372]"
+            />
+            <button
+              type="button"
+              onClick={sendAssistantMessage}
+              disabled={assistantLoading || !assistantInput.trim()}
+              className="px-3 py-2 rounded-lg bg-[#7A0A4A] text-white text-sm font-semibold hover:bg-[#5E0738] disabled:opacity-60"
+            >
+              Envoyer
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Modal - Ajouter Utilisateur */}
       {showAddModal && (
-        <div className="fixed inset-0 bg-black bg-opacity-60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white border-2 border-[#d8b6c8] p-8 rounded-3xl w-full max-w-md shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
-            <h2 className="text-3xl font-black mb-6 text-center text-[#7A0A4A]">➕ Ajouter Utilisateur</h2>
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white border border-[#e5c9d7] rounded-2xl w-full max-w-md shadow-[0_20px_60px_rgba(0,0,0,0.25)] overflow-hidden">
+            <div className="bg-gradient-to-r from-[#7A0A4A] to-[#B03372] px-6 py-4 flex items-center justify-between">
+              <h2 className="text-lg font-bold text-white">Ajouter un utilisateur</h2>
+              <button type="button" onClick={() => setShowAddModal(false)} className="text-white/70 hover:text-white text-xl leading-none">×</button>
+            </div>
+            <div className="p-6">
             {errorMessage && (
-              <div className="mb-4 p-4 bg-[#ca5f8f] border border-[#b85282] text-white rounded-xl font-bold">
+              <div className="mb-4 p-3 bg-red-50 border border-red-200 text-red-700 rounded-lg text-sm">
                 ⚠️ {errorMessage}
               </div>
             )}
@@ -1961,22 +2592,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   <option value="ADMIN">Administrateur</option>
                 </select>
               </div>
-              <div className="flex gap-4 mt-8">
+              <div className="flex gap-3 mt-6">
                 <button
                   type="submit"
-                  className="flex-1 px-4 py-3 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-bold hover:bg-[#5E0738] shadow-[0_8px_16px_rgba(122,10,74,0.25)] transition"
+                  className="flex-1 px-4 py-2.5 bg-[#7A0A4A] text-white rounded-lg font-semibold text-sm hover:bg-[#5E0738] transition"
                 >
-                  ✓ Ajouter
+                  Ajouter
                 </button>
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 px-4 py-3 bg-white text-[#7A0A4A] border border-[#B03372] rounded-xl font-bold hover:bg-[#f7eaf1] shadow-[0_6px_12px_rgba(122,10,74,0.16)] transition"
+                  className="flex-1 px-4 py-2.5 bg-white text-[#7A0A4A] border border-[#d8b6c8] rounded-lg font-semibold text-sm hover:bg-[#f7eaf1] transition"
                 >
-                  ✕ Annuler
+                  Annuler
                 </button>
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}

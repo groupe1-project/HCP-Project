@@ -9,6 +9,19 @@ import ChartModal from './components/ChartModal';
 import { DATA_TRANSLATIONS_FR_AR } from './i18n';
 
 const API_BASE = 'http://127.0.0.1:8000/api';
+const INFO_BANNER_CACHE_KEY = 'info_banner_cache';
+const DEFAULT_INFO_BANNER_ITEMS = [{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', url: '' }];
+
+const readInfoBannerCache = () => {
+  try {
+    const raw = localStorage.getItem(INFO_BANNER_CACHE_KEY);
+    if (!raw) return DEFAULT_INFO_BANNER_ITEMS;
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) && parsed.length > 0 ? parsed : DEFAULT_INFO_BANNER_ITEMS;
+  } catch {
+    return DEFAULT_INFO_BANNER_ITEMS;
+  }
+};
 
 // --- COMPOSANTS DE STYLE ---
 const SidebarIcon = ({ type }) => {
@@ -250,11 +263,12 @@ function App({ forceVisitor = false }) {
   const [categoryNames, setCategoryNames] = useState([{ nom: '', nom_ar: '', nbSousThemes: 1 }]);
   const [expandedCategories, setExpandedCategories] = useState({});
   const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
-  const [infoBannerText, setInfoBannerText] = useState("L'ICP du mois de Janvier 2026 est disponible");
-  const [infoBannerItems, setInfoBannerItems] = useState([{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', url: '' }]);
+  const [infoBannerText, setInfoBannerText] = useState(() => readInfoBannerCache()[0]?.text || DEFAULT_INFO_BANNER_ITEMS[0].text);
+  const [infoBannerItems, setInfoBannerItems] = useState(() => readInfoBannerCache());
   const [infoBannerDraftItems, setInfoBannerDraftItems] = useState([{ text: '', text_ar: '', url: '' }]);
   const [showInfoBannerEditor, setShowInfoBannerEditor] = useState(false);
   const [savingInfoBanner, setSavingInfoBanner] = useState(false);
+  const [loadingInfoBanner, setLoadingInfoBanner] = useState(true);
   const [siteContent, setSiteContent] = useState({
     about_title: 'A propos de la plateforme',
     about_text: '',
@@ -653,6 +667,15 @@ function App({ forceVisitor = false }) {
       .filter(Boolean);
   };
 
+  const persistInfoBannerCache = (items) => {
+    try {
+      const sanitized = sanitizeInfoItems(items);
+      if (sanitized.length > 0) {
+        localStorage.setItem(INFO_BANNER_CACHE_KEY, JSON.stringify(sanitized));
+      }
+    } catch {}
+  };
+
   const getSaisisseurAssignmentForSubTheme = (subThemeId, assignments = saisisseurAssignments) => {
     return (assignments || []).find((assignment) => String(assignment.sous_theme) === String(subThemeId)) || null;
   };
@@ -871,9 +894,12 @@ function App({ forceVisitor = false }) {
           setInfoBannerItems(normalizedInfos);
           setInfoBannerDraftItems(normalizedInfos);
           setInfoBannerText(normalizedInfos[0].text);
+          persistInfoBannerCache(normalizedInfos);
         }
       } catch (err) {
         console.error('Erreur chargement info banner', err);
+      } finally {
+        setLoadingInfoBanner(false);
       }
     };
 
@@ -1580,6 +1606,7 @@ function App({ forceVisitor = false }) {
       setInfoBannerItems(nextInfos);
       setInfoBannerDraftItems(nextInfos);
       setInfoBannerText(nextInfos[0]?.text || '');
+      persistInfoBannerCache(nextInfos);
       setShowInfoBannerEditor(false);
       showToast('Information publiee pour les visiteurs', 'success');
     } catch (err) {
@@ -4051,6 +4078,10 @@ function App({ forceVisitor = false }) {
                   : [{ text: infoBannerText, url: '' }];
                 const duration = Math.max(12, items.length * 4);
 
+                if (loadingInfoBanner && items.length === 0) {
+                  return <div className="truncate opacity-70">Chargement des informations...</div>;
+                }
+
                 const renderTickerItem = (item, idx, copyIdx) => {
                   const text = String((isVisitor && i18n.language === 'ar') ? (item?.text_ar || item?.text || '') : (item?.text || '')).trim();
                   const url = String(item?.url || '').trim();
@@ -6446,11 +6477,11 @@ function App({ forceVisitor = false }) {
 
       {showSubThemeMeta && (
          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-           <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
+           <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-lg flex flex-col">
              <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
                <h2 className="text-lg font-bold text-center">{t('metadata')}</h2>
              </div>
-             <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
+             <div className="p-4 overflow-y-auto flex-1 min-h-0 space-y-4 text-gray-800">
                {isVisitor ? renderMetadataViewer(subThemeMeta) : renderMetadataEditor(subThemeMeta, setSubThemeMeta)}
 
               
@@ -6464,11 +6495,11 @@ function App({ forceVisitor = false }) {
       )}
       {showThemeMeta && (
          <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
-           <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-hidden shadow-lg">
+           <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-lg flex flex-col">
              <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
                <h2 className="text-lg font-bold text-center">{t('metadata')}</h2>
              </div>
-             <div className="p-4 overflow-y-auto max-h-[64vh] space-y-4 text-gray-800">
+             <div className="p-4 overflow-y-auto flex-1 min-h-0 space-y-4 text-gray-800">
                {isVisitor ? renderMetadataViewer(themeMeta) : renderMetadataEditor(themeMeta, setThemeMeta)}
              </div>
              <div className="flex gap-4 mt-4 px-4 pb-4">

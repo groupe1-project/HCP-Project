@@ -221,6 +221,220 @@ def _run_gemini_mapping(df, expected_columns):
     return sanitized
 
 
+def _is_truthy(value):
+    if isinstance(value, bool):
+        return value
+    return str(value or '').strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
+
+
+def _clean_text(value):
+    return str(value or '').strip()
+
+
+def _parse_subtheme_ids(raw_ids):
+    if raw_ids is None:
+        return []
+    parsed = raw_ids
+    if isinstance(raw_ids, str):
+        text = raw_ids.strip()
+        if not text:
+            return []
+        try:
+            parsed = json.loads(text)
+        except Exception:
+            parsed = [part.strip() for part in text.split(',') if part.strip()]
+    if not isinstance(parsed, list):
+        return []
+
+    ids = []
+    for value in parsed:
+        try:
+            ids.append(int(value))
+        except Exception:
+            continue
+    return ids
+
+
+def _build_non_empty_metadata(sub_theme, language):
+    fr_fields = {
+        'definition': _clean_text(sub_theme.definition_text),
+        'unite': _clean_text(sub_theme.unite_text),
+        'indication': _clean_text(sub_theme.indication_text),
+        'source': _clean_text(sub_theme.source_text),
+        'periodicite': _clean_text(sub_theme.periodicite_text),
+        'couverture': _clean_text(sub_theme.couverture_text),
+    }
+    ar_fields = {
+        'definition': _clean_text(sub_theme.definition_text_ar),
+        'unite': _clean_text(sub_theme.unite_text_ar),
+        'indication': _clean_text(sub_theme.indication_text_ar),
+        'source': _clean_text(sub_theme.source_text_ar),
+        'periodicite': _clean_text(sub_theme.periodicite_text_ar),
+        'couverture': _clean_text(sub_theme.couverture_text_ar),
+    }
+
+    fr_non_empty = {k: v for k, v in fr_fields.items() if v}
+    ar_non_empty = {k: v for k, v in ar_fields.items() if v}
+
+    if language == 'ar':
+        return {'ar': ar_non_empty}
+    if language == 'both':
+        return {'fr': fr_non_empty, 'ar': ar_non_empty}
+    return {'fr': fr_non_empty}
+
+
+def _to_vertical_table(headers, rows, max_source_rows=8):
+    source_rows = rows[:max_source_rows]
+    vertical_headers = ['Champ'] + [f'Ligne {idx + 1}' for idx in range(len(source_rows))]
+    vertical_rows = []
+    for col_idx, header in enumerate(headers):
+        row_values = [header]
+        for source in source_rows:
+            row_values.append(source[col_idx] if col_idx < len(source) else '')
+        vertical_rows.append(row_values)
+    return {
+        'headers': vertical_headers,
+        'rows': vertical_rows,
+    }
+
+
+def _build_monolingual_table(sub_theme, max_rows=60):
+    rows = list(sub_theme.data_json or [])
+    headers = list(sub_theme.columns_order or [])
+    if not headers and rows:
+        first = rows[0] if isinstance(rows[0], dict) else {}
+        headers = list(first.keys())
+
+    normalized_rows = []
+    for row in rows[:max_rows]:
+        if not isinstance(row, dict):
+            continue
+        normalized_rows.append([row.get(h, '') for h in headers])
+
+    return {
+        'headers': headers,
+        'rows': normalized_rows,
+        'rows_total': len(rows),
+        'truncated': len(rows) > max_rows,
+    }
+
+
+def _build_bilingual_table(sub_theme, language, max_rows=60):
+    i18n_payload = sub_theme.data_json_i18n or {}
+    canonical_columns = list(i18n_payload.get('canonical_columns') or [])
+    rows_payload = list(i18n_payload.get('rows') or [])
+    column_labels = i18n_payload.get('column_labels') or {}
+    value_labels = i18n_payload.get('value_labels') or {}
+    value_column = i18n_payload.get('value_column')
+
+    if not canonical_columns or not rows_payload:
+        mono = _build_monolingual_table(sub_theme, max_rows=max_rows)
+        return {
+            'languages': {
+                'fr': {
+                    'horizontal': {'headers': mono['headers'], 'rows': mono['rows']},
+                    'vertical': _to_vertical_table(mono['headers'], mono['rows']),
+                }
+            },
+            'rows_total': mono['rows_total'],
+            'truncated': mono['truncated'],
+        }
+
+    requested_langs = ['fr', 'ar'] if language == 'both' else [language]
+    tables = {}
+
+    for lang in requested_langs:
+        headers = []
+        for code in canonical_columns:
+            labels = column_labels.get(code) or {}
+            headers.append(labels.get(lang) or labels.get('fr') or code)
+
+        localized_rows = []
+        for row in rows_payload[:max_rows]:
+            row_values = []
+            for code in canonical_columns:
+                raw_value = row.get(code, '')
+                if code == value_column:
+                    row_values.append(raw_value)
+                    continue
+                vocab = (value_labels.get(code) or {})
+                mapped = vocab.get(str(raw_value)) or vocab.get(raw_value) or {}
+                if isinstance(mapped, dict):
+                    row_values.append(mapped.get(lang) or mapped.get('fr') or raw_value)
+                else:
+                    row_values.append(raw_value)
+            localized_rows.append(row_values)
+
+        tables[lang] = {
+            'horizontal': {
+                'headers': headers,
+                'rows': localized_rows,
+            },
+            'vertical': _to_vertical_table(headers, localized_rows),
+        }
+
+    return {
+        'languages': tables,
+        'rows_total': len(rows_payload),
+        'truncated': len(rows_payload) > max_rows,
+    }
+
+
+def _build_report_table_payload(sub_theme, language='fr', table_view='horizontal', max_rows=60):
+    if language not in ('fr', 'ar', 'both'):
+        language = 'fr'
+    if table_view not in ('horizontal', 'vertical'):
+        table_view = 'horizontal'
+
+    if sub_theme.data_is_bilingual:
+        table_data = _build_bilingual_table(sub_theme, language=language, max_rows=max_rows)
+    else:
+        mono = _build_monolingual_table(sub_theme, max_rows=max_rows)
+        table_data = {
+            'languages': {
+                'fr': {
+                    'horizontal': {'headers': mono['headers'], 'rows': mono['rows']},
+                    'vertical': _to_vertical_table(mono['headers'], mono['rows']),
+                }
+            },
+            'rows_total': mono['rows_total'],
+            'truncated': mono['truncated'],
+        }
+
+    return {
+        'view': table_view,
+        'rows_total': table_data.get('rows_total', 0),
+        'truncated': table_data.get('truncated', False),
+        'languages': table_data.get('languages', {}),
+    }
+
+
+def _build_numeric_summary(rows, columns):
+    summary = []
+    for col in columns:
+        values = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            number = _parse_number(row.get(col))
+            if number is not None:
+                values.append(number)
+        if not values:
+            continue
+
+        summary.append({
+            'column': col,
+            'count': len(values),
+            'min': min(values),
+            'max': max(values),
+            'avg': round(sum(values) / len(values), 4),
+        })
+    return summary[:8]
+
+
+# Les explications générées par IA sont volontairement désactivées pour le rapport admin.
+
+
 def _cell_to_text(value):
     if value is None:
         return ''
@@ -2049,6 +2263,71 @@ class ThemeViewSet(viewsets.ModelViewSet):
             logger.exception('Erreur ajout sous-theme')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'], url_path='generate-report-context')
+    def generate_report_context(self, request, pk=None):
+        """Build structured report context (sans explications IA) avec vues FR/AR et horizontal/vertical."""
+        try:
+            self._require_admin(request)
+            theme = self.get_object()
+
+            language = str(request.data.get('language', 'fr')).strip().lower()
+            if language not in ('fr', 'ar', 'both'):
+                language = 'fr'
+            table_view = str(request.data.get('table_view', 'horizontal')).strip().lower()
+            if table_view not in ('horizontal', 'vertical'):
+                table_view = 'horizontal'
+
+            include_charts = _is_truthy(request.data.get('include_charts', True))
+            requested_ids = _parse_subtheme_ids(request.data.get('sous_theme_ids'))
+
+            subthemes_qs = theme.sous_themes.all().order_by('ordre', 'id')
+            if requested_ids:
+                subthemes_qs = subthemes_qs.filter(id__in=requested_ids)
+
+            sections = []
+
+            for st in subthemes_qs:
+                metadata = _build_non_empty_metadata(st, language)
+                table_payload = _build_report_table_payload(st, language=language, table_view=table_view)
+
+                sections.append({
+                    'sub_theme_id': st.id,
+                    'sub_theme_name': st.nom,
+                    'metadata': metadata,
+                    'table': table_payload,
+                    'charts': list(st.charts_config or []) if include_charts else [],
+                    'charts_count': len(list(st.charts_config or [])) if include_charts else 0,
+                })
+
+            return Response(
+                {
+                    'theme': {
+                        'id': theme.id,
+                        'title_fr': theme.titre,
+                        'title_ar': theme.titre_ar,
+                    },
+                    'options': {
+                        'language': language,
+                        'table_view': table_view,
+                        'include_charts': include_charts,
+                        'sous_theme_ids': requested_ids,
+                    },
+                    'ai_status': {
+                        'requested': False,
+                        'used_count': 0,
+                        'fallback_count': 0,
+                        'mode': 'disabled',
+                    },
+                    'sections': sections,
+                },
+                status=status.HTTP_200_OK,
+            )
+        except PermissionDenied:
+            raise
+        except Exception as e:
+            logger.exception('Erreur génération contexte rapport')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['post'], url_path='toggle_visibility')
     def toggle_visibility(self, request, pk=None):
         """Bascule le statut de publication (is_visible) du thème et propage aux catégories/sous-thèmes."""
@@ -2670,3 +2949,221 @@ class PublicSousThemeViewSet(viewsets.ReadOnlyModelViewSet):
     ).filter(Q(categorie__isnull=True) | Q(categorie__is_visible=True)).order_by('id')
     serializer_class = SousThemeSerializer
     permission_classes = [AllowAny]
+
+
+class AdminAssistantChatView(APIView):
+    permission_classes = [IsAuthenticated]
+
+    def _require_admin(self, request):
+        if getattr(request.user, 'role', None) != 'ADMIN':
+            raise PermissionDenied('Accès refusé : assistant réservé aux administrateurs.')
+
+    def _empty_or_null_query(self, field_name):
+        return Q(**{f'{field_name}__isnull': True}) | Q(**{field_name: ''})
+
+    def _build_fallback_answer(self, message, theme_id=None):
+        msg = _clean_text(message).lower()
+        themes_qs = Theme.objects.all()
+        subthemes_qs = SousTheme.objects.all()
+        if theme_id:
+            themes_qs = themes_qs.filter(id=theme_id)
+            subthemes_qs = subthemes_qs.filter(theme_id=theme_id)
+
+        total_themes = themes_qs.count()
+        total_subthemes = subthemes_qs.count()
+        archived_themes_qs = themes_qs.filter(archived=True)
+        archived_themes_count = archived_themes_qs.count()
+        public_active = themes_qs.filter(is_visible=True, archived=False).count()
+
+        empty_meta_q = (
+            self._empty_or_null_query('definition_text')
+            & self._empty_or_null_query('unite_text')
+            & self._empty_or_null_query('indication_text')
+            & self._empty_or_null_query('source_text')
+            & self._empty_or_null_query('periodicite_text')
+            & self._empty_or_null_query('couverture_text')
+            & self._empty_or_null_query('definition_text_ar')
+            & self._empty_or_null_query('unite_text_ar')
+            & self._empty_or_null_query('indication_text_ar')
+            & self._empty_or_null_query('source_text_ar')
+            & self._empty_or_null_query('periodicite_text_ar')
+            & self._empty_or_null_query('couverture_text_ar')
+        )
+        missing_meta_count = subthemes_qs.filter(empty_meta_q).count()
+
+        # Réponses par défaut pour chaque question fréquente
+        if any(k in msg for k in ['rapport', 'report', 'rédiger', 'rediger', 'pdf', 'word']):
+            return (
+                "Pour générer un rapport :\n"
+                "1. Ouvrez l'onglet Gestion des Thèmes.\n"
+                "2. Cliquez sur le bouton 📝 Rapport sur la ligne du thème.\n"
+                "3. Sélectionnez les sous-thèmes, la langue et l'option graphes.\n"
+                "4. Cliquez sur Générer le rapport puis téléchargez PDF ou Word.\n"
+                "Le mode secours s'active automatiquement si l'IA est indisponible."
+            )
+
+        if any(k in msg for k in ['utilisateur', 'saisisseur', 'ajouter utilisateur', 'ajouter saisisseur', 'nouveau utilisateur', 'nouveau saisisseur']):
+            return "Pour ajouter un nouveau saisisseur, cliquez sur 'Ajouter' en haut à droite de la page Utilisateurs, remplissez le formulaire puis validez."
+
+        if any(k in msg for k in ['réinitialiser', 'reset', 'mot de passe']):
+            return "Pour réinitialiser le mot de passe d'un utilisateur, cliquez sur le bouton '⋮' à droite de l'utilisateur puis choisissez 'Réinitialiser le mot de passe'."
+
+        if any(k in msg for k in ['archiver', 'désarchiver', 'supprimer utilisateur', 'supprimer saisisseur']):
+            return "Pour archiver, désarchiver ou supprimer un utilisateur, utilisez le bouton '⋮' à droite de l'utilisateur et choisissez l'action souhaitée."
+
+        if any(k in msg for k in ['assigner', 'affecter', 'tâche', 'tache', 'affectation', 'assignation']):
+            return "Pour assigner un thème à un utilisateur, sélectionnez l'utilisateur et le thème dans le formulaire d'assignation puis validez."
+
+        if any(k in msg for k in ['priorité', 'changer priorité', 'changer la priorité']):
+            return "Pour changer la priorité d'une tâche, cliquez sur '⋮' à droite de la tâche puis choisissez la nouvelle priorité."
+
+        if any(k in msg for k in ['valider', 'rejeter', 'soumission', 'approuver', 'corrections']):
+            return "Pour valider ou rejeter une soumission, cliquez sur '⋮' à droite de la tâche puis choisissez 'Approuver' ou 'Demander des corrections'."
+
+        if any(k in msg for k in ['public', 'privé', 'prive', 'rendre public', 'rendre privé', 'rendre prive']):
+            return "Pour rendre un thème public ou privé, cliquez sur le bouton correspondant dans la colonne 'Visibilité' de la liste des thèmes."
+
+        if any(k in msg for k in ['archiver thème', 'restaurer thème', 'archiver un thème', 'restaurer un thème']):
+            return "Pour archiver ou restaurer un thème, cliquez sur le bouton correspondant dans la colonne 'État' de la liste des thèmes."
+
+        if any(k in msg for k in ['liste sous-thèmes', 'liste sous theme', 'afficher sous-thèmes', 'afficher sous theme']):
+            return "Pour afficher la liste des sous-thèmes d'un thème, cliquez sur la flèche à gauche du nom du thème dans la liste."
+
+        if any(k in msg for k in ['tableau de bord', 'dashboard', 'utiliser interface', 'utilisation interface']):
+            return "Le tableau de bord admin affiche les statistiques et accès rapides. Utilisez les onglets et boutons pour naviguer entre les fonctionnalités."
+
+        if any(k in msg for k in ['notification', 'messages reçus', 'boîte de réception', 'boite de reception']):
+            return "Les notifications des saisisseurs sont accessibles via le bouton 'Notifications' en haut de la page admin."
+
+        if any(k in msg for k in ['filtrer', 'recherche', 'filtre', 'rechercher']):
+            return "Pour filtrer les utilisateurs ou les tâches, utilisez les champs de recherche ou les filtres disponibles en haut des tableaux."
+
+        if any(k in msg for k in ['configuration sous-thème', 'configurer sous-thème', 'config sous-thème', 'config sous theme']):
+            return "Pour accéder à la configuration d'un sous-thème, ouvrez la gestion des thèmes, développez le thème puis cliquez sur le sous-thème souhaité."
+
+        if any(k in msg for k in ['archive', 'archivé', 'archiver']):
+            names = list(archived_themes_qs.values_list('titre', flat=True)[:10])
+            if not names:
+                return "Aucun thème archivé trouvé pour le périmètre actuel."
+            joined = '\n- '.join(names)
+            return f"Thèmes archivés ({archived_themes_count}) :\n- {joined}"
+
+        if any(k in msg for k in ['metadonne', 'métadonné', 'metadata']):
+            return (
+                f"Sous-thèmes sans métadonnées renseignées: {missing_meta_count}. "
+                "Je peux vous aider à prioriser ceux à compléter en premier."
+            )
+
+        if any(k in msg for k in ['stat', 'combien', 'nombre', 'theme', 'sous-theme', 'sous thème']):
+            return (
+                f"Statistiques actuelles:\n"
+                f"- Thèmes: {total_themes}\n"
+                f"- Sous-thèmes: {total_subthemes}\n"
+                f"- Publics actifs: {public_active}\n"
+                f"- Archivés: {archived_themes_count}\n"
+                f"- Sous-thèmes sans métadonnées: {missing_meta_count}"
+            )
+
+        return (
+            "Je suis votre assistant admin. Voici quelques questions utiles que vous pouvez poser :\n"
+            "\n"
+            "Statistiques et données :\n"
+            "- Combien d’utilisateurs ou de saisisseurs sont enregistrés ?\n"
+            "- Afficher la liste des thèmes ou sous-thèmes actifs.\n"
+            "- Voir les tâches en attente ou terminées.\n"
+            "- Quel est le taux de progression moyen des saisisseurs ?\n"
+            "\n"
+            "Gestion des utilisateurs :\n"
+            "- Comment ajouter un nouveau saisisseur ?\n"
+            "- Comment réinitialiser le mot de passe d’un utilisateur ?\n"
+            "- Comment archiver/désarchiver ou supprimer un utilisateur ?\n"
+            "\n"
+            "Gestion des affectations :\n"
+            "- Comment assigner un thème à un utilisateur ?\n"
+            "- Voir les tâches assignées à un utilisateur précis.\n"
+            "- Changer la priorité d’une tâche.\n"
+            "- Valider ou rejeter une soumission.\n"
+            "\n"
+            "Gestion des thèmes :\n"
+            "- Rendre un thème public ou privé.\n"
+            "- Archiver ou restaurer un thème.\n"
+            "- Afficher la liste des sous-thèmes d’un thème.\n"
+            "\n"
+            "Utilisation de l’interface :\n"
+            "- Comment utiliser le tableau de bord admin ?\n"
+            "- Où trouver les notifications des saisisseurs ?\n"
+            "- Comment filtrer les utilisateurs ou les tâches ?\n"
+            "- Accéder à la configuration d’un sous-thème."
+        )
+
+    def _try_ai_rewrite(self, user_message, fallback_text):
+        api_key = os.getenv('GEMINI_API_KEY', '').strip() or HARDCODED_GEMINI_API_KEY
+        model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
+        if not api_key:
+            raise RuntimeError('GEMINI_API_KEY manquante')
+
+        try:
+            import google.generativeai as genai
+        except Exception as exc:
+            raise RuntimeError('google-generativeai indisponible') from exc
+
+        prompt = (
+            "Tu es un assistant admin d'une plateforme statistique. "
+            "Réécris la réponse de secours de manière claire et concise en français. "
+            "N'invente aucun chiffre.\n\n"
+            f"Question utilisateur: {user_message}\n"
+            f"Réponse de secours: {fallback_text}\n\n"
+            "Retourne uniquement la réponse finale."
+        )
+
+        genai.configure(api_key=api_key)
+        model = genai.GenerativeModel(model_name)
+        response = model.generate_content(prompt)
+        text = _clean_text(getattr(response, 'text', '') or '')
+        if not text:
+            raise RuntimeError('Réponse IA vide')
+        return text
+
+    def post(self, request):
+        self._require_admin(request)
+        message = _clean_text(request.data.get('message'))
+        if not message:
+            return Response({'error': 'Le message est obligatoire.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        theme_id = request.data.get('theme_id')
+        try:
+            theme_id = int(theme_id) if theme_id is not None else None
+        except Exception:
+            theme_id = None
+
+        use_ai = _is_truthy(request.data.get('use_ai', False))
+        fallback_answer = self._build_fallback_answer(message, theme_id=theme_id)
+
+        if not use_ai:
+            return Response(
+                {
+                    'reply': fallback_answer,
+                    'mode': 'fallback',
+                },
+                status=status.HTTP_200_OK,
+            )
+
+        try:
+            ai_reply = self._try_ai_rewrite(message, fallback_answer)
+            return Response(
+                {
+                    'reply': ai_reply,
+                    'mode': 'ai',
+                },
+                status=status.HTTP_200_OK,
+            )
+        except Exception as ai_error:
+            logger.warning('Admin assistant fallback activé: %s', ai_error)
+            return Response(
+                {
+                    'reply': fallback_answer,
+                    'mode': 'fallback',
+                    'fallback_reason': str(ai_error),
+                },
+                status=status.HTTP_200_OK,
+            )
