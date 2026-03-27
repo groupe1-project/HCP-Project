@@ -2614,6 +2614,7 @@ function App({ forceVisitor = false }) {
       const bodyStart = tableStartRow + headerRows.length;
       const dataRows = visitorVerticalMatrix.rows || [];
       const spanMaps = {};
+      const isPeriodCol = (colName) => /(annee|année|period|période|year)/i.test(String(colName || '').toLowerCase());
       rowCols.forEach((col, colIndex) => {
         const spans = new Array(dataRows.length).fill(0);
         let i = 0;
@@ -2626,6 +2627,7 @@ function App({ forceVisitor = false }) {
             let samePrefix = true;
             for (let p = 0; p < colIndex; p += 1) {
               const prevCol = rowCols[p];
+              if (isPeriodCol(prevCol)) continue;
               if (String(dataRows[i]?.dimensions?.[prevCol] ?? '—') !== String(dataRows[j]?.dimensions?.[prevCol] ?? '—')) { samePrefix = false; break; }
             }
             if (!samePrefix) break;
@@ -5734,6 +5736,7 @@ function App({ forceVisitor = false }) {
 
                             const rowCount = displayedRows.length;
                             const spans = {};
+                            const isPeriodCol = (colName) => /(annee|année|period|période|year)/i.test(String(colName || '').toLowerCase());
                             rowCols.forEach((col, colIndex) => {
                               spans[col] = new Array(rowCount).fill(0);
                               let i = 0;
@@ -5746,6 +5749,7 @@ function App({ forceVisitor = false }) {
                                   let samePrefix = true;
                                   for (let p = 0; p < colIndex; p++) {
                                     const prevCol = rowCols[p];
+                                    if (isPeriodCol(prevCol)) continue;
                                     const leftAtI = String(displayedRows[i]?.dimensions?.[prevCol] ?? '—');
                                     const leftAtJ = String(displayedRows[j]?.dimensions?.[prevCol] ?? '—');
                                     if (leftAtI !== leftAtJ) { samePrefix = false; break; }
@@ -5764,13 +5768,14 @@ function App({ forceVisitor = false }) {
                                   const span = spans[col][i] || 0;
                                   if (span === 0) return null;
                                   const isYearCol = /(annee|année|period|période|year)/i.test(String(col).toLowerCase());
+                                  const isProvinceCol = /(province|prefecture|préfecture|region|région|wilaya|عمالة|إقليم|جهة)/i.test(String(col).toLowerCase());
                                   return (
                                     <td
                                       key={`${row.key}-${col}`}
                                       rowSpan={span}
-                                      className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isYearCol ? 'text-center align-middle' : 'text-left align-top'}`}
+                                      className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${(isYearCol || isProvinceCol) ? 'text-center align-middle' : 'text-left align-top'}`}
                                     >
-                                      <span className={`font-semibold ${isYearCol ? 'text-3xl leading-none' : ''}`}>{translateDataValue(String(row?.dimensions?.[col] ?? '—'))}</span>
+                                      <span className={`font-semibold ${(isYearCol || isProvinceCol) ? 'text-3xl leading-none' : ''}`}>{translateDataValue(String(row?.dimensions?.[col] ?? '—'))}</span>
                                     </td>
                                   );
                                 })}
@@ -6520,22 +6525,94 @@ function App({ forceVisitor = false }) {
             <h2 className="text-lg font-bold text-center mb-4">⚙️ Configuration Visiteur</h2>
 
             <div className="space-y-4">
+              {(() => {
+                const availableColumns = (configSubTheme.columns && configSubTheme.columns.length)
+                  ? localizeConfiguredColumns(configSubTheme.columns, 'fr')
+                  : localizeConfiguredColumns(Object.keys((configSubTheme.data && configSubTheme.data[0]) || {}), 'fr');
+
+                const moveInList = (setter, index, direction) => {
+                  setter((prev) => {
+                    const next = [...(prev || [])];
+                    const target = index + direction;
+                    if (target < 0 || target >= next.length) return next;
+                    const tmp = next[index];
+                    next[index] = next[target];
+                    next[target] = tmp;
+                    return next;
+                  });
+                };
+
+                return (
+                  <>
               <div>
                 <label className="block font-bold mb-2">Colonnes visibles pour le visiteur</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorColsText} onChange={e => setModalVisitorColsText(e.target.value)} />
-                <div className="text-sm italic text-gray-600">Séparer les noms de colonnes par des virgules. (Le texte est conservé tant que vous n'enregistrez pas.)</div>
+                <div className="space-y-2 max-h-48 overflow-y-auto p-2 border-2 border-black rounded">
+                  {modalVisitorCols.length === 0 && <div className="text-sm text-gray-500">Aucune colonne sélectionnée</div>}
+                  {modalVisitorCols.map((col, idx) => (
+                    <div key={`vc-${col}-${idx}`} className="flex items-center gap-2 bg-white border rounded px-2 py-1">
+                      <span className="flex-1 text-sm">{col}</span>
+                      <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorCols, idx, -1)}>↑</button>
+                      <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorCols, idx, 1)}>↓</button>
+                      <button type="button" className="px-2 py-1 border rounded text-xs text-red-700" onClick={() => {
+                        setModalVisitorCols((prev) => prev.filter((_, i) => i !== idx));
+                        setModalVisitorFilters((prev) => prev.filter((f) => f !== col));
+                        setModalVisitorHierarchy((prev) => prev.filter((h) => h !== col));
+                        setModalVisitorDefaultFilters((prev) => { const cp = { ...(prev || {}) }; delete cp[col]; return cp; });
+                      }}>Retirer</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {availableColumns.filter((c) => !modalVisitorCols.includes(c)).map((c) => (
+                    <button type="button" key={`add-col-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorCols((prev) => [...prev, c])}>+ {c}</button>
+                  ))}
+                </div>
+                <div className="text-sm italic text-gray-600">Choisissez les colonnes puis ordonnez-les avec ↑/↓.</div>
               </div>
 
               <div>
                 <label className="block font-bold mb-2">Filtres disponibles</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorFiltersText} onChange={e => setModalVisitorFiltersText(e.target.value)} />
-                <div className="text-sm italic text-gray-600">Colonnes que le visiteur peut utiliser pour filtrer. (Le texte est conservé tant que vous n'enregistrez pas.)</div>
+                <div className="space-y-2 max-h-48 overflow-y-auto p-2 border-2 border-black rounded">
+                  {modalVisitorFilters.length === 0 && <div className="text-sm text-gray-500">Aucun filtre sélectionné</div>}
+                  {modalVisitorFilters.map((col, idx) => (
+                    <div key={`vf-${col}-${idx}`} className="flex items-center gap-2 bg-white border rounded px-2 py-1">
+                      <span className="flex-1 text-sm">{col}</span>
+                      <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorFilters, idx, -1)}>↑</button>
+                      <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorFilters, idx, 1)}>↓</button>
+                      <button type="button" className="px-2 py-1 border rounded text-xs text-red-700" onClick={() => {
+                        setModalVisitorFilters((prev) => prev.filter((_, i) => i !== idx));
+                        setModalVisitorDefaultFilters((prev) => { const cp = { ...(prev || {}) }; delete cp[col]; return cp; });
+                      }}>Retirer</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {modalVisitorCols.filter((c) => !modalVisitorFilters.includes(c)).map((c) => (
+                    <button type="button" key={`add-filter-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorFilters((prev) => [...prev, c])}>+ {c}</button>
+                  ))}
+                </div>
+                <div className="text-sm italic text-gray-600">Sélectionnez seulement les colonnes utiles pour filtrer.</div>
               </div>
 
               <div>
                 <label className="block font-bold mb-2">Hiérarchie des colonnes (optionnel)</label>
-                <textarea className="w-full p-2 border-2 border-black rounded min-h-[80px]" value={modalVisitorHierarchyText} onChange={e => setModalVisitorHierarchyText(e.target.value)} />
-                <div className="text-sm italic text-gray-600">Ordre hiérarchique pour l'entête vertical/multi-niveaux (ex: Année, Sexe, Milieu). Les colonnes non listées restent en affichage normal.</div>
+                <div className="space-y-2 max-h-48 overflow-y-auto p-2 border-2 border-black rounded">
+                  {modalVisitorHierarchy.length === 0 && <div className="text-sm text-gray-500">Aucune hiérarchie définie</div>}
+                  {modalVisitorHierarchy.map((col, idx) => (
+                    <div key={`vh-${col}-${idx}`} className="flex items-center gap-2 bg-white border rounded px-2 py-1">
+                      <span className="flex-1 text-sm">{col}</span>
+                      <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorHierarchy, idx, -1)}>↑</button>
+                      <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorHierarchy, idx, 1)}>↓</button>
+                      <button type="button" className="px-2 py-1 border rounded text-xs text-red-700" onClick={() => setModalVisitorHierarchy((prev) => prev.filter((_, i) => i !== idx))}>Retirer</button>
+                    </div>
+                  ))}
+                </div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {modalVisitorCols.filter((c) => !modalVisitorHierarchy.includes(c)).map((c) => (
+                    <button type="button" key={`add-hierarchy-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorHierarchy((prev) => [...prev, c])}>+ {c}</button>
+                  ))}
+                </div>
+                <div className="text-sm italic text-gray-600">Ordre hiérarchique pour l'en-tête vertical/multi-niveaux.</div>
               </div>
 
               <div>
@@ -6553,30 +6630,30 @@ function App({ forceVisitor = false }) {
 
               <div>
                 <label className="block font-bold mb-2">Filtres par défaut</label>
-                {/* show a human-friendly string while keeping state as an object */}
-                {(() => {
-                  const formatDefaults = (val) => {
-                    if (!val) return '';
-                    if (typeof val === 'string') {
-                      try { val = JSON.parse(val); } catch (_) {}
-                    }
-                    if (typeof val === 'object' && val !== null) {
-                      return Object.entries(val).map(([k, v]) => `${k}=${v}`).join(', ');
-                    }
-                    return String(val);
-                  };
-
-                  return (
-                    <input
-                      className="w-full p-2 border-2 border-black rounded"
-                      value={formatDefaults(modalVisitorDefaultFilters)}
-                      onChange={e => setModalVisitorDefaultFilters(e.target.value)}
-                      placeholder="Ex: Milieu=Total, Sexe=Masculin"
-                    />
-                  );
-                })()}
-                <div className="text-sm italic text-gray-600">Exemple: Milieu=Total ou Année=2020</div>
+                <div className="space-y-2 max-h-56 overflow-y-auto p-2 border-2 border-black rounded">
+                  {modalVisitorFilters.length === 0 && <div className="text-sm text-gray-500">Sélectionnez d'abord les filtres disponibles</div>}
+                  {modalVisitorFilters.map((f) => {
+                    const opts = Array.from(new Set((configSubTheme.data || []).map((r) => r && r[f]).filter((v) => v !== null && v !== undefined)));
+                    return (
+                      <div key={`default-${f}`} className="text-sm">
+                        <label className="block font-semibold mb-1">{f}</label>
+                        <select
+                          className="w-full p-2 border rounded"
+                          value={(modalVisitorDefaultFilters && modalVisitorDefaultFilters[f]) ?? ''}
+                          onChange={(e) => setModalVisitorDefaultFilters((prev) => ({ ...(prev || {}), [f]: e.target.value }))}
+                        >
+                          <option value="">-- Aucun --</option>
+                          {opts.map((o) => <option key={String(o)} value={String(o)}>{String(o)}</option>)}
+                        </select>
+                      </div>
+                    );
+                  })}
+                </div>
+                <div className="text-sm italic text-gray-600">Définissez ici les valeurs par défaut des filtres.</div>
               </div>
+                  </>
+                );
+              })()}
             </div>
 
             <div className="flex gap-4 mt-6">
@@ -6585,10 +6662,9 @@ function App({ forceVisitor = false }) {
                 try {
                   const parsedDefaults = canonicalizeVisitorDefaults(modalVisitorDefaultFilters);
 
-                  // parse the text fields into arrays (only on save)
-                  const parsedCols = normalizeConfiguredColumns(String(modalVisitorColsText || '').split(',').map(s => s.trim()).filter(s => s !== ''));
-                  const parsedFilters = normalizeConfiguredColumns(String(modalVisitorFiltersText || '').split(',').map(s => s.trim()).filter(s => s !== ''));
-                  const parsedHierarchy = normalizeConfiguredColumns(String(modalVisitorHierarchyText || '').split(',').map(s => s.trim()).filter(s => s !== ''));
+                  const parsedCols = normalizeConfiguredColumns(modalVisitorCols);
+                  const parsedFilters = normalizeConfiguredColumns(modalVisitorFilters);
+                  const parsedHierarchy = normalizeConfiguredColumns(modalVisitorHierarchy);
 
                   const payload = {
                     visitor_visible_columns: parsedCols,

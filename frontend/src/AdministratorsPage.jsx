@@ -2,6 +2,9 @@
 import axios from 'axios';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { DndContext, closestCenter } from '@dnd-kit/core';
+import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
+import { CSS } from '@dnd-kit/utilities';
 import {
   Document,
   Packer,
@@ -33,6 +36,28 @@ import {
 
 const API_BASE = 'http://127.0.0.1:8000/api';
 const ADMIN_SEEN_SUBMISSIONS_KEY = 'admin_seen_submission_markers';
+
+function DraggableChip({ id, children, onRemove }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.7 : 1,
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className="flex items-center justify-between gap-2 px-2 py-1 rounded border border-[#d8b6c8] bg-white"
+    >
+      <button type="button" className="text-left flex-1 cursor-grab" {...attributes} {...listeners} title="Glisser pour réordonner">
+        {children}
+      </button>
+      <button type="button" onClick={onRemove} className="text-red-600 hover:text-red-800 font-bold">✕</button>
+    </div>
+  );
+}
 
 const AdministratorsPage = ({ isSaisisseur = false }) => {
   // État pour l'onglet actif
@@ -69,6 +94,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [configSubTheme, setConfigSubTheme] = useState(null);
   const [modalVisitorCols, setModalVisitorCols] = useState([]);
   const [modalVisitorFilters, setModalVisitorFilters] = useState([]);
+  const [modalVisitorHierarchy, setModalVisitorHierarchy] = useState([]);
   const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
   const [openMenuId, setOpenMenuId] = useState(null);
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 });
@@ -514,6 +540,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
           };
           setModalVisitorFilters(normalizeFilters(rawFilters));
+          setModalVisitorHierarchy(Array.isArray(found.visitor_pivot_columns) ? found.visitor_pivot_columns : []);
           setModalVisitorDefaultFilters(found.visitor_default_filters || {});
           setConfigModalOpen(true);
           setActiveTab('themes');
@@ -3158,35 +3185,145 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               <button onClick={() => setConfigModalOpen(false)} className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl">✕</button>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div>
-                <label className="font-bold mb-2 block">Colonnes disponibles</label>
-                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
-                  {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {})).map(c => (
-                    <label key={c} className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" className="w-4 h-4" checked={modalVisitorCols.includes(c)} onChange={(e) => {
-                        if (e.target.checked) setModalVisitorCols(prev => Array.from(new Set([...prev, c])));
-                        else setModalVisitorCols(prev => prev.filter(x => x !== c));
-                      }} />
-                      <span>{c}</span>
-                    </label>
-                  ))}
+                <label className="font-bold mb-2 block">Colonnes visibles (ordre important)</label>
+                <DndContext
+                  collisionDetection={closestCenter}
+                  onDragEnd={({ active, over }) => {
+                    if (!over || active.id === over.id) return;
+                    setModalVisitorCols((prev) => {
+                      const oldIndex = prev.indexOf(active.id);
+                      const newIndex = prev.indexOf(over.id);
+                      if (oldIndex < 0 || newIndex < 0) return prev;
+                      return arrayMove(prev, oldIndex, newIndex);
+                    });
+                  }}
+                >
+                  <SortableContext items={modalVisitorCols} strategy={verticalListSortingStrategy}>
+                    <div className="space-y-2 max-h-56 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
+                      {modalVisitorCols.length === 0 && <div className="text-sm text-gray-500">Aucune colonne sélectionnée</div>}
+                      {modalVisitorCols.map(c => (
+                        <DraggableChip key={c} id={c} onRemove={() => {
+                          setModalVisitorCols(prev => prev.filter(x => x !== c));
+                          setModalVisitorHierarchy(prev => prev.filter(x => x !== c));
+                          setModalVisitorFilters(prev => prev.filter(x => x !== c));
+                        }}>
+                          <span className="font-mono text-sm">{c}</span>
+                        </DraggableChip>
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+                <div className="mt-2 text-xs text-gray-600">Ajouter une colonne:</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {}))
+                    .filter(c => !modalVisitorCols.includes(c))
+                    .map(c => (
+                      <button
+                        key={`add-col-${c}`}
+                        type="button"
+                        className="px-2 py-1 text-xs rounded border border-[#d8b6c8] bg-white hover:bg-[#f8edf3]"
+                        onClick={() => setModalVisitorCols(prev => [...prev, c])}
+                      >
+                        {c}
+                      </button>
+                    ))}
                 </div>
               </div>
 
               <div>
-                <label className="font-bold mb-2 block">Filtres disponibles</label>
-                <div className="space-y-2 max-h-64 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
-                  {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {})).map(c => (
-                    <label key={`f-${c}`} className="flex items-center gap-2 text-sm">
-                      <input type="checkbox" className="w-4 h-4" checked={modalVisitorFilters.includes(c)} onChange={(e) => {
-                        if (e.target.checked) setModalVisitorFilters(prev => Array.from(new Set([...prev, c])));
-                        else setModalVisitorFilters(prev => prev.filter(x => x !== c));
-                        if (!e.target.checked) setModalVisitorDefaultFilters(prev => { const copy = {...prev}; delete copy[c]; return copy; });
-                      }} />
-                      <span>{c}</span>
-                    </label>
-                  ))}
+                <label className="font-bold mb-2 block">Filtres disponibles (ordre important)</label>
+                <DndContext
+                  collisionDetection={closestCenter}
+                  onDragEnd={({ active, over }) => {
+                    if (!over || active.id === over.id) return;
+                    setModalVisitorFilters((prev) => {
+                      const oldIndex = prev.indexOf(active.id);
+                      const newIndex = prev.indexOf(over.id);
+                      if (oldIndex < 0 || newIndex < 0) return prev;
+                      return arrayMove(prev, oldIndex, newIndex);
+                    });
+                  }}
+                >
+                  <SortableContext items={modalVisitorFilters} strategy={verticalListSortingStrategy}>
+                    <div className="space-y-2 max-h-56 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
+                      {modalVisitorFilters.length === 0 && <div className="text-sm text-gray-500">Aucun filtre sélectionné</div>}
+                      {modalVisitorFilters.map(c => (
+                        <DraggableChip
+                          key={c}
+                          id={c}
+                          onRemove={() => {
+                            setModalVisitorFilters(prev => prev.filter(x => x !== c));
+                            setModalVisitorDefaultFilters(prev => {
+                              const copy = { ...prev };
+                              delete copy[c];
+                              return copy;
+                            });
+                          }}
+                        >
+                          <span className="font-mono text-sm">{c}</span>
+                        </DraggableChip>
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+                <div className="mt-2 text-xs text-gray-600">Ajouter un filtre:</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {modalVisitorCols
+                    .filter(c => !modalVisitorFilters.includes(c))
+                    .map(c => (
+                      <button
+                        key={`add-filter-${c}`}
+                        type="button"
+                        className="px-2 py-1 text-xs rounded border border-[#d8b6c8] bg-white hover:bg-[#f8edf3]"
+                        onClick={() => setModalVisitorFilters(prev => [...prev, c])}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                </div>
+              </div>
+
+              <div>
+                <label className="font-bold mb-2 block">Hiérarchie des colonnes (optionnel)</label>
+                <DndContext
+                  collisionDetection={closestCenter}
+                  onDragEnd={({ active, over }) => {
+                    if (!over || active.id === over.id) return;
+                    setModalVisitorHierarchy((prev) => {
+                      const oldIndex = prev.indexOf(active.id);
+                      const newIndex = prev.indexOf(over.id);
+                      if (oldIndex < 0 || newIndex < 0) return prev;
+                      return arrayMove(prev, oldIndex, newIndex);
+                    });
+                  }}
+                >
+                  <SortableContext items={modalVisitorHierarchy} strategy={verticalListSortingStrategy}>
+                    <div className="space-y-2 max-h-56 overflow-y-auto p-2 bg-[#fcf4f8] rounded border border-[#e5c9d7]">
+                      {modalVisitorHierarchy.length === 0 && <div className="text-sm text-gray-500">Aucune hiérarchie</div>}
+                      {modalVisitorHierarchy.map(c => (
+                        <DraggableChip key={c} id={c} onRemove={() => setModalVisitorHierarchy(prev => prev.filter(x => x !== c))}>
+                          <span className="font-mono text-sm">{c}</span>
+                        </DraggableChip>
+                      ))}
+                    </div>
+                  </SortableContext>
+                </DndContext>
+                <div className="mt-2 text-xs text-gray-600">Ajouter à la hiérarchie:</div>
+                <div className="mt-1 flex flex-wrap gap-2">
+                  {modalVisitorCols
+                    .filter(c => !modalVisitorHierarchy.includes(c))
+                    .map(c => (
+                      <button
+                        key={`add-hierarchy-${c}`}
+                        type="button"
+                        className="px-2 py-1 text-xs rounded border border-[#d8b6c8] bg-white hover:bg-[#f8edf3]"
+                        onClick={() => setModalVisitorHierarchy(prev => [...prev, c])}
+                      >
+                        {c}
+                      </button>
+                    ))}
                 </div>
               </div>
 
@@ -3216,6 +3353,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   const payload = {
                     visitor_visible_columns: modalVisitorCols,
                     visitor_filters: modalVisitorFilters,
+                    visitor_pivot_columns: modalVisitorHierarchy,
                     visitor_default_filters: modalVisitorDefaultFilters
                   };
                   await axios.patch(`${API_BASE}/sousthemes/${configSubTheme.id}/`, payload);
@@ -3235,6 +3373,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 // reset modal to original values
                 setModalVisitorCols(configSubTheme.visitor_visible_columns || []);
                 setModalVisitorFilters(configSubTheme.visitor_filters || configSubTheme.filtres_disponibles || []);
+                setModalVisitorHierarchy(configSubTheme.visitor_pivot_columns || []);
                 setModalVisitorDefaultFilters(configSubTheme.visitor_default_filters || {});
               }}>Recharger</button>
 
