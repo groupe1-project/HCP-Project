@@ -4,6 +4,7 @@ import base64
 import json
 import re
 import os
+import time
 import unicodedata
 import pandas as pd
 import string
@@ -12,6 +13,8 @@ from collections import defaultdict
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
+from django.db import connection
+from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework import viewsets, status
 from rest_framework.exceptions import PermissionDenied
@@ -84,10 +87,39 @@ SEMANTIC_VOCAB_RAW = {
     },
 }
 
-# Temporary hardcoded credentials for quick testing (to be removed later).
-HARDCODED_HF_TOKEN = "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"
-HARDCODED_GEMINI_API_KEY = "AlzaSyDInJemgjQXBqjnhAslFvTKYvkv0P6gEdY"
 
+class HealthCheckView(APIView):
+    """Operational health endpoint for probes and basic diagnostics."""
+
+    permission_classes = [AllowAny]
+
+    def _db_ready(self):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute('SELECT 1')
+                cursor.fetchone()
+            return True, None
+        except Exception as exc:
+            return False, str(exc)
+
+    def get(self, request):
+        db_ok, db_error = self._db_ready()
+        checks = {
+            'db': {'ok': db_ok, 'error': db_error},
+            'secret_key_configured': bool(getattr(settings, 'SECRET_KEY', '').strip()) and settings.SECRET_KEY != 'unsafe-dev-key-change-me',
+            'allowed_hosts_configured': bool(getattr(settings, 'ALLOWED_HOSTS', [])),
+            'debug': bool(getattr(settings, 'DEBUG', False)),
+        }
+
+        ready = bool(db_ok)
+        payload = {
+            'status': 'ok' if ready else 'degraded',
+            'ready': ready,
+            'service': 'hcp-backend',
+            'timestamp': timezone.now().isoformat(),
+            'checks': checks,
+        }
+        return Response(payload, status=status.HTTP_200_OK if ready else status.HTTP_503_SERVICE_UNAVAILABLE)
 
 def _normalize_column_name(value):
     return re.sub(r'[^a-z0-9]+', '', str(value or '').strip().lower())
@@ -168,15 +200,103 @@ def _fallback_map_rows(df, expected_columns):
     return mapped_rows
 
 
-def _run_gemini_mapping(df, expected_columns):
-    """Ask Gemini to map heterogeneous table columns to expected schema."""
-    api_key = os.getenv('GEMINI_API_KEY', '').strip() or HARDCODED_GEMINI_API_KEY
+def _read_int_env(name, default_value, min_value=None, max_value=None):
+    raw = os.getenv(name, '').strip()
+    try:
+        value = int(raw) if raw else int(default_value)
+    except Exception:
+        value = int(default_value)
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+def _read_float_env(name, default_value, min_value=None, max_value=None):
+    raw = os.getenv(name, '').strip()
+    try:
+        value = float(raw) if raw else float(default_value)
+    except Exception:
+        value = float(default_value)
+    if min_value is not None:
+        value = max(min_value, value)
+    if max_value is not None:
+        value = min(max_value, value)
+    return value
+
+
+def _read_bool_env(name, default_value=False):
+    raw = os.getenv(name)
+    if raw is None:
+        return bool(default_value)
+    return str(raw).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
+
+
+def _gemini_generate_text(prompt, purpose='generic'):
+    """Centralized Gemini call with runtime guards for production stability."""
+    if not _read_bool_env('AI_FEATURES_ENABLED', True):
+        raise RuntimeError('Fonctionnalites IA desactivees (AI_FEATURES_ENABLED=false)')
+    if not _read_bool_env('GEMINI_ENABLED', True):
+        raise RuntimeError('Gemini desactive (GEMINI_ENABLED=false)')
+
+    api_key = os.getenv('GEMINI_API_KEY', '').strip()
     model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
     if not api_key:
         raise RuntimeError('GEMINI_API_KEY manquante')
 
+    max_prompt_chars = _read_int_env('GEMINI_MAX_PROMPT_CHARS', 120000, min_value=2000, max_value=300000)
+    if len(str(prompt or '')) > max_prompt_chars:
+        raise RuntimeError(f'Prompt IA trop volumineux ({len(str(prompt or ""))} > {max_prompt_chars})')
+
+    timeout_seconds = _read_int_env('GEMINI_TIMEOUT_SECONDS', 20, min_value=5, max_value=180)
+    max_retries = _read_int_env('GEMINI_MAX_RETRIES', 2, min_value=0, max_value=5)
+    retry_backoff_seconds = _read_float_env('GEMINI_RETRY_BACKOFF_SECONDS', 0.75, min_value=0.0, max_value=10.0)
+
+    try:
+        import google.generativeai as genai
+    except Exception as exc:
+        raise RuntimeError('Le package google-generativeai n\'est pas installe') from exc
+
+    genai.configure(api_key=api_key)
+    model = genai.GenerativeModel(model_name)
+
+    last_error = None
+    for attempt in range(max_retries + 1):
+        try:
+            try:
+                response = model.generate_content(prompt, request_options={'timeout': timeout_seconds})
+            except TypeError:
+                # Backward compatibility with SDK variants lacking request_options.
+                response = model.generate_content(prompt)
+
+            text = _clean_text(getattr(response, 'text', '') or '')
+            if not text:
+                raise RuntimeError('Reponse IA vide')
+            return text
+        except Exception as exc:
+            last_error = exc
+            if attempt < max_retries:
+                logger.warning(
+                    'Echec appel Gemini (%s), tentative %s/%s: %s',
+                    purpose,
+                    attempt + 1,
+                    max_retries + 1,
+                    exc,
+                )
+                wait_seconds = retry_backoff_seconds * (attempt + 1)
+                if wait_seconds > 0:
+                    time.sleep(wait_seconds)
+                continue
+            break
+
+    raise RuntimeError(f'Echec appel Gemini ({purpose})') from last_error
+
+
+def _run_gemini_mapping(df, expected_columns):
+    """Ask Gemini to map heterogeneous table columns to expected schema."""
     # Optional HF login compatibility for workflows that depend on HF auth.
-    hf_token = os.getenv('HF_TOKEN', '').strip() or HARDCODED_HF_TOKEN
+    hf_token = os.getenv('HF_TOKEN', '').strip()
     if hf_token:
         try:
             from huggingface_hub import login as hf_login
@@ -184,11 +304,6 @@ def _run_gemini_mapping(df, expected_columns):
         except Exception:
             # Non-bloquant pour le flux Gemini
             pass
-
-    try:
-        import google.generativeai as genai
-    except Exception as exc:
-        raise RuntimeError('Le package google-generativeai n\'est pas installe') from exc
 
     sample_records = df.head(40).to_dict(orient='records')
     prompt = (
@@ -207,10 +322,8 @@ def _run_gemini_mapping(df, expected_columns):
         '- Ne pas inventer de colonnes hors schema cible.'
     )
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
-    response = model.generate_content(prompt)
-    parsed = _extract_json_object(getattr(response, 'text', '') or '')
+    response_text = _gemini_generate_text(prompt, purpose='column_mapping')
+    parsed = _extract_json_object(response_text)
     if not parsed or not isinstance(parsed, dict) or not isinstance(parsed.get('rows'), list):
         raise RuntimeError('Reponse IA non exploitable')
 
@@ -3234,16 +3347,6 @@ class AdminAssistantChatView(APIView):
         )
 
     def _try_ai_rewrite(self, user_message, fallback_text):
-        api_key = os.getenv('GEMINI_API_KEY', '').strip() or HARDCODED_GEMINI_API_KEY
-        model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
-        if not api_key:
-            raise RuntimeError('GEMINI_API_KEY manquante')
-
-        try:
-            import google.generativeai as genai
-        except Exception as exc:
-            raise RuntimeError('google-generativeai indisponible') from exc
-
         prompt = (
             "Tu es un assistant admin d'une plateforme statistique. "
             "Réécris la réponse de secours de manière claire et concise en français. "
@@ -3252,14 +3355,7 @@ class AdminAssistantChatView(APIView):
             f"Réponse de secours: {fallback_text}\n\n"
             "Retourne uniquement la réponse finale."
         )
-
-        genai.configure(api_key=api_key)
-        model = genai.GenerativeModel(model_name)
-        response = model.generate_content(prompt)
-        text = _clean_text(getattr(response, 'text', '') or '')
-        if not text:
-            raise RuntimeError('Réponse IA vide')
-        return text
+        return _gemini_generate_text(prompt, purpose='admin_assistant_rewrite')
 
     def post(self, request):
         self._require_admin(request)

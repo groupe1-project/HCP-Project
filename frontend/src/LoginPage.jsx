@@ -1,6 +1,8 @@
 import React, { useState } from 'react';
 import axios from 'axios';
 
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+
 function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
@@ -20,7 +22,7 @@ function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/auth/login/', {
+      const res = await axios.post(`${API_BASE}/auth/login/`, {
         email,
         password,
       });
@@ -51,21 +53,21 @@ function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
         axios.defaults.headers.common['Authorization'] = `Token ${res.data.token}`;
 
         // Remember which auth context we used
-        try { localStorage.setItem('auth_context', loginMode); } catch (e) {}
+        try { localStorage.setItem('auth_context', loginMode); } catch { /* ignore storage errors */ }
 
         // If this is a saisisseur login flow, redirect to the saisisseur path
         if (loginMode === 'saisisseur' && res.data.role === 'SAISISSEUR') {
           try {
             // persist active menu for saisisseur
             localStorage.setItem('activeMenu', 'Saisisseur');
-          } catch (e) {}
+          } catch { /* ignore storage errors */ }
           window.location.href = `/${res.data.username}`;
           return;
         }
 
           // If this is an admin login flow, keep the user on /admin and persist menu
           if (loginMode === 'admin' && res.data.role === 'ADMIN') {
-            try { localStorage.setItem('activeMenu', 'Admin'); } catch (e) {}
+            try { localStorage.setItem('activeMenu', 'Admin'); } catch { /* ignore storage errors */ }
             window.location.href = '/admin';
             return;
           }
@@ -73,7 +75,7 @@ function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
           onLoginSuccess();
       }
     } catch (err) {
-      const errorMsg = err.response?.data?.error || 'Erreur de connexion';
+      const errorMsg = err.response?.data?.error || err.response?.data?.detail || err.response?.data?.message || 'Erreur de connexion';
       setError(errorMsg);
     } finally {
       setLoading(false);
@@ -87,7 +89,7 @@ function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
     setLoading(true);
 
     try {
-      const res = await axios.post('http://127.0.0.1:8000/api/auth/request-reset/', {
+      await axios.post(`${API_BASE}/auth/request-reset/`, {
         email: resetEmail,
       });
       setResetMessage('Un code de réinitialisation a été généré. Veuillez contacter l\'administrateur système.');
@@ -115,7 +117,7 @@ function LoginPage({ onLoginSuccess, loginMode = 'admin' }) {
     setLoading(true);
 
     try {
-      await axios.post('http://127.0.0.1:8000/api/auth/reset-password/', {
+      await axios.post(`${API_BASE}/auth/reset-password/`, {
         email: resetEmail,
         token: resetToken,
         new_password: newPassword,

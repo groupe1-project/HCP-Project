@@ -44,6 +44,13 @@
 - [ ] Variables d’environnement sécurisées (clés API, secrets)
 - [ ] Procédure de rollback documentée
 - [ ] Sauvegarde régulière de la base de données
+- [ ] Workflow CI actif (`.github/workflows/ci.yml`) avec tests backend + lint/build frontend
+- [ ] Workflow CD staging configuré (`.github/workflows/deploy-staging.yml`) + secrets staging
+- [ ] Workflow CD production configuré (`.github/workflows/deploy-production.yml`) + secrets production
+- [ ] Smoke test post-deploiement valide (`/health/` retourne `ready=true`)
+- [ ] Notification deploiement branchee (success/failure) sur canal ops
+- [ ] Retention des backups de deploiement active (conservation des 10 derniers)
+- [ ] Smoke test auth post-deploiement active avec compte de service dedie
 
 ## 9. Monitoring & Support
 - [ ] Système de monitoring (uptime, erreurs, logs)

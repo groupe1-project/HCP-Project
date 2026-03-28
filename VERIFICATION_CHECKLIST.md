@@ -203,6 +203,7 @@ Frontend: Boîte de Réception → Bouton "🔑 Mot de passe"
 - [ ] **Validation**: Ajouter côté serveur pour validations côté client
 - [ ] **Pagination**: Ajouter pagination pour longs tableaux
 - [ ] **Filtres**: Ajouter filtres/recherche dans tableaux
+- [ ] **Backup/Restore PostgreSQL**: Exécuter le runbook `PRODUCTION_RUNBOOK_POSTGRES.md` sur staging
 
 ## 📝 Notes d'Implémentation
 
@@ -228,6 +229,9 @@ Frontend: Boîte de Réception → Bouton "🔑 Mot de passe"
    - [ ] Ajouter vérification permission ADMIN
    - [ ] Tester tous les workflows
    - [ ] Ajouter logs d'audit
+  - [ ] Exécuter backup PostgreSQL: `powershell -ExecutionPolicy Bypass -File .\scripts\postgres_backup.ps1 -BackupDir .\backups -IncludeGlobals`
+  - [ ] Exécuter restore dry-run: `powershell -ExecutionPolicy Bypass -File .\scripts\postgres_restore.ps1 -BackupFile .\backups\<fichier>.dump -TargetDatabase hcp_restore_test -DryRun`
+  - [ ] Valider endpoint santé: `GET /health/` retourne `ready=true`
 
 2. **Après Mise en Production**
    - [ ] Monitorer usage

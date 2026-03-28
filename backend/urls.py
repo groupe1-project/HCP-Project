@@ -5,10 +5,10 @@ from core.views import (
     ThemeViewSet, CategorieViewSet, SousThemeViewSet,
     UserThemeAssignmentViewSet, UserRequestViewSet,
     PublicThemeViewSet, PublicSousThemeViewSet, InfoBannerView, SiteContentView,
-    AdminAssistantChatView,
+    AdminAssistantChatView, HealthCheckView,
 )
 from core.user_views import UserViewSet
-from core.auth_views import login, logout, request_reset, reset_password
+from core.auth_views import login, logout, request_reset, reset_password, me
 
 router = DefaultRouter()
 router.register(r'themes', ThemeViewSet)
@@ -22,9 +22,11 @@ router.register(r'user-requests', UserRequestViewSet)
 
 urlpatterns = [
     path('admin/', admin.site.urls),
+    path('health/', HealthCheckView.as_view(), name='health'),
     path('api/', include(router.urls)),
     path('api/auth/login/', login, name='login'),
     path('api/auth/logout/', logout, name='logout'),
+    path('api/auth/me/', me, name='auth_me'),
     path('api/auth/request-reset/', request_reset, name='request_reset'),
     path('api/auth/reset-password/', reset_password, name='reset_password'),
     path('api/info-banner/', InfoBannerView.as_view(), name='info-banner'),

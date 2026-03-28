@@ -1,14 +1,14 @@
-﻿import React, { useState, useEffect, useRef } from 'react';
+﻿import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
-import * as XLSX from 'xlsx-js-style';
 import LoginPage from './LoginPage';
-import AdministratorsPage from './AdministratorsPage';
-import ChartModal from './components/ChartModal';
 import { DATA_TRANSLATIONS_FR_AR } from './i18n';
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+const AdministratorsPage = lazy(() => import('./AdministratorsPage'));
+const ChartModal = lazy(() => import('./components/ChartModal'));
+
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 const INFO_BANNER_CACHE_KEY = 'info_banner_cache';
 const DEFAULT_INFO_BANNER_ITEMS = [{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', text_en: '', url: '' }];
 
@@ -163,15 +163,17 @@ function App({ forceVisitor = false }) {
       if (canUseRouteLanguage) {
         localStorage.setItem('app_lang', i18n.language);
       }
-    } catch {}
-  }, [i18n.language, forceVisitor]);
+    } catch {
+      // Ignore localStorage failures in restricted browsing contexts.
+    }
+  }, [i18n, i18n.language, forceVisitor]);
 
   // --- AUTHENTIFICATION (toujours appelé en premier) ---
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [authLoading, setAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState('');
   const [authContext, setAuthContext] = useState(() => {
-    try { return localStorage.getItem('auth_context') || ''; } catch (e) { return ''; }
+    try { return localStorage.getItem('auth_context') || ''; } catch { return ''; }
   });
 
   // --- ÉTATS (toujours déclarés, même s'ils ne sont pas utilisés si non authentifié) ---
@@ -221,13 +223,13 @@ function App({ forceVisitor = false }) {
   const [configSubTheme, setConfigSubTheme] = useState(null);
   const [modalVisitorCols, setModalVisitorCols] = useState([]);
   const [modalVisitorFilters, setModalVisitorFilters] = useState([]);
-  const [modalVisitorColsText, setModalVisitorColsText] = useState('');
-  const [modalVisitorFiltersText, setModalVisitorFiltersText] = useState('');
+  const [_modalVisitorColsText, setModalVisitorColsText] = useState('');
+  const [_modalVisitorFiltersText, setModalVisitorFiltersText] = useState('');
   const [modalVisitorHierarchy, setModalVisitorHierarchy] = useState([]);
-  const [modalVisitorHierarchyText, setModalVisitorHierarchyText] = useState('');
+  const [_modalVisitorHierarchyText, setModalVisitorHierarchyText] = useState('');
   const [modalVisitorDefaultView, setModalVisitorDefaultView] = useState('horizontal');
   const [modalVisitorDefaultFilters, setModalVisitorDefaultFilters] = useState({});
-  const [publicThemes, setPublicThemes] = useState([]);
+  const [_publicThemes, setPublicThemes] = useState([]);
   const [showEditTable, setShowEditTable] = useState(false);
   const [editTableRows, setEditTableRows] = useState([]);
   const [editTableColumns, setEditTableColumns] = useState([]);
@@ -279,7 +281,7 @@ function App({ forceVisitor = false }) {
   const [openCategorieMenu, setOpenCategorieMenu] = useState(null);
   const [categorieMenuPos, setCategorieMenuPos] = useState({ left: 0, top: 0 });
   const [categoryNames, setCategoryNames] = useState([{ nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }]);
-  const [expandedCategories, setExpandedCategories] = useState({});
+  const [_expandedCategories, setExpandedCategories] = useState({});
   const [selectedVisitorCategoryId, setSelectedVisitorCategoryId] = useState('all');
   const [infoBannerText, setInfoBannerText] = useState(() => readInfoBannerCache()[0]?.text || DEFAULT_INFO_BANNER_ITEMS[0].text);
   const [infoBannerItems, setInfoBannerItems] = useState(() => readInfoBannerCache());
@@ -363,7 +365,7 @@ function App({ forceVisitor = false }) {
   const normalizeDataToken = (value) => String(value ?? '')
     .normalize('NFD')
     .replace(/[\u0300-\u036f]/g, '')
-    .replace(/[_\-]+/g, ' ')
+    .replace(/[_-]+/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
@@ -434,11 +436,11 @@ function App({ forceVisitor = false }) {
         valueColumnCode,
         payload,
       };
-    } catch (e) {
+    } catch {
       // Ignore malformed payload and keep static dictionary fallback.
     }
     return { frToAr, arToFr, columnCodeByToken, columnLabelsByCode, valueLabelsByColumn, globalValueLabels, canonicalColumns, valueColumnCode, payload: null };
-  }, [selectedSubTheme?.id, selectedSubTheme?.data_json_i18n]);
+  }, [selectedSubTheme?.data_json_i18n]);
 
   const getCanonicalColumnCode = (columnIdentifier) => {
     const normalized = normalizeDataToken(columnIdentifier);
@@ -454,15 +456,186 @@ function App({ forceVisitor = false }) {
     return mapping[normalizedValue]?.code || valueIdentifier;
   };
 
+  const EN_COLUMN_FALLBACK_MAP = {
+    annee: 'Year',
+    annees: 'Years',
+    year: 'Year',
+    years: 'Years',
+    date: 'Date',
+    periode: 'Period',
+    period: 'Period',
+    sexe: 'Gender',
+    sex: 'Gender',
+    genre: 'Gender',
+    gender: 'Gender',
+    'etat matrimonial': 'Marital status',
+    etatmatrimonial: 'Marital status',
+    'marital status': 'Marital status',
+    province: 'Province',
+    prefecture: 'Prefecture',
+    region: 'Region',
+    valeur: 'Value',
+    value: 'Value',
+    total: 'Total',
+  };
+
+  const EN_VALUE_FALLBACK_MAP = {
+    masculin: 'Male',
+    male: 'Male',
+    feminin: 'Female',
+    féminin: 'Female',
+    female: 'Female',
+    hommes: 'Men',
+    homme: 'Man',
+    femmes: 'Women',
+    femme: 'Woman',
+    celibataire: 'Single',
+    célibataire: 'Single',
+    celibataires: 'Singles',
+    célibataires: 'Singles',
+    marie: 'Married',
+    marié: 'Married',
+    maries: 'Married',
+    mariés: 'Married',
+    divorce: 'Divorced',
+    divorcee: 'Divorced',
+    divorcé: 'Divorced',
+    divorcees: 'Divorced',
+    divorcés: 'Divorced',
+    veuf: 'Widower',
+    veuve: 'Widow',
+    veufs: 'Widowers',
+    veuves: 'Widows',
+    total: 'Total',
+    ensemble: 'Total',
+    tous: 'All',
+    toutes: 'All',
+  };
+
+  const EN_LABEL_TOKEN_MAP = {
+    annee: 'Year',
+    annees: 'Years',
+    periode: 'Period',
+    periodes: 'Periods',
+    sexe: 'Gender',
+    genre: 'Gender',
+    etat: 'Status',
+    matrimonial: 'Marital',
+    province: 'Province',
+    prefecture: 'Prefecture',
+    region: 'Region',
+    categorie: 'Category',
+    categories: 'Categories',
+    indicateur: 'Indicator',
+    indicateurs: 'Indicators',
+    valeur: 'Value',
+    valeurs: 'Values',
+    total: 'Total',
+    milieu: 'Area',
+    urbain: 'Urban',
+    urbaine: 'Urban',
+    rural: 'Rural',
+    rurale: 'Rural',
+  };
+
+  const EN_VALUE_TOKEN_MAP = {
+    masculin: 'Male',
+    feminin: 'Female',
+    celibataire: 'Single',
+    celibataires: 'Singles',
+    marie: 'Married',
+    maries: 'Married',
+    divorce: 'Divorced',
+    divorcee: 'Divorced',
+    divorcees: 'Divorced',
+    veuf: 'Widower',
+    veuve: 'Widow',
+    veufs: 'Widowers',
+    veuves: 'Widows',
+    total: 'Total',
+    ensemble: 'Total',
+    tous: 'All',
+    toutes: 'All',
+  };
+
+  const toTitleCase = (text) => String(text || '')
+    .split(' ')
+    .map((part) => (part ? part.charAt(0).toUpperCase() + part.slice(1).toLowerCase() : part))
+    .join(' ');
+
+  const translateByEnglishTokens = (rawText, tokenMap) => {
+    const cleaned = String(rawText || '')
+      .replace(/[_-]+/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    if (!cleaned) return cleaned;
+    const translated = cleaned
+      .split(' ')
+      .map((token) => {
+        const mapped = tokenMap[normalizeDataToken(token)];
+        return mapped || token;
+      })
+      .join(' ')
+      .replace(/\s+/g, ' ')
+      .trim();
+    return translated;
+  };
+
+  const toEnglishValueFallback = (rawValue) => {
+    const raw = String(rawValue || '').trim();
+    if (!raw) return raw;
+    const normalized = normalizeDataToken(raw);
+    if (EN_VALUE_FALLBACK_MAP[normalized]) return EN_VALUE_FALLBACK_MAP[normalized];
+
+    if (/(masculin|male|ذكر|مذكر|رجال)/i.test(normalized)) return 'Male';
+    if (/(feminin|féminin|female|انثى|أنثى|نساء)/i.test(normalized)) return 'Female';
+    if (/(celibataire|célibataire|single|أعزب|عزاب)/i.test(normalized)) return 'Single';
+    if (/(marie|marié|married|متزوج)/i.test(normalized)) return 'Married';
+    if (/(divorce|divorcé|divorced|مطلق)/i.test(normalized)) return 'Divorced';
+    if (/(veuf|veuve|widow|widower|أرمل)/i.test(normalized)) return 'Widow(er)';
+
+    const tokenBased = translateByEnglishTokens(raw, EN_VALUE_TOKEN_MAP);
+    if (normalizeDataToken(tokenBased) !== normalized) return toTitleCase(tokenBased);
+
+    return raw;
+  };
+
+  const toEnglishLabelFallback = (rawLabel) => {
+    const raw = String(rawLabel || '').trim();
+    if (!raw) return raw;
+    const normalized = normalizeDataToken(raw);
+    if (EN_COLUMN_FALLBACK_MAP[normalized]) return EN_COLUMN_FALLBACK_MAP[normalized];
+
+    if (/(annee|année|annees|années|year|years|سنة|سنوات|الفترة|period)/i.test(normalized)) return 'Year';
+    if (/(sexe|sex|genre|gender|الجنس|النوع)/i.test(normalized)) return 'Gender';
+    if (/(etat matrimonial|état matrimonial|marital|الحالة الاجتماعية)/i.test(normalized)) return 'Marital status';
+    if (/(province|prefecture|préfecture|إقليم|عمالة)/i.test(normalized)) return 'Province';
+    if (/(region|région|جهة)/i.test(normalized)) return 'Region';
+
+    const tokenBased = translateByEnglishTokens(raw, EN_LABEL_TOKEN_MAP);
+    if (normalizeDataToken(tokenBased) !== normalized) return toTitleCase(tokenBased);
+
+    return toTitleCase(
+      raw
+        .replace(/[_-]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    );
+  };
+
   const getLocalizedColumnLabel = (columnIdentifier, langOverride = null) => {
     const fallback = (columnIdentifier === null || columnIdentifier === undefined) ? '' : String(columnIdentifier);
     const targetLang = langOverride || activeDataLanguage;
     const columnCode = getCanonicalColumnCode(columnIdentifier);
     if (!columnCode) {
       if (targetLang === 'ar' && DATA_TRANSLATIONS_FR_AR[fallback] !== undefined) return DATA_TRANSLATIONS_FR_AR[fallback];
+      if (targetLang === 'en') return toEnglishLabelFallback(fallback);
       return fallback;
     }
     const labels = bilingualLabelLookup.columnLabelsByCode[columnCode] || {};
+    if (targetLang === 'en') {
+      return labels.en || toEnglishLabelFallback(labels.fr || fallback);
+    }
     return labels[targetLang] || labels.fr || fallback;
   };
 
@@ -475,6 +648,9 @@ function App({ forceVisitor = false }) {
     const columnMapping = bilingualLabelLookup.valueLabelsByColumn[columnCode] || {};
     const entry = columnMapping[normalizedValue] || bilingualLabelLookup.globalValueLabels[normalizedValue];
     if (entry) return entry[targetLang] || entry.fr || rawValue;
+    if (targetLang === 'en') {
+      return toEnglishValueFallback(rawValue);
+    }
     if (targetLang === 'ar') {
       if (bilingualLabelLookup.frToAr[rawValue] !== undefined) return bilingualLabelLookup.frToAr[rawValue];
       if (DATA_TRANSLATIONS_FR_AR[rawValue] !== undefined) return DATA_TRANSLATIONS_FR_AR[rawValue];
@@ -501,7 +677,7 @@ function App({ forceVisitor = false }) {
     if (rawVal === null || rawVal === undefined) return {};
     if (typeof rawVal === 'object') return rawVal || {};
     if (typeof rawVal === 'string') {
-      try { return JSON.parse(rawVal); } catch (_) {}
+      try { return JSON.parse(rawVal); } catch { /* ignore malformed JSON */ }
       const out = {};
       rawVal.split(',').map(s => s.trim()).filter(Boolean).forEach((part) => {
         const sep = part.includes('=') ? '=' : (part.includes(':') ? ':' : null);
@@ -566,6 +742,9 @@ function App({ forceVisitor = false }) {
     if (valueEntry) {
       return valueEntry[activeDataLanguage] || valueEntry.fr || s;
     }
+    if (activeDataLanguage === 'en') {
+      return toEnglishValueFallback(s);
+    }
     if (activeDataLanguage === 'ar') {
       if (bilingualLabelLookup.frToAr[s] !== undefined) return bilingualLabelLookup.frToAr[s];
       return DATA_TRANSLATIONS_FR_AR[s] !== undefined ? DATA_TRANSLATIONS_FR_AR[s] : s;
@@ -576,7 +755,7 @@ function App({ forceVisitor = false }) {
   const parseAssignmentNotes = (rawNotes) => {
     try {
       return rawNotes ? JSON.parse(rawNotes) : {};
-    } catch (e) {
+    } catch {
       return {};
     }
   };
@@ -746,7 +925,9 @@ function App({ forceVisitor = false }) {
       if (sanitized.length > 0) {
         localStorage.setItem(INFO_BANNER_CACHE_KEY, JSON.stringify(sanitized));
       }
-    } catch {}
+    } catch {
+      // Ignore local cache write failures.
+    }
   };
 
   const getSaisisseurAssignmentForSubTheme = (subThemeId, assignments = saisisseurAssignments) => {
@@ -881,7 +1062,7 @@ function App({ forceVisitor = false }) {
       // Merge notes with existing
       let mergedNotes = {};
       if (existing && existing.notes) {
-        try { mergedNotes = existing.notes ? JSON.parse(existing.notes) : {}; } catch (e) { mergedNotes = {}; }
+        try { mergedNotes = existing.notes ? JSON.parse(existing.notes) : {}; } catch { mergedNotes = {}; }
       }
       mergedNotes = { ...mergedNotes, ...partialNotes };
 
@@ -957,6 +1138,7 @@ function App({ forceVisitor = false }) {
     if (formStep === 4 && selectedSubTheme) {
       setActiveDataTab('tableau');
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [formStep, selectedSubTheme?.id]);
 
   useEffect(() => {
@@ -983,6 +1165,7 @@ function App({ forceVisitor = false }) {
     };
 
     fetchInfoBanner();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
@@ -1019,6 +1202,7 @@ function App({ forceVisitor = false }) {
     };
 
     fetchSiteContent();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Keep axios Authorization header in sync with route-resolved context
@@ -1077,7 +1261,7 @@ function App({ forceVisitor = false }) {
           return;
         }
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
   }, [activeMenu, isSaisisseurRoute, pathHasAdmin]);
@@ -1089,33 +1273,34 @@ function App({ forceVisitor = false }) {
       const visitorAllowedMenus = ['Themes', 'Indicateurs', 'APropos', 'Contact', 'LiensUtiles'];
       if (!visitorAllowedMenus.includes(activeMenu)) {
         setActiveMenu('Themes');
-        try { localStorage.setItem('activeMenu', 'Themes'); } catch (e) {}
+        try { localStorage.setItem('activeMenu', 'Themes'); } catch { /* ignore storage errors */ }
         return;
       }
-      try { localStorage.setItem('activeMenu', activeMenu); } catch (e) {}
+      try { localStorage.setItem('activeMenu', activeMenu); } catch { /* ignore storage errors */ }
       return;
     }
 
     // If the user is a saisisseur, ensure they don't land on Admin
     if (isSaisisseur && activeMenu === 'Admin') {
       setActiveMenu('Saisisseur');
-      try { localStorage.setItem('activeMenu', 'Saisisseur'); } catch (e) {}
+      try { localStorage.setItem('activeMenu', 'Saisisseur'); } catch { /* ignore storage errors */ }
       return;
     }
 
     // If not a saisisseur but stored menu is 'Saisisseur', fall back to Themes
     if (!isSaisisseur && activeMenu === 'Saisisseur') {
       setActiveMenu('Themes');
-      try { localStorage.setItem('activeMenu', 'Themes'); } catch (e) {}
+      try { localStorage.setItem('activeMenu', 'Themes'); } catch { /* ignore storage errors */ }
       return;
     }
 
     // Persist any change to activeMenu
-    try { localStorage.setItem('activeMenu', activeMenu); } catch (e) {}
+    try { localStorage.setItem('activeMenu', activeMenu); } catch { /* ignore storage errors */ }
   }, [isVisitor, isSaisisseur, activeMenu]);
 
   useEffect(() => { 
     if (isAuthenticated || isVisitor) fetchThemes(); 
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isAuthenticated]);
 
   // For saisisseur: fetch assignments and preload assigned sous-thèmes
@@ -1154,6 +1339,7 @@ function App({ forceVisitor = false }) {
 
     const preRows = assignedSubThemes.map(s => ({ sousTheme: '', unite: '', definition: '', indicateur: s.nom || '', source: '', periodicite: '', file: null }));
     setRows(preRows);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur, formStep, assignedSubThemes]);
 
   // Recharger les thèmes quand on revient sur l'onglet Themes
@@ -1161,6 +1347,7 @@ function App({ forceVisitor = false }) {
     if ((isAuthenticated || isVisitor) && activeMenu === 'Themes') {
       fetchThemes();
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeMenu, isAuthenticated]);
 
   useEffect(() => {
@@ -1191,6 +1378,7 @@ function App({ forceVisitor = false }) {
     const draftedSubTheme = buildDraftSubTheme(selectedSubTheme, assignment);
     const draftedRows = getTableRows(draftedSubTheme) || [];
     setSelectedSubTheme((prev) => (prev ? { ...draftedSubTheme, data: draftedRows } : prev));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur, saisisseurAssignments]);
 
   // Écoute globale pour ouvrir la config visiteur depuis le sous-thème
@@ -1240,7 +1428,7 @@ function App({ forceVisitor = false }) {
                 if (vc.visitor_default_view) vcDefaultView = vc.visitor_default_view === 'vertical' ? 'vertical' : 'horizontal';
                 if (vc.visitor_default_filters) vcDefaultFilters = localizeVisitorDefaults(vc.visitor_default_filters, 'fr');
               }
-            } catch (_) {}
+            } catch { /* ignore local parse errors */ }
           }
         }
 
@@ -1261,6 +1449,7 @@ function App({ forceVisitor = false }) {
 
     window.addEventListener('openVisitorConfig', handler);
     return () => window.removeEventListener('openVisitorConfig', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themes, isSaisisseur, saisisseurAssignments]);
 
   useEffect(() => {
@@ -1285,6 +1474,7 @@ function App({ forceVisitor = false }) {
     setOpenFilter(null);
     setShowAll(false);
     setVisitorTableView((selectedSubTheme?.visitor_default_view === 'vertical') ? 'vertical' : 'horizontal');
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSubTheme?.id, isVisitor]);
 
   // Populate chartVisitorFilters with defaults from each chart's visible_filters
@@ -1338,6 +1528,7 @@ function App({ forceVisitor = false }) {
     } catch (err) {
       console.error('Error applying subtheme visitor default filters to charts', err);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSubTheme, isVisitor, savedCharts]);
 
   // Apply sub-theme-level visitor default filters to table dynamic filters (so the table is filtered for visitors)
@@ -1403,6 +1594,7 @@ function App({ forceVisitor = false }) {
     } catch (err) {
       console.error('Error applying visitor default filters to table', err);
     }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSubTheme, isVisitor]);
 
   // Keep chart-level visitor filters initialized from saved charts.
@@ -1443,7 +1635,7 @@ function App({ forceVisitor = false }) {
             if (Array.isArray(p)) info.dataJsonRows = p.length;
             else if (p && Array.isArray(p.rows)) info.dataJsonRows = p.rows.length;
           }
-        } catch (__) { /* ignore parse errors */ }
+        } catch { /* ignore parse errors */ }
         console.debug('getTableRows called:', info);
       }
     } catch (e) {
@@ -1466,14 +1658,14 @@ function App({ forceVisitor = false }) {
         const parsed = JSON.parse(dj);
         if (Array.isArray(parsed)) return parsed;
         if (parsed && Array.isArray(parsed.rows)) return parsed.rows;
-      } catch (e) {
+      } catch {
         // not JSON — ignore
       }
     }
     // Last resort: if sub.data is object, try to get values
     if (sub.data && typeof sub.data === 'object') {
       // If it's an object-of-arrays (columns -> arrays), convert to array of row objects
-      const colEntries = Object.entries(sub.data).filter(([k, v]) => Array.isArray(v));
+      const colEntries = Object.entries(sub.data).filter(([, v]) => Array.isArray(v));
       if (colEntries.length > 0) {
         const maxLen = Math.max(...colEntries.map(([, v]) => v.length));
         const rows = Array.from({ length: maxLen }, (_, i) => {
@@ -1499,7 +1691,7 @@ function App({ forceVisitor = false }) {
           if (val && Array.isArray(val.rows)) return val.rows;
           // sometimes sheet -> { data: { columns... } }
           if (val && val.data && typeof val.data === 'object') {
-            const entries = Object.entries(val.data).filter(([k, v]) => Array.isArray(v));
+            const entries = Object.entries(val.data).filter(([, v]) => Array.isArray(v));
             if (entries.length > 0) {
               const maxLen = Math.max(...entries.map(([, v]) => v.length));
               return Array.from({ length: maxLen }, (_, i) => {
@@ -1511,7 +1703,7 @@ function App({ forceVisitor = false }) {
           }
         }
       }
-    } catch (e) {
+    } catch {
       // ignore
     }
     return [];
@@ -1523,7 +1715,7 @@ function App({ forceVisitor = false }) {
       const draftedSub = buildDraftSubTheme(sub);
       const rows = getTableRows(draftedSub) || [];
       setSelectedSubTheme({ ...draftedSub, data: rows });
-    } catch (e) {
+    } catch {
       setSelectedSubTheme(buildDraftSubTheme(sub));
     }
   };
@@ -1565,17 +1757,19 @@ function App({ forceVisitor = false }) {
       if (authContext === 'admin') setUserRole(localStorage.getItem('user_role_admin') || '');
       else if (authContext === 'saisisseur') setUserRole(localStorage.getItem('user_role_saisisseur') || '');
       else setUserRole(localStorage.getItem('user_role') || '');
-    } catch (e) { setUserRole(localStorage.getItem('user_role') || ''); }
+    } catch { setUserRole(localStorage.getItem('user_role') || ''); }
     // refresh authContext state
-    try { setAuthContext(localStorage.getItem('auth_context') || ''); } catch (e) { setAuthContext(''); }
+    try { setAuthContext(localStorage.getItem('auth_context') || ''); } catch { setAuthContext(''); }
     // if current path is /admin and user is admin, ensure active menu is Admin
     try {
       const p = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
       if (p.startsWith('/admin') && (localStorage.getItem('user_role_admin') === 'ADMIN' || localStorage.getItem('user_role') === 'ADMIN')) {
         setActiveMenu('Admin');
-        try { localStorage.setItem('activeMenu', 'Admin'); } catch (e) {}
+        try { localStorage.setItem('activeMenu', 'Admin'); } catch { /* ignore storage errors */ }
       }
-    } catch (e) {}
+    } catch {
+      // Ignore route-sync storage errors.
+    }
   };
 
   const handleLogout = () => {
@@ -1595,7 +1789,7 @@ function App({ forceVisitor = false }) {
     localStorage.removeItem('username_saisisseur');
     localStorage.removeItem('user_email_saisisseur');
     localStorage.removeItem('user_role_saisisseur');
-    try { localStorage.removeItem('activeMenu'); localStorage.removeItem('auth_context'); } catch (e) {}
+    try { localStorage.removeItem('activeMenu'); localStorage.removeItem('auth_context'); } catch { /* ignore storage errors */ }
     setAuthContext('');
     delete axios.defaults.headers.common['Authorization'];
     setIsAuthenticated(false);
@@ -1609,7 +1803,7 @@ function App({ forceVisitor = false }) {
     else {
       try {
         ctx = localStorage.getItem('auth_context') || '';
-      } catch (e) {
+      } catch {
         ctx = '';
       }
     }
@@ -1839,7 +2033,7 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const handleResetChartExclusions = (chartId) => {
+  const _handleResetChartExclusions = (chartId) => {
     setExcludedRowIndices(prev => ({
       ...prev,
       [chartId]: []
@@ -1999,7 +2193,7 @@ function App({ forceVisitor = false }) {
         // Si pas de catégorie, hériter la visibilité du thème
         payload.is_visible = theme?.is_visible ?? true;
       }
-      const res = await axios.post(`${API_BASE}/themes/${themeId}/sous_themes/`, payload);
+      await axios.post(`${API_BASE}/themes/${themeId}/sous_themes/`, payload);
       alert('Sous-thème ajouté');
       const themesRes = await axios.get(themesApiBase);
       setThemes(themesRes.data);
@@ -2317,6 +2511,7 @@ function App({ forceVisitor = false }) {
   const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
 
   const readExcelRows = async (excelFile) => {
+    const XLSX = await import('xlsx-js-style');
     const buffer = await excelFile.arrayBuffer();
     const wb = XLSX.read(buffer, { type: 'array' });
     const sheetName = wb.SheetNames?.[0];
@@ -2656,7 +2851,8 @@ function App({ forceVisitor = false }) {
     downloadBlob(txt, 'text/plain;charset=utf-8;', fileName);
   };
 
-  const exportTableXLSX = () => {
+  const exportTableXLSX = async () => {
+    const XLSX = await import('xlsx-js-style');
     const snapshot = getExportSnapshot();
     if (!snapshot || !snapshot.headers || snapshot.headers.length === 0) return alert(t('no_table_to_export'));
 
@@ -2933,7 +3129,7 @@ function App({ forceVisitor = false }) {
           else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
           else token = localStorage.getItem('auth_token');
         }
-      } catch (e) { token = localStorage.getItem('auth_token'); }
+      } catch { token = localStorage.getItem('auth_token'); }
 
       const res = await axios.get(url, token ? { headers: { Authorization: `Token ${token}` } } : {});
       setThemes(res.data);
@@ -3125,6 +3321,7 @@ function App({ forceVisitor = false }) {
       return localizeConfiguredColumns(fallbackColumns);
     }
     return fallbackColumns;
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSubTheme, isVisitor, activeDataLanguage, i18n.language]);
 
   const filtersForRender = React.useMemo(() => {
@@ -3137,6 +3334,7 @@ function App({ forceVisitor = false }) {
       return localizeConfiguredColumns(selectedSubTheme.filtres_disponibles || []);
     }
     return selectedSubTheme.filtres_disponibles || [];
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSubTheme, isVisitor, activeDataLanguage, i18n.language]);
 
   const visitorMatrix = React.useMemo(() => {
@@ -3226,6 +3424,7 @@ function App({ forceVisitor = false }) {
       periods: sortedPeriods,
       rows: rowsOut
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisitor, selectedSubTheme, visibleColumnsForRender, filteredData]);
 
   const visitorVerticalMatrix = React.useMemo(() => {
@@ -3351,6 +3550,7 @@ function App({ forceVisitor = false }) {
       rows: rowsOut,
       valueCol
     };
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isVisitor, selectedSubTheme, visitorMatrix, visibleColumnsForRender, filteredData]);
 
   const canVisitorVerticalView = Boolean(isVisitor && visitorVerticalMatrix?.canVertical);
@@ -3939,7 +4139,6 @@ function App({ forceVisitor = false }) {
   };
 
   const maxId = themes.length > 0 ? Math.max(...themes.map(t => t.id)) : 0;
-  const isAdminView = String(activeMenu || '').toLowerCase().includes('admin');
   // Tant que l'interface visiteurs n'est pas développée, l'admin voit tout même dans l'onglet "Thèmes"
   const visibleThemes = isAuthenticated ? themes : themes.filter(t => !t.archived);
   const findSubThemeInTheme = (theme, subThemeId) => {
@@ -4038,7 +4237,9 @@ function App({ forceVisitor = false }) {
         window.location.replace('/saisisseur');
         return null;
       }
-    } catch (e) {}
+    } catch {
+      // Ignore selection bootstrap errors.
+    }
 
     return <LoginPage onLoginSuccess={handleLogin} loginMode={loginMode} />;
   }
@@ -4335,7 +4536,7 @@ function App({ forceVisitor = false }) {
                 {indicatorsSubThemes.filter(st => 
                   getSubThemeDisplayName(st).toLowerCase().includes(searchIndicateur.toLowerCase()) ||
                   String((isVisitor && i18n.language === 'ar') ? (st.theme_titre_ar || st.theme_titre || '') : (st.theme_titre || '')).toLowerCase().includes(searchIndicateur.toLowerCase())
-                ).map((st, i) => (
+                ).map((st) => (
                   <div 
                     key={st.id} 
                     onClick={async () => {
@@ -4372,7 +4573,9 @@ function App({ forceVisitor = false }) {
 
           {/* PAGE ADMINISTRATEURS / SAISISSEUR */}
           {!isVisitor && (activeMenu === 'Admin' || activeMenu === 'Saisisseur') && (
-            <AdministratorsPage isSaisisseur={isSaisisseur} />
+            <Suspense fallback={<div className="p-4 text-sm text-gray-600">Chargement de l'espace administrateur...</div>}>
+              <AdministratorsPage isSaisisseur={isSaisisseur} />
+            </Suspense>
           )}
 
           {activeMenu === 'APropos' && (
@@ -5012,7 +5215,7 @@ function App({ forceVisitor = false }) {
                         Supprimer l'image du thème
                       </button>
                     )}
-                    <button onClick={(e) => { e.stopPropagation(); const t = themes.find(x => x.id === openActionMenu); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalValueAr(''); setActionModalValueEn(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
+                    <button onClick={(e) => { e.stopPropagation(); setActionModalType('add_subtheme'); setActionModalValue(''); setActionModalValueAr(''); setActionModalValueEn(''); setActionModalThemeId(openActionMenu); setActionModalCategorieId(null); setShowActionModal(true); setOpenActionMenu(null); }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#065F46" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
                       Ajouter un sous-thème
                     </button>
@@ -5110,7 +5313,7 @@ function App({ forceVisitor = false }) {
                          try {
                            const fallbackUrl = URL.createObjectURL(f);
                            setThemeImagePreview(fallbackUrl);
-                         } catch (previewErr) {
+                         } catch {
                            setThemeImagePreview('');
                          }
                        }
@@ -5702,7 +5905,7 @@ function App({ forceVisitor = false }) {
                         // Ouvrir la modale localement sur cette page via événement global
                         try {
                           window.dispatchEvent(new CustomEvent('openVisitorConfig', { detail: selectedSubTheme.id }));
-                        } catch (err) {
+                        } catch {
                           const ev = document.createEvent('CustomEvent');
                           ev.initCustomEvent('openVisitorConfig', true, true, selectedSubTheme.id);
                           window.dispatchEvent(ev);
@@ -5944,7 +6147,7 @@ function App({ forceVisitor = false }) {
                               <>
                                 <tr>
                                   {rowCols.map(col => (
-                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-left uppercase tracking-wide font-bold text-xs">{translateDataValue(col)}</th>
+                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-center uppercase tracking-wide font-bold text-sm">{translateDataValue(col)}</th>
                                   ))}
                                   {(headerRows[0].cells || []).map(cell => (
                                     <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#7b1e5a] text-center font-bold text-sm">{cell.label}</th>
@@ -6056,7 +6259,7 @@ function App({ forceVisitor = false }) {
                       <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
                         <tr>
                           {(visitorMatrix.displayGroupCols || []).map(col => (
-                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-left uppercase tracking-wide font-bold text-xs">{translateDataValue(col)}</th>
+                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-center uppercase tracking-wide font-bold text-sm">{translateDataValue(col)}</th>
                           ))}
                           {visitorMatrix.periods.map((period, idx) => (
                             <th key={period} className={`p-4 border-r border-[#7b1e5a] min-w-[110px] text-center font-bold text-sm ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
@@ -6514,15 +6717,17 @@ function App({ forceVisitor = false }) {
       </div>
 
       {/* POP-UP MODALE : CONFIGURATION GRAPHIQUE (moved to ChartModal) */}
-      <ChartModal
-        isOpen={isModalOpen}
-        onClose={() => setIsModalOpen(false)}
-        currentChartConfig={currentChartConfig}
-        setCurrentChartConfig={setCurrentChartConfig}
-        selectedSubTheme={selectedSubTheme}
-        getUniqueValuesForColumn={getUniqueValuesForColumn}
-        handleAddOrUpdateChart={handleAddOrUpdateChart}
-      />
+      <Suspense fallback={null}>
+        <ChartModal
+          isOpen={isModalOpen}
+          onClose={() => setIsModalOpen(false)}
+          currentChartConfig={currentChartConfig}
+          setCurrentChartConfig={setCurrentChartConfig}
+          selectedSubTheme={selectedSubTheme}
+          getUniqueValuesForColumn={getUniqueValuesForColumn}
+          handleAddOrUpdateChart={handleAddOrUpdateChart}
+        />
+      </Suspense>
       {showEditTable && (
         <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
           <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[80vh] overflow-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">

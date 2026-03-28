@@ -1,0 +1,150 @@
+name: Deploy Production
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to deploy (branch, tag, or commit SHA)
+        required: false
+        default: main
+
+jobs:
+  deploy:
+    name: Deploy To Production Server
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOYMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
+
+      - name: Validate required secrets
+        env:
+          PROD_HOST: ${{ secrets.PROD_HOST }}
+          PROD_USER: ${{ secrets.PROD_USER }}
+          PROD_SSH_KEY: ${{ secrets.PROD_SSH_KEY }}
+          PROD_PATH: ${{ secrets.PROD_PATH }}
+          PROD_HEALTH_URL: ${{ secrets.PROD_HEALTH_URL }}
+          PROD_RESTART_COMMAND: ${{ secrets.PROD_RESTART_COMMAND }}
+        run: |
+          missing=0
+          for v in PROD_HOST PROD_USER PROD_SSH_KEY PROD_PATH PROD_HEALTH_URL PROD_RESTART_COMMAND; do
+            if [ -z "${!v}" ]; then
+              echo "Missing secret: $v"
+              missing=1
+            fi
+          done
+          if [ "$missing" -ne 0 ]; then
+            echo "Deployment aborted: configure production secrets first."
+            exit 1
+          fi
+
+      - name: Start SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.PROD_SSH_KEY }}
+
+      - name: Add server to known hosts
+        run: |
+          mkdir -p ~/.ssh
+          ssh-keyscan -H "${{ secrets.PROD_HOST }}" >> ~/.ssh/known_hosts
+
+      - name: Backup current production state
+        id: backup
+        run: |
+          backup_file="predeploy_$(date +%Y%m%d_%H%M%S).tgz"
+          ssh "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" "
+            set -e
+            mkdir -p '${{ secrets.PROD_PATH }}'
+            cd '${{ secrets.PROD_PATH }}'
+            tar -czf ../${backup_file} .
+          "
+          echo "backup_file=$backup_file" >> "$GITHUB_OUTPUT"
+
+      - name: Sync repository to production
+        run: |
+          rsync -az --delete \
+            --exclude '.git' \
+            --exclude '.venv' \
+            --exclude 'venv' \
+            --exclude 'node_modules' \
+            ./ "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}:${{ secrets.PROD_PATH }}/"
+
+      - name: Run remote deploy commands
+        run: |
+          ssh "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" "
+            set -e
+            cd '${{ secrets.PROD_PATH }}'
+            python3 -m pip install -r requirements.txt
+            python3 manage.py migrate --noinput
+            cd frontend
+            npm ci
+            npm run build
+            cd ..
+            python3 manage.py check
+            ${PROD_RESTART_COMMAND}
+          "
+        env:
+          PROD_RESTART_COMMAND: ${{ secrets.PROD_RESTART_COMMAND }}
+
+      - name: Smoke test production health endpoint
+        run: |
+          response=$(curl -fsS "${{ secrets.PROD_HEALTH_URL }}")
+          python3 -c "import json,sys; payload=json.loads(sys.argv[1]); assert payload.get('ready') is True" "$response"
+
+      - name: Optional smoke test production auth
+        if: success() && secrets.PROD_AUTH_LOGIN_URL != '' && secrets.PROD_AUTH_ME_URL != '' && secrets.PROD_SMOKE_EMAIL != '' && secrets.PROD_SMOKE_PASSWORD != ''
+        run: |
+          login_response=$(curl -fsS -X POST "${{ secrets.PROD_AUTH_LOGIN_URL }}" \
+            -H "Content-Type: application/json" \
+            --data "{\"email\":\"${{ secrets.PROD_SMOKE_EMAIL }}\",\"password\":\"${{ secrets.PROD_SMOKE_PASSWORD }}\"}")
+
+          token=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('token',''))" "$login_response")
+          if [ -z "$token" ]; then
+            echo "Auth smoke failed: no token received"
+            exit 1
+          fi
+
+          me_response=$(curl -fsS "${{ secrets.PROD_AUTH_ME_URL }}" -H "Authorization: Token $token")
+          python3 -c "import json,sys; data=json.loads(sys.argv[1]); assert data.get('email')" "$me_response"
+
+      - name: Apply backup retention policy
+        if: success()
+        run: |
+          ssh "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" "
+            set -e
+            cd '${{ secrets.PROD_PATH }}/..'
+            ls -1t predeploy_*.tgz 2>/dev/null | tail -n +11 | xargs -r rm -f
+            echo 'Backup retention applied (keeping latest 10 backups).'
+          "
+
+      - name: Rollback on failure
+        if: failure()
+        run: |
+          echo "Deployment failed. Starting rollback."
+          ssh "${{ secrets.PROD_USER }}@${{ secrets.PROD_HOST }}" "
+            set -e
+            cd '${{ secrets.PROD_PATH }}'
+            find . -mindepth 1 -maxdepth 1 -exec rm -rf {} +
+            tar -xzf ../${{ steps.backup.outputs.backup_file }} -C .
+            ${PROD_RESTART_COMMAND}
+            echo 'Rollback completed.'
+          "
+        env:
+          PROD_RESTART_COMMAND: ${{ secrets.PROD_RESTART_COMMAND }}
+
+      - name: Notify production deployment success
+        if: success() && secrets.PROD_NOTIFY_WEBHOOK != ''
+        run: |
+          payload=$(printf '{"text":"[HCP] Production deployment succeeded. Workflow: %s"}' "$DEPLOYMENT_URL")
+          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.PROD_NOTIFY_WEBHOOK }}"
+
+      - name: Notify production deployment failure
+        if: failure() && secrets.PROD_NOTIFY_WEBHOOK != ''
+        run: |
+          payload=$(printf '{"text":"[HCP] Production deployment failed (rollback attempted). Workflow: %s"}' "$DEPLOYMENT_URL")
+          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.PROD_NOTIFY_WEBHOOK }}"

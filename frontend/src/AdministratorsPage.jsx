@@ -1,21 +1,8 @@
 ﻿import React, { useState, useEffect } from 'react';
 import axios from 'axios';
-import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
 import { DndContext, closestCenter } from '@dnd-kit/core';
 import { SortableContext, useSortable, verticalListSortingStrategy, arrayMove } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import {
-  Document,
-  Packer,
-  Paragraph,
-  HeadingLevel,
-  TextRun,
-  Table,
-  TableRow,
-  TableCell,
-  WidthType,
-} from 'docx';
 import {
   ResponsiveContainer,
   CartesianGrid,
@@ -34,7 +21,7 @@ import {
   Tooltip,
 } from 'recharts';
 
-const API_BASE = 'http://127.0.0.1:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
 const ADMIN_SEEN_SUBMISSIONS_KEY = 'admin_seen_submission_markers';
 
 function DraggableChip({ id, children, onRemove }) {
@@ -70,7 +57,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [showRequestsModal, setShowRequestsModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [userRole, setUserRole] = useState(localStorage.getItem('user_role') || '');
+  const [userRole, _setUserRole] = useState(localStorage.getItem('user_role') || '');
   const [errorMessage, setErrorMessage] = useState('');
   
   // États pour la gestion des thèmes
@@ -102,7 +89,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [previewContent, setPreviewContent] = useState(null);
   const [previewTablePage, setPreviewTablePage] = useState(1);
   const [previewPageSize, setPreviewPageSize] = useState(-1);
-  const [reportModalOpen, setReportModalOpen] = useState(false);
+  const [_reportModalOpen, setReportModalOpen] = useState(false);
   const [reportTheme, setReportTheme] = useState(null);
   const [reportOptions, setReportOptions] = useState({
     selectedSubThemeIds: [],
@@ -110,9 +97,9 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     includeCharts: true,
     tableView: 'horizontal',
   });
-  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+  const [_isGeneratingReport, setIsGeneratingReport] = useState(false);
   const [reportContext, setReportContext] = useState(null);
-  const [reportPreviewLanguage, setReportPreviewLanguage] = useState('fr');
+  const [_reportPreviewLanguage, setReportPreviewLanguage] = useState('fr');
   const [showAdminAssistant, setShowAdminAssistant] = useState(false);
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantLoading, setAssistantLoading] = useState(false);
@@ -129,7 +116,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       const raw = localStorage.getItem(ADMIN_SEEN_SUBMISSIONS_KEY);
       const parsed = raw ? JSON.parse(raw) : {};
       return parsed && typeof parsed === 'object' ? parsed : {};
-    } catch (_) {
+    } catch {
       return {};
     }
   });
@@ -137,7 +124,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   
   // États pour les assignations multiples
   const [pendingAssignments, setPendingAssignments] = useState([]);
-  const [showAssignmentQueue, setShowAssignmentQueue] = useState(false);
+  const [_showAssignmentQueue, setShowAssignmentQueue] = useState(false);
 
   // États dédiés à l'espace saisisseur
   const [myAssignments, setMyAssignments] = useState([]);
@@ -159,7 +146,9 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         ? (localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token'))
         : localStorage.getItem('auth_token_admin');
       if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
-    } catch (e) {}
+    } catch {
+      // Ignore localStorage access errors.
+    }
 
     // Pour un saisisseur, charger uniquement ses assignations
     if (isSaisisseur) {
@@ -170,6 +159,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     fetchSaisisseurs();
     fetchThemes();
     fetchUserRequests();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur]);
 
   useEffect(() => {
@@ -178,12 +168,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       fetchSaisisseurs();
     }, 30000);
     return () => window.clearInterval(intervalId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur, notificationBootstrapDone, seenSubmissionMarkers]);
 
   const parseAssignmentNotes = (rawNotes) => {
     try {
       return rawNotes ? JSON.parse(rawNotes) : {};
-    } catch (e) {
+    } catch {
       return { _raw: rawNotes || '' };
     }
   };
@@ -193,7 +184,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
     // Handle double-encoded JSON payloads.
     if (typeof notes === 'string') {
-      try { notes = JSON.parse(notes); } catch (e) { notes = { _raw: String(notes || '') }; }
+      try { notes = JSON.parse(notes); } catch { notes = { _raw: String(notes || '') }; }
     }
 
     // Some legacy payloads stored data under `saisisseur_draft`.
@@ -224,7 +215,9 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     setSeenSubmissionMarkers(nextMarkers);
     try {
       localStorage.setItem(ADMIN_SEEN_SUBMISSIONS_KEY, JSON.stringify(nextMarkers));
-    } catch (_) {}
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
   };
 
   const getAssignmentSubmissionMeta = (assignment) => {
@@ -258,7 +251,9 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       oscillator.onended = () => {
         if (typeof audioCtx.close === 'function') audioCtx.close().catch(() => {});
       };
-    } catch (_) {}
+    } catch {
+      // Ignore localStorage persistence errors.
+    }
   };
 
   const markSubmissionAsSeen = (assignment) => {
@@ -552,6 +547,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
     window.addEventListener('openVisitorConfig', handler);
     return () => window.removeEventListener('openVisitorConfig', handler);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [themes]);
 
   // Espace saisisseur: exécution des tâches et coordination avec l'admin
@@ -862,7 +858,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }));
   };
 
-  const openReportModalForTheme = (theme) => {
+  const _openReportModalForTheme = (theme) => {
     const allSubThemeIds = (theme?.sous_themes || []).map((st) => st.id);
     setReportTheme(theme);
     setReportOptions({
@@ -876,13 +872,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     setReportModalOpen(true);
   };
 
-  const closeReportModal = () => {
+  const _closeReportModal = () => {
     setReportModalOpen(false);
     setReportTheme(null);
     setReportContext(null);
   };
 
-  const toggleReportSubTheme = (subThemeId) => {
+  const _toggleReportSubTheme = (subThemeId) => {
     setReportOptions((prev) => {
       const exists = prev.selectedSubThemeIds.includes(subThemeId);
       return {
@@ -894,7 +890,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     });
   };
 
-  const generateReportContext = async () => {
+  const _generateReportContext = async () => {
     if (!reportTheme) return;
     if (!reportOptions.selectedSubThemeIds.length) {
       alert('Sélectionnez au moins un sous-thème pour générer le rapport.');
@@ -923,7 +919,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
-  const downloadReportContext = () => {
+  const _downloadReportContext = () => {
     if (!reportContext || !reportTheme) return;
     const safeName = String(reportTheme.titre || 'rapport').replace(/[^a-zA-Z0-9-_]+/g, '_');
     const blob = new Blob([JSON.stringify(reportContext, null, 2)], { type: 'application/json;charset=utf-8' });
@@ -1014,7 +1010,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     return 'bar';
   };
 
-  const buildSectionChartModels = (section, lang = 'fr') => {
+  const _buildSectionChartModels = (section, lang = 'fr') => {
     const charts = Array.isArray(section?.charts) ? section.charts : [];
     const sourceTable = getChartSourceTable(section);
     const objRows = tableToObjectRows(sourceTable);
@@ -1050,8 +1046,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }).filter((m) => Array.isArray(m.data) && m.data.length > 0);
   };
 
-  const exportReportPDF = () => {
+  const _exportReportPDF = async () => {
     if (!reportContext) return;
+    const [{ default: jsPDF }, { default: autoTable }] = await Promise.all([
+      import('jspdf'),
+      import('jspdf-autotable'),
+    ]);
+
     const doc = new jsPDF({ orientation: 'portrait', unit: 'pt', format: 'a4' });
     const title = reportContext?.theme?.title_fr || reportTheme?.titre || 'Rapport';
 
@@ -1129,49 +1130,50 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     doc.save(`rapport_${getReportFileBase()}.pdf`);
   };
 
-  const exportReportWord = async () => {
+  const _exportReportWord = async () => {
     if (!reportContext) return;
+    const docx = await import('docx');
 
     const content = [];
     const title = reportContext?.theme?.title_fr || reportTheme?.titre || 'Rapport';
     content.push(
-      new Paragraph({
+      new docx.Paragraph({
         text: `Rapport Administratif - ${title}`,
-        heading: HeadingLevel.HEADING_1,
+        heading: docx.HeadingLevel.HEADING_1,
       })
     );
     content.push(
-      new Paragraph({
-        children: [new TextRun({ text: `Langue: ${reportContext?.options?.language || 'fr'} | Vue: ${reportContext?.options?.table_view || 'horizontal'}`, italics: true })],
+      new docx.Paragraph({
+        children: [new docx.TextRun({ text: `Langue: ${reportContext?.options?.language || 'fr'} | Vue: ${reportContext?.options?.table_view || 'horizontal'}`, italics: true })],
       })
     );
 
     (reportContext.sections || []).forEach((section, index) => {
       content.push(
-        new Paragraph({
+        new docx.Paragraph({
           text: `${index + 1}. ${section.sub_theme_name || 'Sous-thème'}`,
-          heading: HeadingLevel.HEADING_2,
+          heading: docx.HeadingLevel.HEADING_2,
         })
       );
 
       const metadataRows = getSectionMetadataRows(section.metadata);
       if (metadataRows.length) {
-        content.push(new Paragraph({ text: 'Métadonnées:', heading: HeadingLevel.HEADING_3 }));
+        content.push(new docx.Paragraph({ text: 'Métadonnées:', heading: docx.HeadingLevel.HEADING_3 }));
         content.push(
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
+          new docx.Table({
+            width: { size: 100, type: docx.WidthType.PERCENTAGE },
             rows: [
-              new TableRow({
+              new docx.TableRow({
                 children: [
-                  new TableCell({ children: [new Paragraph('Clé')] }),
-                  new TableCell({ children: [new Paragraph('Valeur')] }),
+                  new docx.TableCell({ children: [new docx.Paragraph('Clé')] }),
+                  new docx.TableCell({ children: [new docx.Paragraph('Valeur')] }),
                 ],
               }),
               ...metadataRows.map((row) =>
-                new TableRow({
+                new docx.TableRow({
                   children: [
-                    new TableCell({ children: [new Paragraph(String(row[0]))] }),
-                    new TableCell({ children: [new Paragraph(String(row[1]))] }),
+                    new docx.TableCell({ children: [new docx.Paragraph(String(row[0]))] }),
+                    new docx.TableCell({ children: [new docx.Paragraph(String(row[1]))] }),
                   ],
                 })
               ),
@@ -1184,17 +1186,17 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       langKeys.forEach((langKey) => {
         const table = getSectionTableForLanguage(section, langKey);
         if (!table.headers.length) return;
-        content.push(new Paragraph({ text: `Tableau (${table.lang.toUpperCase()} - ${table.view})`, heading: HeadingLevel.HEADING_3 }));
+        content.push(new docx.Paragraph({ text: `Tableau (${table.lang.toUpperCase()} - ${table.view})`, heading: docx.HeadingLevel.HEADING_3 }));
         content.push(
-          new Table({
-            width: { size: 100, type: WidthType.PERCENTAGE },
+          new docx.Table({
+            width: { size: 100, type: docx.WidthType.PERCENTAGE },
             rows: [
-              new TableRow({
-                children: table.headers.map((h) => new TableCell({ children: [new Paragraph(String(h))] })),
+              new docx.TableRow({
+                children: table.headers.map((h) => new docx.TableCell({ children: [new docx.Paragraph(String(h))] })),
               }),
               ...(table.rows || []).slice(0, 12).map((row) =>
-                new TableRow({
-                  children: (row || []).map((cell) => new TableCell({ children: [new Paragraph(String(cell ?? ''))] })),
+                new docx.TableRow({
+                  children: (row || []).map((cell) => new docx.TableCell({ children: [new docx.Paragraph(String(cell ?? ''))] })),
                 })
               ),
             ],
@@ -1203,18 +1205,18 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       });
 
       if (section?.charts_count) {
-        content.push(new Paragraph({ text: `Graphes inclus: ${section.charts_count}` }));
+        content.push(new docx.Paragraph({ text: `Graphes inclus: ${section.charts_count}` }));
         const chartNames = getChartNames(section, reportContext?.options?.language === 'ar' ? 'ar' : 'fr').slice(0, 8);
         if (chartNames.length) {
-          content.push(new Paragraph({ text: `Titres: ${chartNames.join(' | ')}` }));
+          content.push(new docx.Paragraph({ text: `Titres: ${chartNames.join(' | ')}` }));
         }
       }
     });
 
-    const doc = new Document({
+    const doc = new docx.Document({
       sections: [{ children: content }],
     });
-    const blob = await Packer.toBlob(doc);
+    const blob = await docx.Packer.toBlob(doc);
     const url = window.URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = url;
@@ -1288,7 +1290,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     try {
       setLoading(true);
       // Créer l'utilisateur
-      const response = await axios.post(`${API_BASE}/user-requests/create_user_with_email/`, {
+      await axios.post(`${API_BASE}/user-requests/create_user_with_email/`, {
         name: newSaisisseur.name,
         email: newSaisisseur.email,
         role: newSaisisseur.role
@@ -1356,7 +1358,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   // Fonction pour obtenir les thèmes/sous-thèmes déjà assignés à un utilisateur
-  const getAssignedThemes = (userId) => {
+  const _getAssignedThemes = (userId) => {
     if (!userId) return { themeIds: [], subThemeIds: [] };
     const userAssignments = assignments.filter(a => a.user === userId && a.assignment_archived !== true);
     return {
@@ -1487,9 +1489,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     if (!confirm('Réinitialiser le mot de passe de ce saisisseur?')) return;
     
     try {
-      const response = await axios.post(`${API_BASE}/users/${userId}/reset_password/`);
+      await axios.post(`${API_BASE}/users/${userId}/reset_password/`);
       alert('Mot de passe réinitialisé avec succès! Un email a été envoyé.');
-      console.log('Nouveau mot de passe:', response.data.password);
     } catch (error) {
       console.error('Erreur lors de la réinitialisation:', error);
       alert('Erreur lors de la réinitialisation du mot de passe');
