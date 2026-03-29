@@ -9,20 +9,15 @@ on:
         default: main
 
 jobs:
-  deploy:
-    name: Deploy To Production Server
+  preflight:
+    name: Validate Production Secrets
     runs-on: ubuntu-latest
-    environment: production
-    env:
-      DEPLOYMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    outputs:
+      ready: ${{ steps.check.outputs.ready }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          ref: ${{ github.event.inputs.ref || 'main' }}
-
-      - name: Validate required secrets
+      - name: Check production secrets
+        id: check
         env:
           PROD_HOST: ${{ secrets.PROD_HOST }}
           PROD_USER: ${{ secrets.PROD_USER }}
@@ -38,10 +33,29 @@ jobs:
               missing=1
             fi
           done
+
           if [ "$missing" -ne 0 ]; then
-            echo "Deployment aborted: configure production secrets first."
-            exit 1
+            echo "ready=false" >> "$GITHUB_OUTPUT"
+            echo "Production deploy skipped: configure required secrets first."
+          else
+            echo "ready=true" >> "$GITHUB_OUTPUT"
+            echo "All required production secrets are configured."
           fi
+
+  deploy:
+    name: Deploy To Production Server
+    needs: preflight
+    if: needs.preflight.outputs.ready == 'true'
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      DEPLOYMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.inputs.ref || 'main' }}
 
       - name: Start SSH agent
         uses: webfactory/ssh-agent@v0.9.0
@@ -148,3 +162,15 @@ jobs:
         run: |
           payload=$(printf '{"text":"[HCP] Production deployment failed (rollback attempted). Workflow: %s"}' "$DEPLOYMENT_URL")
           curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.PROD_NOTIFY_WEBHOOK }}"
+
+  skipped:
+    name: Production Deploy Skipped
+    needs: preflight
+    if: needs.preflight.outputs.ready != 'true'
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Explain skipped deployment
+        run: |
+          echo "Production deployment skipped."
+          echo "Configure PROD_HOST, PROD_USER, PROD_SSH_KEY, PROD_PATH, PROD_HEALTH_URL, and PROD_RESTART_COMMAND in repository or environment secrets."
