@@ -1,0 +1,222 @@
+# INSTRUCTIONS D'IMPLÉMENTATION - COPIER-COLLER CES MODIFICATIONS
+
+# ==============================================================================
+# 1. BACKEND - core/models.py
+# ==============================================================================
+# Dans la classe UserThemeAssignment (ligne ~100), AJOUTER ces 4 lignes après date_modification:
+
+date_completion = models.DateTimeField(null=True, blank=True, help_text="Date de complétion de la tâche")
+notes = models.TextField(null=True, blank=True, help_text="Notes ou commentaires sur la tâche")
+progression = models.IntegerField(default=0, help_text="Pourcentage de progression (0-100)")
+priorite = models.CharField(max_length=20, default='Normale', choices=[
+    ('Basse', 'Basse'),
+    ('Normale', 'Normale'),
+    ('Haute', 'Haute'),
+])
+
+# ==============================================================================
+# 2. BACKEND - core/serializers.py
+# ==============================================================================
+# Dans UserThemeAssignmentSerializer, REMPLACER la liste fields par:
+
+fields = [
+    'id', 'user', 'user_name', 'user_email', 'user_role', 'user_is_active',
+    'theme', 'theme_titre', 'sous_theme', 'sous_theme_nom',
+    'indicateur', 'indicateur_libelle', 'statut',
+    'date_assignation', 'date_modification', 'date_completion',
+    'notes', 'progression', 'priorite'
+]
+
+# ==============================================================================
+# 3. CRÉER LES MIGRATIONS
+# ==============================================================================
+# Exécuter ces commandes dans le terminal:
+# cd C:\Users\pc\Desktop\PROJET_DATA
+# python manage.py makemigrations
+# python manage.py migrate
+
+# ==============================================================================
+# 4. FRONTEND - AdministratorsPage.jsx
+# ==============================================================================
+
+# A. REMPLACER le <thead> de la table des assignations (ligne ~731) par:
+
+<thead className="bg-[#4a77b4] text-white border-b-2 border-black">
+  <tr>
+    <th className="px-4 py-3 text-left text-xs font-bold">Utilisateur</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Tâche</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Priorité</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Progression</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Début</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Fin</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Statut</th>
+    <th className="px-4 py-3 text-left text-xs font-bold">Actions</th>
+  </tr>
+</thead>
+
+# B. REMPLACER le <tbody> des assignations (à partir de ligne ~755) par:
+
+<tbody>
+  {assignments.length === 0 ? (
+    <tr>
+      <td colSpan="8" className="px-6 py-8 text-center text-gray-500">
+        Aucune assignation trouvée.
+      </td>
+    </tr>
+  ) : (
+    assignments.map((assignment) => {
+      const matchedUser = saisisseurs.find(s => s.id === assignment.user);
+      const userName = assignment.user_name || matchedUser?.first_name || 'Utilisateur';
+      const isUserArchived = assignment.user_is_active === false || matchedUser?.is_active === false;
+      const taskLabel = assignment.sous_theme_nom
+        ? `${assignment.theme_titre ? `${assignment.theme_titre} > ` : ''}${assignment.sous_theme_nom}`
+        : assignment.theme_titre || '—';
+      const progression = assignment.progression || 0;
+      const priorite = assignment.priorite || 'Normale';
+      
+      return (
+        <tr
+          key={assignment.id}
+          className={`border-b transition ${isUserArchived ? 'bg-gray-100 text-gray-400' : 'hover:bg-gray-50'}`}
+        >
+          <td className={`px-4 py-3 font-medium text-sm ${isUserArchived ? 'line-through' : ''}`}>
+            {userName}
+          </td>
+          <td className="px-4 py-3 text-gray-700 text-sm">{taskLabel}</td>
+          
+          {/* Colonne Priorité */}
+          <td className="px-4 py-3">
+            <span className={`px-2 py-1 rounded text-xs font-bold ${
+              priorite === 'Haute' ? 'bg-red-100 text-red-800 border border-red-300' :
+              priorite === 'Basse' ? 'bg-gray-100 text-gray-600 border border-gray-300' :
+              'bg-blue-100 text-blue-700 border border-blue-300'
+            }`}>
+              {priorite === 'Haute' ? '🔴 Haute' : priorite === 'Basse' ? '⚪ Basse' : '🔵 Normale'}
+            </span>
+          </td>
+          
+          {/* Colonne Progression */}
+          <td className="px-4 py-3">
+            <div className="flex items-center gap-2">
+              <div className="flex-1 bg-gray-200 rounded-full h-2 min-w-[60px]">
+                <div 
+                  className={`h-2 rounded-full transition-all ${
+                    progression >= 100 ? 'bg-green-500' :
+                    progression >= 50 ? 'bg-blue-500' :
+                    'bg-orange-400'
+                  }`}
+                  style={{ width: `${Math.min(progression, 100)}%` }}
+                ></div>
+              </div>
+              <span className="text-xs font-bold text-gray-700 min-w-[35px]">{progression}%</span>
+            </div>
+          </td>
+          
+          {/* Colonne Date début */}
+          <td className="px-4 py-3 text-gray-700 text-sm">
+            {formatAssignmentDate(assignment.date_assignation)}
+          </td>
+          
+          {/* Colonne Date fin */}
+          <td className="px-4 py-3 text-gray-700 text-sm">
+            {assignment.date_completion ? (
+              <span className="text-green-700 font-semibold">
+                ✓ {formatAssignmentDate(assignment.date_completion)}
+              </span>
+            ) : (
+              <span className="text-gray-400">—</span>
+            )}
+          </td>
+          
+          {/* Colonne Statut */}
+          <td className="px-4 py-3">
+            <span className={
+              assignment.statut === 'Complété'
+                ? 'px-3 py-1 bg-green-100 text-green-800 rounded text-xs font-medium inline-block'
+                : assignment.statut === 'En attente'
+                ? 'px-3 py-1 bg-yellow-100 text-yellow-800 rounded text-xs font-medium inline-block'
+                : 'px-3 py-1 bg-blue-100 text-blue-800 rounded text-xs font-medium inline-block'
+            }>
+              {assignment.statut}
+            </span>
+          </td>
+          
+          {/* Colonne Actions */}
+          <td className="px-4 py-3 relative">
+            <button
+              onClick={() => setOpenMenuId(openMenuId === `assign-${assignment.id}` ? null : `assign-${assignment.id}`)}
+              className="px-3 py-1 bg-gray-200 hover:bg-gray-300 rounded text-sm transition font-bold"
+              title="Actions"
+            >
+              ⋮
+            </button>
+            {openMenuId === `assign-${assignment.id}` && (
+              <div className="absolute right-0 mt-2 w-56 bg-white rounded-lg shadow-xl border border-gray-200 z-50">
+                <button
+                  onClick={() => {
+                    handleValidateSaisisseur(assignment.user);
+                    setOpenMenuId(null);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm"
+                >
+                  ✅ Valider les modifications
+                </button>
+                
+                {/* Bouton Notes (à implémenter plus tard) */}
+                <button
+                  onClick={() => {
+                    alert('Fonctionnalité à venir: Ajouter/Modifier notes');
+                    setOpenMenuId(null);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                >
+                  📝 Notes
+                </button>
+                
+                {/* Bouton Progression (à implémenter plus tard) */}
+                <button
+                  onClick={() => {
+                    alert('Fonctionnalité à venir: Modifier progression');
+                    setOpenMenuId(null);
+                  }}
+                  className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                >
+                  📊 Modifier progression
+                </button>
+                
+                {isUserArchived ? (
+                  <button
+                    onClick={() => {
+                      handleUnarchiveSaisisseur(assignment.user);
+                      setOpenMenuId(null);
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                  >
+                    ↩️ Désarchiver
+                  </button>
+                ) : (
+                  <button
+                    onClick={() => {
+                      handleArchiveSaisisseur(assignment.user);
+                      setOpenMenuId(null);
+                    }}
+                    className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2 text-sm border-t"
+                  >
+                    📦 Archiver
+                  </button>
+                )}
+              </div>
+            )}
+          </td>
+        </tr>
+      );
+    })
+  )}
+</tbody>
+
+# ==============================================================================
+# 5. TESTER
+# ==============================================================================
+# 1. Redémarrer le serveur Django
+# 2. Rafraîchir le frontend
+# 3. Vérifier l'affichage des nouvelles colonnes
