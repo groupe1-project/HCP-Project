@@ -165,7 +165,11 @@ USE_TZ = True
 
 STATIC_URL = 'static/'
 
-CORS_ALLOWED_ORIGINS = _env_list('DJANGO_CORS_ALLOWED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173')
+_default_cors_origins = 'http://localhost:5173,http://127.0.0.1:5173'
+CORS_ALLOWED_ORIGINS = _env_list('DJANGO_CORS_ALLOWED_ORIGINS', _default_cors_origins)
+# In local development Vite may pick another port when 5173 is busy.
+# Allow localhost/127.0.0.1 on any port to avoid false CORS failures.
+CORS_ALLOWED_ORIGIN_REGEXES = [r'^https?://localhost:\d+$', r'^https?://127\.0\.0\.1:\d+$'] if DEBUG else []
 CSRF_TRUSTED_ORIGINS = _env_list('DJANGO_CSRF_TRUSTED_ORIGINS', 'http://localhost:5173,http://127.0.0.1:5173')
 AUTH_USER_MODEL = 'core.CustomUser'
 

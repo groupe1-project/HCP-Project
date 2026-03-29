@@ -106,3 +106,5 @@ Workflow: `.github/workflows/deploy-production.yml`
 - Template secrets: `DEPLOYMENT_SECRETS_TEMPLATE.md`
 - Procedure go-live: `GO_LIVE_PROCEDURE.md`
 - Script verification health: `scripts/verify_health.ps1`
+- Script pre-release one-click: `scripts/pre_release_check.ps1`
+- Guide rapide pre-release: `PRE_RELEASE_QUICKCHECK.md`

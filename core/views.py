@@ -5,6 +5,7 @@ import json
 import re
 import os
 import time
+import importlib
 import unicodedata
 import pandas as pd
 import string
@@ -254,7 +255,7 @@ def _gemini_generate_text(prompt, purpose='generic'):
     retry_backoff_seconds = _read_float_env('GEMINI_RETRY_BACKOFF_SECONDS', 0.75, min_value=0.0, max_value=10.0)
 
     try:
-        import google.generativeai as genai
+        genai = importlib.import_module('google.generativeai')
     except Exception as exc:
         raise RuntimeError('Le package google-generativeai n\'est pas installe') from exc
 
@@ -299,7 +300,7 @@ def _run_gemini_mapping(df, expected_columns):
     hf_token = os.getenv('HF_TOKEN', '').strip()
     if hf_token:
         try:
-            from huggingface_hub import login as hf_login
+            hf_login = getattr(importlib.import_module('huggingface_hub'), 'login')
             hf_login(token=hf_token, add_to_git_credential=False)
         except Exception:
             # Non-bloquant pour le flux Gemini

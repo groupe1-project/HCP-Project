@@ -21,7 +21,7 @@ import {
   Tooltip,
 } from 'recharts';
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const ADMIN_SEEN_SUBMISSIONS_KEY = 'admin_seen_submission_markers';
 
 function DraggableChip({ id, children, onRemove }) {
@@ -722,8 +722,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       const response = await axios.get(`${API_BASE}/themes/`, getAdminAuthConfig());
       setThemes(response.data);
       setAllThemes(response.data); // Pour la gestion des thèmes
+      setErrorMessage('');
     } catch (error) {
       console.error('Erreur lors du chargement des thèmes:', error);
+      const message = error?.response?.data?.detail || error?.response?.data?.error || error?.message || 'Erreur lors du chargement des thèmes';
+      setErrorMessage(message);
     }
   };
 
@@ -1358,7 +1361,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   // Fonction pour obtenir les thèmes/sous-thèmes déjà assignés à un utilisateur
-  const _getAssignedThemes = (userId) => {
+  const getAssignedThemes = (userId) => {
     if (!userId) return { themeIds: [], subThemeIds: [] };
     const userAssignments = assignments.filter(a => a.user === userId && a.assignment_archived !== true);
     return {
@@ -1368,51 +1371,47 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   // Fonction pour filtrer les thèmes disponibles
-  // Ne pas afficher un thème déjà assigné globalement (sans sous-thème) à n'importe quel utilisateur.
-  // Ne pas afficher un thème si tous ses sous-thèmes sont déjà assignés.
+  // Filtre par utilisateur sélectionné uniquement (pas globalement).
   const getAvailableThemes = () => {
-    const globallyAssignedThemeIds = assignments
-      .filter(a => a.assignment_archived !== true && a.theme && !a.sous_theme)
-      .map(a => a.theme);
-    
-    const assignedSubThemeIds = assignments
-      .filter(a => a.assignment_archived !== true && a.sous_theme)
-      .map(a => a.sous_theme);
-    
+    if (!selectedSaisisseur) return themes;
+
+    const { themeIds, subThemeIds } = getAssignedThemes(selectedSaisisseur);
+
     return themes.filter(t => {
-      // Exclure les thèmes assignés globalement
-      if (globallyAssignedThemeIds.includes(t.id)) {
+      // Exclure les thèmes déjà assignés en entier à l'utilisateur sélectionné.
+      if (themeIds.includes(t.id)) {
         return false;
       }
-      
-      // Exclure les thèmes dont tous les sous-thèmes sont assignés
+
+      // Exclure les thèmes dont tous les sous-thèmes sont déjà assignés à cet utilisateur.
       if (t.sous_themes && t.sous_themes.length > 0) {
-        const allSubThemesAssigned = t.sous_themes.every(st => assignedSubThemeIds.includes(st.id));
+        const allSubThemesAssigned = t.sous_themes.every(st => subThemeIds.includes(st.id));
         if (allSubThemesAssigned) {
           return false;
         }
       }
-      
+
       return true;
     });
   };
 
   // Fonction pour filtrer les sous-thèmes disponibles
-  // Si le thème est déjà assigné en entier, aucun sous-thème ne doit être assignable.
-  // Exclure aussi les sous-thèmes déjà assignés à n'importe quel utilisateur.
+  // Filtre par utilisateur sélectionné uniquement (pas globalement).
   const getAvailableSubThemes = () => {
     if (!selectedTheme) return subThemes;
-    const globallyAssignedThemeIds = assignments
-      .filter(a => a.assignment_archived !== true && a.theme && !a.sous_theme)
-      .map(a => a.theme);
-    if (globallyAssignedThemeIds.includes(parseInt(selectedTheme))) {
+
+    if (!selectedSaisisseur) return subThemes;
+
+    const { themeIds, subThemeIds } = getAssignedThemes(selectedSaisisseur);
+    const selectedThemeId = parseInt(selectedTheme, 10);
+
+    // Si ce thème est déjà assigné en entier à cet utilisateur, aucun sous-thème n'est dispo.
+    if (themeIds.includes(selectedThemeId)) {
       return [];
     }
-    // Exclure les sous-thèmes assignés à n'importe quel utilisateur
-    const assignedSubThemeIds = assignments
-      .filter(a => a.assignment_archived !== true && a.sous_theme)
-      .map(a => a.sous_theme);
-    return subThemes.filter(st => !assignedSubThemeIds.includes(st.id));
+
+    // Exclure uniquement les sous-thèmes déjà assignés à cet utilisateur.
+    return subThemes.filter(st => !subThemeIds.includes(st.id));
   };
 
   // Ajouter une assignation à la queue

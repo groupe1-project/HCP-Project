@@ -9,13 +9,31 @@ from rest_framework.authtoken.models import Token
 from .models import CustomUser
 from .serializers import UserSerializer
 from .security_audit import audit_security_event
-import random
+import secrets
 import string
 
-def generate_password(length=8):
-    """Génère un mot de passe aléatoire"""
-    chars = string.ascii_letters + string.digits + '!@#$%'
-    return ''.join(random.choice(chars) for _ in range(length))
+def generate_password(length=14):
+    """Genere un mot de passe robuste avec complexite minimale."""
+    if length < 12:
+        length = 12
+
+    lower = string.ascii_lowercase
+    upper = string.ascii_uppercase
+    digits = string.digits
+    specials = '!@#$%^&*()-_=+[]{}'
+    all_chars = lower + upper + digits + specials
+
+    # Guarantee at least one char from each category.
+    required = [
+        secrets.choice(lower),
+        secrets.choice(upper),
+        secrets.choice(digits),
+        secrets.choice(specials),
+    ]
+    remaining = [secrets.choice(all_chars) for _ in range(length - len(required))]
+    chars = required + remaining
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
 
 class UserViewSet(viewsets.ModelViewSet):
     """

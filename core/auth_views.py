@@ -2,7 +2,7 @@ import logging
 import os
 
 from rest_framework import status
-from rest_framework.decorators import api_view, permission_classes, throttle_classes
+from rest_framework.decorators import api_view, permission_classes, throttle_classes, authentication_classes
 from rest_framework.response import Response
 from rest_framework.authtoken.models import Token
 from rest_framework.permissions import AllowAny, IsAuthenticated
@@ -19,6 +19,7 @@ from .security_audit import audit_security_event
 logger = logging.getLogger(__name__)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_classes([LoginRateThrottle])
 def login(request):
@@ -73,6 +74,7 @@ def login(request):
     return response
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 def logout(request):
     """
@@ -82,10 +84,16 @@ def logout(request):
     if token_key:
         Token.objects.filter(key=token_key).delete()
 
+    auth_header = str(request.META.get('HTTP_AUTHORIZATION', '') or '').strip()
+    if auth_header.lower().startswith('token '):
+        header_token = auth_header.split(' ', 1)[1].strip()
+        if header_token:
+            Token.objects.filter(key=header_token).delete()
+
     response = Response({'message': 'Déconnecté'}, status=status.HTTP_200_OK)
     response.delete_cookie(settings.AUTH_TOKEN_COOKIE_NAME, path='/')
 
-    if request.user.is_authenticated:
+    if getattr(request.user, 'is_authenticated', False):
         Token.objects.filter(user=request.user).delete()
     audit_security_event('auth.logout', request)
     return response
@@ -108,6 +116,7 @@ def me(request):
     )
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_classes([PasswordResetRateThrottle])
 def request_reset(request):
@@ -147,6 +156,7 @@ def request_reset(request):
     return Response(response_payload, status=status.HTTP_200_OK)
 
 @api_view(['POST'])
+@authentication_classes([])
 @permission_classes([AllowAny])
 @throttle_classes([PasswordResetRateThrottle])
 def reset_password(request):

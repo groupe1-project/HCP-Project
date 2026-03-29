@@ -8,7 +8,7 @@ import { DATA_TRANSLATIONS_FR_AR } from './i18n';
 const AdministratorsPage = lazy(() => import('./AdministratorsPage'));
 const ChartModal = lazy(() => import('./components/ChartModal'));
 
-const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8000/api';
+const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const INFO_BANNER_CACHE_KEY = 'info_banner_cache';
 const DEFAULT_INFO_BANNER_ITEMS = [{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', text_en: '', url: '' }];
 
