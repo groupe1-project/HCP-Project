@@ -48,6 +48,18 @@ Configurer dans GitHub repository settings > Secrets and variables > Actions:
 - `STAGING_PATH`
 - `STAGING_NOTIFY_WEBHOOK` (optionnel)
 
+## Delivery test (sans serveur)
+
+Workflow: `.github/workflows/delivery-only.yml`
+
+- Declenchement manuel (`workflow_dispatch`).
+- Build backend/frontend sans connexion a un serveur cible.
+- Generation d'un package livrable `.tgz`.
+- Generation d'un checksum `.sha256`.
+- Publication de l'artifact dans GitHub Actions.
+
+Utilisation: permet de valider la phase CD "delivery" avant toute phase deploy.
+
 ## CD implemente (production)
 
 Workflow: `.github/workflows/deploy-production.yml`
@@ -85,6 +97,7 @@ Workflow: `.github/workflows/deploy-production.yml`
 ## Conclusion
 
 - CI: en place.
+- Delivery sans serveur: en place.
 - CD staging: en place (manuel et securise).
 - CD production: en place avec rollback et smoke health.
 
