@@ -6,6 +6,7 @@ on:
       - main
       - master
       - develop
+      - espaceVisiteur
   pull_request:
 
 jobs:
