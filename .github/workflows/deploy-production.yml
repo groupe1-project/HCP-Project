@@ -50,6 +50,11 @@ jobs:
     environment: production
     env:
       DEPLOYMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      PROD_AUTH_LOGIN_URL: ${{ secrets.PROD_AUTH_LOGIN_URL }}
+      PROD_AUTH_ME_URL: ${{ secrets.PROD_AUTH_ME_URL }}
+      PROD_SMOKE_EMAIL: ${{ secrets.PROD_SMOKE_EMAIL }}
+      PROD_SMOKE_PASSWORD: ${{ secrets.PROD_SMOKE_PASSWORD }}
+      PROD_NOTIFY_WEBHOOK: ${{ secrets.PROD_NOTIFY_WEBHOOK }}
 
     steps:
       - name: Checkout
@@ -111,11 +116,11 @@ jobs:
           python3 -c "import json,sys; payload=json.loads(sys.argv[1]); assert payload.get('ready') is True" "$response"
 
       - name: Optional smoke test production auth
-        if: success() && secrets.PROD_AUTH_LOGIN_URL != '' && secrets.PROD_AUTH_ME_URL != '' && secrets.PROD_SMOKE_EMAIL != '' && secrets.PROD_SMOKE_PASSWORD != ''
+        if: success() && env.PROD_AUTH_LOGIN_URL != '' && env.PROD_AUTH_ME_URL != '' && env.PROD_SMOKE_EMAIL != '' && env.PROD_SMOKE_PASSWORD != ''
         run: |
-          login_response=$(curl -fsS -X POST "${{ secrets.PROD_AUTH_LOGIN_URL }}" \
+          login_response=$(curl -fsS -X POST "${{ env.PROD_AUTH_LOGIN_URL }}" \
             -H "Content-Type: application/json" \
-            --data "{\"email\":\"${{ secrets.PROD_SMOKE_EMAIL }}\",\"password\":\"${{ secrets.PROD_SMOKE_PASSWORD }}\"}")
+            --data "{\"email\":\"${{ env.PROD_SMOKE_EMAIL }}\",\"password\":\"${{ env.PROD_SMOKE_PASSWORD }}\"}")
 
           token=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('token',''))" "$login_response")
           if [ -z "$token" ]; then
@@ -123,7 +128,7 @@ jobs:
             exit 1
           fi
 
-          me_response=$(curl -fsS "${{ secrets.PROD_AUTH_ME_URL }}" -H "Authorization: Token $token")
+          me_response=$(curl -fsS "${{ env.PROD_AUTH_ME_URL }}" -H "Authorization: Token $token")
           python3 -c "import json,sys; data=json.loads(sys.argv[1]); assert data.get('email')" "$me_response"
 
       - name: Apply backup retention policy
@@ -152,16 +157,16 @@ jobs:
           PROD_RESTART_COMMAND: ${{ secrets.PROD_RESTART_COMMAND }}
 
       - name: Notify production deployment success
-        if: success() && secrets.PROD_NOTIFY_WEBHOOK != ''
+        if: success() && env.PROD_NOTIFY_WEBHOOK != ''
         run: |
           payload=$(printf '{"text":"[HCP] Production deployment succeeded. Workflow: %s"}' "$DEPLOYMENT_URL")
-          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.PROD_NOTIFY_WEBHOOK }}"
+          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ env.PROD_NOTIFY_WEBHOOK }}"
 
       - name: Notify production deployment failure
-        if: failure() && secrets.PROD_NOTIFY_WEBHOOK != ''
+        if: failure() && env.PROD_NOTIFY_WEBHOOK != ''
         run: |
           payload=$(printf '{"text":"[HCP] Production deployment failed (rollback attempted). Workflow: %s"}' "$DEPLOYMENT_URL")
-          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.PROD_NOTIFY_WEBHOOK }}"
+          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ env.PROD_NOTIFY_WEBHOOK }}"
 
   skipped:
     name: Production Deploy Skipped

@@ -43,6 +43,7 @@ jobs:
     environment: staging
     env:
       DEPLOYMENT_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      STAGING_NOTIFY_WEBHOOK: ${{ secrets.STAGING_NOTIFY_WEBHOOK }}
 
     steps:
       - name: Checkout
@@ -83,16 +84,16 @@ jobs:
           "
 
       - name: Notify staging deployment success
-        if: success() && secrets.STAGING_NOTIFY_WEBHOOK != ''
+        if: success() && env.STAGING_NOTIFY_WEBHOOK != ''
         run: |
           payload=$(printf '{"text":"[HCP] Staging deployment succeeded. Workflow: %s"}' "$DEPLOYMENT_URL")
-          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.STAGING_NOTIFY_WEBHOOK }}"
+          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ env.STAGING_NOTIFY_WEBHOOK }}"
 
       - name: Notify staging deployment failure
-        if: failure() && secrets.STAGING_NOTIFY_WEBHOOK != ''
+        if: failure() && env.STAGING_NOTIFY_WEBHOOK != ''
         run: |
           payload=$(printf '{"text":"[HCP] Staging deployment failed. Workflow: %s"}' "$DEPLOYMENT_URL")
-          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ secrets.STAGING_NOTIFY_WEBHOOK }}"
+          curl -sS -X POST -H "Content-Type: application/json" --data "$payload" "${{ env.STAGING_NOTIFY_WEBHOOK }}"
 
   skipped:
     name: Staging Deploy Skipped
