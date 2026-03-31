@@ -89,6 +89,12 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [previewContent, setPreviewContent] = useState(null);
   const [previewTablePage, setPreviewTablePage] = useState(1);
   const [previewPageSize, setPreviewPageSize] = useState(-1);
+  const [previewChartFilters, setPreviewChartFilters] = useState({});
+  const [reviewModalOpen, setReviewModalOpen] = useState(false);
+  const [reviewAction, setReviewAction] = useState('approve');
+  const [reviewAssignmentId, setReviewAssignmentId] = useState(null);
+  const [reviewMessage, setReviewMessage] = useState('');
+  const [reviewSubmitting, setReviewSubmitting] = useState(false);
   const [_reportModalOpen, setReportModalOpen] = useState(false);
   const [reportTheme, setReportTheme] = useState(null);
   const [reportOptions, setReportOptions] = useState({
@@ -265,6 +271,18 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const PREVIEW_PAGE_SIZE = 12;
   const PREVIEW_CHART_COLORS = ['#7A0A4A', '#B03372', '#C95A9A', '#8C4F6A', '#D485B2', '#5E0738'];
 
+  const getStatusBadgeClass = (statut) => {
+    if (statut === 'Complété') return 'bg-green-100 text-green-800 border border-green-200';
+    if (statut === 'En attente') return 'bg-amber-100 text-amber-800 border border-amber-200';
+    return 'bg-blue-100 text-blue-800 border border-blue-200';
+  };
+
+  const getStatusDotClass = (statut) => {
+    if (statut === 'Complété') return 'bg-green-500';
+    if (statut === 'En attente') return 'bg-amber-500';
+    return 'bg-blue-500';
+  };
+
   const parseNumber = (value) => {
     const normalized = String(value ?? '').replace(/\s/g, '').replace(',', '.');
     const num = Number(normalized);
@@ -296,9 +314,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     return filtered;
   };
 
-  const makeChartPreviewData = (chart, notes) => {
+  const makeChartPreviewData = (chart, notes, dynamicFilters = {}) => {
     const rows = Array.isArray(notes?.tables) ? notes.tables : [];
-    const source = applyChartFilters(rows, chart);
+    let source = applyChartFilters(rows, chart);
+    Object.entries(dynamicFilters || {}).forEach(([column, value]) => {
+      if (!column || value === null || value === undefined || String(value).trim() === '') return;
+      source = source.filter((row) => String(row?.[column] ?? '') === String(value));
+    });
     const xKey = chart?.x;
     const yKey = chart?.y;
     const groupKey = chart?.group_by;
@@ -396,6 +418,39 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     });
 
     return Array.from(grouped.entries()).map(([name, value]) => ({ name, value }));
+  };
+
+  const extractInteractiveFilterDefs = (chart) => {
+    const vf = Array.isArray(chart?.visible_filters) ? chart.visible_filters : [];
+    return vf
+      .map((item) => {
+        if (typeof item === 'string') return { column: item, default: '' };
+        if (item && typeof item === 'object' && item.column) return { column: String(item.column), default: String(item.default || '') };
+        return null;
+      })
+      .filter(Boolean);
+  };
+
+  const getPreviewFilterOptions = (notes, column) => {
+    const rows = Array.isArray(notes?.tables) ? notes.tables : [];
+    return Array.from(new Set(rows.map((r) => r?.[column]).filter((v) => v !== null && v !== undefined && String(v).trim() !== '')))
+      .map((v) => String(v));
+  };
+
+  const initializePreviewChartFilters = (notes) => {
+    const next = {};
+    const charts = Array.isArray(notes?.charts) ? notes.charts : [];
+    charts.forEach((chart, idx) => {
+      const key = String(chart?.id || idx);
+      const defs = extractInteractiveFilterDefs(chart);
+      if (defs.length === 0) return;
+      const defaults = {};
+      defs.forEach((def) => {
+        defaults[def.column] = def.default || '';
+      });
+      next[key] = defaults;
+    });
+    return next;
   };
 
   const fetchMyAssignments = async () => {
@@ -601,7 +656,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                       className={`w-full text-left px-4 py-3 border-b border-[#efdce6] hover:bg-[#fcf4f8] ${selectedMyAssignment?.id === a.id ? 'bg-[#fcf0f6]' : ''}`}
                     >
                       <div className="font-semibold text-[#4d1734]">{a.theme_titre || 'Thème'}{a.sous_theme_nom ? ` > ${a.sous_theme_nom}` : ''}</div>
-                      <div className="text-xs text-[#8c4f6a] mt-1">Priorité: {a.priorite || 'Normale'} | Statut: {a.statut}</div>
+                      <div className="text-xs text-[#8c4f6a] mt-1 flex items-center gap-2">
+                        <span>Priorité: {a.priorite || 'Normale'}</span>
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${getStatusBadgeClass(a.statut)}`}>
+                          <span className={`inline-block w-2 h-2 rounded-full ${getStatusDotClass(a.statut)}`} />
+                          {a.statut}
+                        </span>
+                      </div>
                     </button>
                   ))
                 )}
@@ -615,7 +676,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <>
                   <div>
                     <h3 className="text-lg font-black text-[#7A0A4A]">{selectedMyAssignment.theme_titre || 'Thème'}{selectedMyAssignment.sous_theme_nom ? ` > ${selectedMyAssignment.sous_theme_nom}` : ''}</h3>
-                    <div className="text-sm text-[#8c4f6a]">Statut actuel: {selectedMyAssignment.statut}</div>
+                    <div className="text-sm text-[#8c4f6a] flex items-center gap-2">
+                      <span>Statut actuel:</span>
+                      <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full ${getStatusBadgeClass(selectedMyAssignment.statut)}`}>
+                        <span className={`inline-block w-2 h-2 rounded-full ${getStatusDotClass(selectedMyAssignment.statut)}`} />
+                        {selectedMyAssignment.statut}
+                      </span>
+                    </div>
                   </div>
 
                   <div>
@@ -642,8 +709,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                   )}
 
                   <div className="flex gap-2">
-                    <button onClick={saveMyDraft} className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-lg font-bold hover:bg-[#f7eaf1]">💾 Enregistrer brouillon</button>
-                    <button onClick={submitMyAssignment} className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-lg font-bold hover:bg-[#5E0738]">📤 Soumettre à l'admin</button>
+                    <button onClick={saveMyDraft} className="flex-1 px-4 py-2 bg-white text-[#7A0A4A] border border-[#B03372] rounded-lg font-bold hover:bg-[#f7eaf1]"> Enregistrer brouillon</button>
+                    <button onClick={submitMyAssignment} className="flex-1 px-4 py-2 bg-[#7A0A4A] text-white border border-[#B03372] rounded-lg font-bold hover:bg-[#5E0738]">Soumettre à l'admin</button>
                   </div>
 
                   <div>
@@ -1593,9 +1660,23 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
-  const handleValidateSaisisseur = async (assignmentId) => {
+  const openReviewModal = (action, assignmentId) => {
+    setReviewAction(action === 'reject' ? 'reject' : 'approve');
+    setReviewAssignmentId(assignmentId);
+    setReviewMessage('');
+    setReviewModalOpen(true);
+    setOpenMenuId(null);
+  };
+
+  const closeReviewModal = () => {
+    if (reviewSubmitting) return;
+    setReviewModalOpen(false);
+    setReviewAssignmentId(null);
+    setReviewMessage('');
+  };
+
+  const handleValidateSaisisseur = async (assignmentId, adminComment = '') => {
     try {
-      const adminComment = prompt('Commentaire de validation (optionnel):', '') || '';
       await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/review/`, {
         decision: 'approve',
         message: adminComment.trim(),
@@ -1610,10 +1691,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
-  const handleRejectSaisisseur = async (assignmentId) => {
-    const reason = prompt('Précisez les corrections demandées:', '');
-    if (reason === null) return;
-
+  const handleRejectSaisisseur = async (assignmentId, reason = '') => {
     try {
       await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/review/`, {
         decision: 'reject',
@@ -1628,6 +1706,32 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     }
   };
 
+  const submitReviewAction = async () => {
+    if (!reviewAssignmentId || reviewSubmitting) return;
+
+    const trimmedMessage = String(reviewMessage || '').trim();
+    if (reviewAction === 'reject' && !trimmedMessage) {
+      alert('Veuillez préciser les corrections demandées.');
+      return;
+    }
+
+    try {
+      setReviewSubmitting(true);
+      if (reviewAction === 'approve') {
+        await handleValidateSaisisseur(reviewAssignmentId, trimmedMessage);
+      } else {
+        await handleRejectSaisisseur(reviewAssignmentId, trimmedMessage);
+      }
+
+      setReviewModalOpen(false);
+      setReviewAssignmentId(null);
+      setReviewMessage('');
+      setPreviewModalOpen(false);
+    } finally {
+      setReviewSubmitting(false);
+    }
+  };
+
   const handleOpenSubmissionPreview = async (assignmentId) => {
     try {
       setOpenMenuId(null);
@@ -1636,6 +1740,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       const notesObj = normalizeSubmissionNotes(assignment.notes);
       markSubmissionAsSeen(assignment);
       setPreviewContent({ assignment, notes: notesObj });
+      setPreviewChartFilters(initializePreviewChartFilters(notesObj));
       setPreviewTablePage(1);
       setPreviewPageSize(-1);
       setPreviewModalOpen(true);
@@ -1666,6 +1771,99 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     if (!value) return '—';
     const date = new Date(value);
     return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
+  };
+
+  const formatWorkflowActionLabel = (action) => {
+    const key = String(action || '').toLowerCase();
+    if (key === 'submit') return 'Soumission';
+    if (key === 'approve') return 'Validation admin';
+    if (key === 'reject') return 'Correction demandee';
+    if (key === 'draft_save') return 'Brouillon enregistre';
+    return action || 'Evenement';
+  };
+
+  const computeTableCompletionScore = (rows, columns) => {
+    if (!Array.isArray(rows) || rows.length === 0) return 0;
+    const cols = Array.isArray(columns) && columns.length > 0
+      ? columns
+      : Object.keys(rows[0] || {});
+    if (!Array.isArray(cols) || cols.length === 0) return 0;
+
+    const total = rows.length * cols.length;
+    if (total <= 0) return 0;
+
+    let filled = 0;
+    rows.forEach((row) => {
+      cols.forEach((col) => {
+        const value = row?.[col];
+        if (value !== null && value !== undefined && String(value).trim() !== '') {
+          filled += 1;
+        }
+      });
+    });
+
+    return Math.max(0, Math.min(100, Math.round((filled / total) * 100)));
+  };
+
+  const detectMetaLanguage = (key) => {
+    const normalized = String(key || '').toLowerCase();
+    if (normalized.endsWith('_ar')) return 'AR';
+    if (normalized.endsWith('_en')) return 'EN';
+    return 'FR';
+  };
+
+  const normalizeMetaLabel = (key) => {
+    const base = String(key || '')
+      .replace(/_(ar|en)$/i, '')
+      .replace(/[_\-]+/g, ' ')
+      .trim();
+    if (!base) return 'Champ';
+    return base.charAt(0).toUpperCase() + base.slice(1);
+  };
+
+  const formatMetaValue = (value) => {
+    if (value === null || value === undefined) return '';
+    if (typeof value === 'boolean') return value ? 'Oui' : 'Non';
+    if (typeof value === 'number') return String(value);
+    if (typeof value === 'string') return value.trim();
+    if (Array.isArray(value)) {
+      const cleaned = value
+        .map((item) => {
+          if (item === null || item === undefined) return '';
+          if (typeof item === 'object') return JSON.stringify(item);
+          return String(item).trim();
+        })
+        .filter((item) => item !== '');
+      return cleaned.join(' | ');
+    }
+    if (typeof value === 'object') return JSON.stringify(value, null, 2);
+    return String(value);
+  };
+
+  const flattenMetadataEntries = (source, parentPath = '') => {
+    if (!source || typeof source !== 'object') return [];
+    const entries = [];
+
+    Object.entries(source).forEach(([key, value]) => {
+      const currentPath = parentPath ? `${parentPath} / ${normalizeMetaLabel(key)}` : normalizeMetaLabel(key);
+
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        entries.push(...flattenMetadataEntries(value, currentPath));
+        return;
+      }
+
+      const formattedValue = formatMetaValue(value);
+      if (!String(formattedValue || '').trim()) return;
+
+      entries.push({
+        id: `${currentPath}-${key}`,
+        field: currentPath,
+        language: detectMetaLanguage(key),
+        value: formattedValue,
+      });
+    });
+
+    return entries;
   };
 
   const themeTicketAccents = [
@@ -2174,13 +2372,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                           )}
                         </td>
                         <td className="px-4 py-3 text-center">
-                          <span className={
-                            assignment.statut === 'Complété'
-                              ? 'px-2 py-1 bg-[#f4e3ed] text-[#7A0A4A] rounded text-xs font-medium inline-block'
-                              : assignment.statut === 'En attente'
-                              ? 'px-2 py-1 bg-[#f9f3f6] text-[#B03372] rounded text-xs font-medium inline-block'
-                              : 'px-2 py-1 bg-white border border-[#d8b6c8] text-[#7A0A4A] rounded text-xs font-medium inline-block'
-                          }>
+                          <span className={`px-2 py-1 rounded text-xs font-medium inline-flex items-center gap-1 ${getStatusBadgeClass(assignment.statut)}`}>
+                            <span className={`inline-block w-2 h-2 rounded-full ${getStatusDotClass(assignment.statut)}`} />
                             {assignment.statut}
                           </span>
                         </td>
@@ -2248,8 +2441,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               </button>
                               <button
                                 onClick={() => {
-                                  handleValidateSaisisseur(assignment.id);
-                                  setOpenMenuId(null);
+                                  openReviewModal('approve', assignment.id);
                                 }}
                                 className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm"
                               >
@@ -2257,8 +2449,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               </button>
                               <button
                                 onClick={() => {
-                                  handleRejectSaisisseur(assignment.id);
-                                  setOpenMenuId(null);
+                                  openReviewModal('reject', assignment.id);
                                 }}
                                 className="w-full text-left px-4 py-2 hover:bg-[#5E0738] text-white/90 flex items-center gap-2 text-sm"
                               >
@@ -2799,81 +2990,278 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
         </div>
       )}
 
+      {reviewModalOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-[60] p-4">
+          <div className="bg-white rounded-2xl border border-[#d5deea] w-full max-w-lg shadow-[0_20px_50px_rgba(24,46,78,0.2)] overflow-hidden">
+            <div className="px-5 py-4 border-b border-[#e3e9f2] bg-[#f7f9fc] flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#7A0A4A]">
+                {reviewAction === 'approve' ? 'Approuver la soumission' : 'Demander des corrections'}
+              </h3>
+              <button
+                type="button"
+                onClick={closeReviewModal}
+                disabled={reviewSubmitting}
+                className="text-[#667085] hover:text-[#274d73] text-xl leading-none disabled:opacity-50"
+                aria-label="Fermer"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="p-5 space-y-3">
+              <label className="block text-sm font-semibold text-[#344054]">
+                {reviewAction === 'approve' ? 'Commentaire (optionnel)' : 'Corrections demandées'}
+              </label>
+              <textarea
+                value={reviewMessage}
+                onChange={(e) => setReviewMessage(e.target.value)}
+                rows={5}
+                placeholder={reviewAction === 'approve' ? 'Ajouter un commentaire de validation...' : 'Décrivez les corrections à apporter...'}
+                className="w-full rounded-xl border border-[#d5deea] px-3 py-2 text-sm text-[#344054] outline-none focus:border-[#2f5d87]"
+              />
+              {reviewAction === 'reject' && (
+                <p className="text-xs text-[#8f245e]">Le message est obligatoire pour un retour de correction.</p>
+              )}
+            </div>
+
+            <div className="px-5 py-4 border-t border-[#e3e9f2] bg-white flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={closeReviewModal}
+                disabled={reviewSubmitting}
+                className="px-4 py-2 rounded-lg border border-[#d5deea] text-[#274d73] font-semibold hover:bg-[#eef4fb] disabled:opacity-60"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={submitReviewAction}
+                disabled={reviewSubmitting}
+                className={`px-4 py-2 rounded-lg text-white font-semibold disabled:opacity-60 ${reviewAction === 'approve' ? 'bg-[#7A0A4A] hover:bg-[#5E0738]' : 'bg-[#8f245e] hover:bg-[#741d4c]'}`}
+              >
+                {reviewSubmitting ? 'Envoi...' : reviewAction === 'approve' ? 'Confirmer l\'approbation' : 'Envoyer les corrections'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Modal: Aperçu Soumission Saisisseur */}
       {previewModalOpen && previewContent && (
         <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl border-2 border-[#d8b6c8] p-6 max-w-4xl w-full max-h-[90vh] overflow-auto shadow-[0_16px_32px_rgba(122,10,74,0.24)]">
-            <div className="flex justify-between items-center mb-4">
-              <h2 className="text-2xl font-bold text-[#7A0A4A]">Aperçu de la soumission — {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}</h2>
-              <button onClick={() => setPreviewModalOpen(false)} className="text-[#9a6f85] hover:text-[#7A0A4A] text-2xl">✕</button>
+          <div className="bg-white rounded-3xl border border-[#d5deea] p-6 md:p-7 max-w-5xl w-full max-h-[90vh] overflow-auto shadow-[0_22px_40px_rgba(24,46,78,0.18)]">
+            <div className="flex flex-col md:flex-row md:items-start md:justify-between gap-3 mb-5 pb-4 border-b border-[#e3e9f2]">
+              <div>
+                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-[#eef4fb] border border-[#d5deea] text-[#274d73] text-xs font-semibold uppercase tracking-wide">
+                  Revue administrateur
+                </div>
+                <h2 className="mt-3 text-xl md:text-2xl font-extrabold text-[#7A0A4A] leading-tight">
+                  Aperçu de la soumission
+                </h2>
+                <p className="mt-1 text-sm text-[#475467]">
+                  {previewContent.assignment.theme_titre}{previewContent.assignment.sous_theme_nom ? ` > ${previewContent.assignment.sous_theme_nom}` : ''}
+                </p>
+              </div>
+              <button
+                onClick={() => setPreviewModalOpen(false)}
+                className="self-start text-[#667085] hover:text-[#274d73] text-2xl px-2"
+                aria-label="Fermer l'aperçu"
+              >
+                ✕
+              </button>
             </div>
 
             <div className="space-y-5">
+              {(() => {
+                const tableRows = Array.isArray(previewContent.notes?.tables) ? previewContent.notes.tables : [];
+                const tableColumns = Array.isArray(previewContent.notes?.columns_order) && previewContent.notes.columns_order.length > 0
+                  ? previewContent.notes.columns_order
+                  : Object.keys(tableRows?.[0] || {});
+                const completionScore = computeTableCompletionScore(tableRows, tableColumns);
+                const scoreTone = completionScore >= 85
+                  ? 'bg-green-100 text-green-800 border border-green-200'
+                  : completionScore >= 60
+                    ? 'bg-amber-100 text-amber-800 border border-amber-200'
+                    : 'bg-red-100 text-red-800 border border-red-200';
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-3">
+                    <div className="border border-[#d5deea] rounded-xl p-3 bg-white">
+                      <div className="text-[11px] uppercase tracking-wide text-[#667085]">Saisisseur</div>
+                      <div className="text-sm font-semibold text-[#4d1734] mt-1">{previewContent.assignment.user_name || '—'}</div>
+                    </div>
+                    <div className="border border-[#d5deea] rounded-xl p-3 bg-white">
+                      <div className="text-[11px] uppercase tracking-wide text-[#667085]">Date de soumission</div>
+                      <div className="text-sm font-semibold text-[#4d1734] mt-1">{formatAssignmentDate(previewContent.assignment.date_completion || previewContent.assignment.updated_at || previewContent.assignment.created_at)}</div>
+                    </div>
+                    <div className="border border-[#d5deea] rounded-xl p-3 bg-white">
+                      <div className="text-[11px] uppercase tracking-wide text-[#667085]">Statut</div>
+                      <div className="mt-1">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${getStatusBadgeClass(previewContent.assignment.statut)}`}>
+                          <span className={`w-2 h-2 rounded-full ${getStatusDotClass(previewContent.assignment.statut)}`} />
+                          {previewContent.assignment.statut || 'En cours'}
+                        </span>
+                      </div>
+                    </div>
+                    <div className="border border-[#d5deea] rounded-xl p-3 bg-white">
+                      <div className="text-[11px] uppercase tracking-wide text-[#667085]">Progression</div>
+                      <div className="text-sm font-semibold text-[#4d1734] mt-1">{Number(previewContent.assignment.progression || 0)}%</div>
+                      <div className="mt-2 h-1.5 rounded-full bg-[#dbe6f3] overflow-hidden">
+                        <div
+                          className="h-full bg-[#2f5d87]"
+                          style={{ width: `${Math.max(0, Math.min(100, Number(previewContent.assignment.progression || 0)))}%` }}
+                        />
+                      </div>
+                    </div>
+                    <div className="border border-[#d5deea] rounded-xl p-3 bg-white">
+                      <div className="text-[11px] uppercase tracking-wide text-[#667085]">Qualite des donnees</div>
+                      <div className="mt-1">
+                        <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold ${scoreTone}`}>
+                          {completionScore}%
+                        </span>
+                      </div>
+                      <div className="text-[11px] text-[#667085] mt-1">Cellules renseignees</div>
+                    </div>
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
-                  <div className="text-xs text-[#8c4f6a]">Lignes tableau</div>
-                  <div className="text-2xl font-black text-[#7A0A4A]">{Array.isArray(previewContent.notes.tables) ? previewContent.notes.tables.length : 0}</div>
+                <div className="border border-[#d5deea] rounded-xl p-4 bg-gradient-to-br from-[#fff] to-[#f4f8fd]">
+                  <div className="text-[11px] uppercase tracking-wide text-[#667085]">Lignes tableau</div>
+                  <div className="text-2xl font-black text-[#7A0A4A] mt-1">{Array.isArray(previewContent.notes.tables) ? previewContent.notes.tables.length : 0}</div>
                 </div>
-                <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
-                  <div className="text-xs text-[#8c4f6a]">Colonnes</div>
-                  <div className="text-2xl font-black text-[#7A0A4A]">{(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
+                <div className="border border-[#d5deea] rounded-xl p-4 bg-gradient-to-br from-[#fff] to-[#f4f8fd]">
+                  <div className="text-[11px] uppercase tracking-wide text-[#667085]">Colonnes</div>
+                  <div className="text-2xl font-black text-[#7A0A4A] mt-1">{(Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
                     ? previewContent.notes.columns_order.length
                     : Object.keys(previewContent.notes.tables?.[0] || {}).length)}</div>
                 </div>
-                <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
-                  <div className="text-xs text-[#8c4f6a]">Graphiques</div>
-                  <div className="text-2xl font-black text-[#7A0A4A]">{Array.isArray(previewContent.notes.charts) ? previewContent.notes.charts.length : 0}</div>
+                <div className="border border-[#d5deea] rounded-xl p-4 bg-gradient-to-br from-[#fff] to-[#f4f8fd]">
+                  <div className="text-[11px] uppercase tracking-wide text-[#667085]">Graphiques</div>
+                  <div className="text-2xl font-black text-[#7A0A4A] mt-1">{Array.isArray(previewContent.notes.charts) ? previewContent.notes.charts.length : 0}</div>
                 </div>
               </div>
 
               {String(previewContent.notes.last_submit_comment || '').trim() !== '' && (
                 <div>
-                  <h3 className="font-bold mb-2">Message du saisisseur</h3>
-                  <div className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fff7db] text-[#5E0738] whitespace-pre-wrap">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Message du saisisseur</h3>
+                  <div className="border border-[#ead29a] rounded-xl p-4 bg-[#fff7db] text-[#5E0738] whitespace-pre-wrap leading-relaxed">
                     {String(previewContent.notes.last_submit_comment || '').trim()}
                   </div>
                 </div>
               )}
 
               <div>
-                <h3 className="font-bold mb-2">Métadonnées</h3>
-                {Object.entries(previewContent.notes.meta || {}).filter(([, value]) => String(value || '').trim() !== '').length > 0 ? (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                    {Object.entries(previewContent.notes.meta || {}).filter(([, value]) => String(value || '').trim() !== '').map(([key, value]) => (
-                      <div key={key} className="border border-[#e5c9d7] rounded-lg p-3 bg-[#fcf4f8]">
-                        <div className="text-xs uppercase tracking-wide text-[#8c4f6a]">{key}</div>
-                        <div className="text-sm text-[#4d1734] mt-1 whitespace-pre-wrap">{String(value)}</div>
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <div className="text-sm text-gray-600">Aucune métadonnée renseignée</div>
-                )}
+                <h3 className="text-sm font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Métadonnées</h3>
+                {(() => {
+                  const metaSource = (previewContent.notes?.meta && typeof previewContent.notes.meta === 'object')
+                    ? previewContent.notes.meta
+                    : (previewContent.notes?.metadata && typeof previewContent.notes.metadata === 'object')
+                      ? previewContent.notes.metadata
+                      : {};
+                  const metaEntries = flattenMetadataEntries(metaSource)
+                    .sort((a, b) => `${a.language}-${a.field}`.localeCompare(`${b.language}-${b.field}`, 'fr'));
+
+                  if (metaEntries.length === 0) {
+                    return <div className="text-sm text-gray-600">Aucune métadonnée renseignée</div>;
+                  }
+
+                  const groups = [
+                    { code: 'FR', label: 'Français', tone: 'bg-[#f4f8fd] border-[#d5deea] text-[#2f5d87]' },
+                    { code: 'AR', label: 'العربية', tone: 'bg-[#f7f9fc] border-[#dfe5ef] text-[#43526a]' },
+                    { code: 'EN', label: 'English', tone: 'bg-[#f4f8fd] border-[#d5deea] text-[#2f5d87]' },
+                  ];
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                      {groups.map((group) => {
+                        const entries = metaEntries.filter((entry) => entry.language === group.code);
+                        return (
+                          <div key={group.code} className="border border-[#d5deea] rounded-xl bg-white overflow-hidden">
+                            <div className={`px-3 py-2 text-xs font-bold uppercase tracking-wide border-b ${group.tone}`}>
+                              {group.label}
+                            </div>
+                            <div className="p-3 space-y-2 max-h-72 overflow-auto">
+                              {entries.length === 0 ? (
+                                <div className="text-xs text-[#667085]">Aucune donnée</div>
+                              ) : (
+                                entries.map((entry, idx) => (
+                                  <div key={`${entry.id}-${idx}`} className="rounded-lg border border-[#e3e9f2] bg-[#f9fbfe] p-2">
+                                    <div className="text-xs font-semibold text-[#2f5d87]">{entry.field}</div>
+                                    <div className="text-xs text-[#344054] whitespace-pre-wrap break-words mt-1">{entry.value}</div>
+                                  </div>
+                                ))
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  );
+                })()}
               </div>
 
               <div>
-                <h3 className="font-bold mb-2">Graphiques</h3>
+                <h3 className="text-sm font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Graphiques</h3>
                 {Array.isArray(previewContent.notes.charts) && previewContent.notes.charts.length > 0 ? (
-                  <div className="space-y-2">
+                  <div className="space-y-3">
                     {previewContent.notes.charts.map((chart, index) => (
-                      <div key={index} className="border border-[#e5c9d7] rounded-lg p-3 bg-white">
-                        <div className="font-semibold text-[#7A0A4A]">{chart.title || `Graphique ${index + 1}`}</div>
-                        <div className="text-sm text-[#4d1734] mt-1">
+                      <div key={index} className="border border-[#d5deea] rounded-xl p-4 bg-white shadow-[0_4px_12px_rgba(24,46,78,0.08)]">
+                        <div className="font-semibold text-[#7A0A4A] text-base">{chart.title || `Graphique ${index + 1}`}</div>
+                        <div className="text-sm text-[#4d1734] mt-1 leading-relaxed">
                           Type: {chart.type || '—'} | X: {chart.x || '—'} | Y: {chart.y || '—'}
                         </div>
                         {(chart.filter_column || chart.filter_value) && (
-                          <div className="text-xs text-[#8c4f6a] mt-1">
+                          <div className="text-xs text-[#667085] mt-1">
                             Filtre principal: {chart.filter_column || '—'} = {chart.filter_value || '—'} ({chart.filter_mode || 'include'})
                           </div>
                         )}
                         {Array.isArray(chart.filters) && chart.filters.length > 0 && (
-                          <div className="text-xs text-[#8c4f6a] mt-1">
+                          <div className="text-xs text-[#667085] mt-1">
                             Filtres additionnels: {chart.filters.map((f) => `${f.column || 'col'}=${f.value || ''}`).join(' | ')}
                           </div>
                         )}
-                        <div className="mt-3 h-52 border border-[#efdce6] rounded bg-[#fffafb] p-2">
+                        {extractInteractiveFilterDefs(chart).length > 0 && (
+                          <div className="mt-3 border border-[#dfe5ef] rounded-lg p-2 bg-[#f7f9fc]">
+                            <div className="text-xs font-semibold text-[#2f5d87] mb-2">Filtres interactifs (comme saisisseur)</div>
+                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                              {extractInteractiveFilterDefs(chart).map((def) => {
+                                const key = String(chart?.id || index);
+                                const selectedValue = previewChartFilters?.[key]?.[def.column] ?? '';
+                                const options = getPreviewFilterOptions(previewContent.notes, def.column);
+                                return (
+                                  <div key={`${key}-${def.column}`}>
+                                    <label className="block text-xs text-[#475467] mb-1">{def.column}</label>
+                                    <select
+                                      value={selectedValue}
+                                      onChange={(e) => {
+                                        const v = e.target.value;
+                                        setPreviewChartFilters((prev) => ({
+                                          ...(prev || {}),
+                                          [key]: {
+                                            ...((prev || {})[key] || {}),
+                                            [def.column]: v,
+                                          },
+                                        }));
+                                      }}
+                                      className="w-full px-2 py-1.5 border border-[#d5deea] rounded bg-white text-sm text-[#344054]"
+                                    >
+                                      <option value="">-- Tous --</option>
+                                      {options.map((opt) => (
+                                        <option key={`${def.column}-${opt}`} value={opt}>{opt}</option>
+                                      ))}
+                                    </select>
+                                  </div>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        )}
+                        <div className="mt-3 h-56 border border-[#dfe5ef] rounded-xl bg-[#f9fbfe] p-2">
                           {(() => {
-                            const previewData = makeChartPreviewData(chart, previewContent.notes);
+                            const chartKey = String(chart?.id || index);
+                            const previewData = makeChartPreviewData(chart, previewContent.notes, previewChartFilters?.[chartKey] || {});
                             const isArrayData = Array.isArray(previewData);
                             const hasData = isArrayData
                               ? previewData.length > 0
@@ -2936,7 +3324,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     <XAxis dataKey="x" type="number" />
                                     <YAxis dataKey="y" type="number" />
                                     <Tooltip cursor={{ strokeDasharray: '3 3' }} />
-                                    <Scatter data={previewData} fill="#B03372" />
+                                    <Scatter data={previewData} fill="#2f5d87" />
                                   </ScatterChart>
                                 </ResponsiveContainer>
                               );
@@ -2974,7 +3362,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                     <XAxis dataKey="name" />
                                     <YAxis />
                                     <Tooltip />
-                                    <Line type="monotone" dataKey="value" stroke="#7A0A4A" strokeWidth={2} dot={false} />
+                                    <Line type="monotone" dataKey="value" stroke="#2f5d87" strokeWidth={2} dot={false} />
                                   </LineChart>
                                 </ResponsiveContainer>
                               );
@@ -3004,7 +3392,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                                   <XAxis dataKey="name" />
                                   <YAxis />
                                   <Tooltip />
-                                  <Bar dataKey="value" fill="#7A0A4A" radius={[4, 4, 0, 0]} />
+                                  <Bar dataKey="value" fill="#2f5d87" radius={[4, 4, 0, 0]} />
                                 </BarChart>
                               </ResponsiveContainer>
                             );
@@ -3019,7 +3407,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               </div>
 
               <div>
-                <h3 className="font-bold mb-2">Tableau (aperçu)</h3>
+                <h3 className="text-sm font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Tableau (aperçu)</h3>
                 {Array.isArray(previewContent.notes.tables) && previewContent.notes.tables.length > 0 ? (
                   (() => {
                     const columns = (Array.isArray(previewContent.notes.columns_order) && previewContent.notes.columns_order.length > 0
@@ -3034,17 +3422,17 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
                     return (
                       <>
-                        <div className="mb-2 flex items-center justify-between gap-2">
-                          <div className="text-xs text-[#8c4f6a]">Colonnes: {columns.length}</div>
+                        <div className="mb-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 rounded-xl border border-[#dfe5ef] bg-[#f7f9fc] px-3 py-2">
+                          <div className="text-xs text-[#667085]">Colonnes: {columns.length}</div>
                           <div className="flex items-center gap-2 text-sm">
-                            <label className="text-[#6b2949]">Lignes par page</label>
+                            <label className="text-[#475467]">Lignes par page</label>
                             <select
                               value={previewPageSize}
                               onChange={(e) => {
                                 setPreviewPageSize(Number(e.target.value));
                                 setPreviewTablePage(1);
                               }}
-                              className="border border-[#d8b6c8] rounded px-2 py-1 bg-white text-[#7A0A4A]"
+                              className="border border-[#d5deea] rounded px-2 py-1 bg-white text-[#274d73]"
                             >
                               <option value={12}>12</option>
                               <option value={25}>25</option>
@@ -3055,20 +3443,20 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                           </div>
                         </div>
 
-                        <div className="overflow-auto border border-[#e5c9d7] rounded-lg">
+                        <div className="overflow-auto border border-[#d5deea] rounded-xl shadow-[inset_0_1px_0_rgba(255,255,255,0.8)]">
                           <table className="w-full table-auto text-sm">
-                            <thead className="bg-[#f8edf3] text-[#7A0A4A]">
+                            <thead className="bg-[#eef4fb] text-[#274d73] sticky top-0 z-10">
                               <tr>
                                 {columns.map((header) => (
-                                  <th key={header} className="px-2 py-1 text-left border-b border-[#e5c9d7]">{header}</th>
+                                  <th key={header} className="px-3 py-2 text-left border-b border-[#d5deea] text-xs uppercase tracking-wide font-bold">{header}</th>
                                 ))}
                               </tr>
                             </thead>
                             <tbody>
                               {pageRows.map((row, rowIdx) => (
-                                <tr key={rowIdx} className="border-t border-[#efdce6] odd:bg-white even:bg-[#fcf4f8]">
+                                <tr key={rowIdx} className="border-t border-[#e9edf4] odd:bg-white even:bg-[#f9fbfe]">
                                   {columns.map((header, colIdx) => (
-                                    <td key={`${rowIdx}-${colIdx}`} className="px-2 py-1">{String(row?.[header] ?? '')}</td>
+                                    <td key={`${rowIdx}-${colIdx}`} className="px-3 py-2 text-[#4d1734]">{String(row?.[header] ?? '')}</td>
                                   ))}
                                 </tr>
                               ))}
@@ -3076,7 +3464,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                           </table>
                         </div>
 
-                        <div className="mt-3 flex items-center justify-between text-sm text-[#6b2949]">
+                        <div className="mt-3 flex items-center justify-between text-sm text-[#475467]">
                           <div>
                             Lignes {start + 1} à {Math.min(start + pageSize, allRows.length)} sur {allRows.length}
                           </div>
@@ -3085,7 +3473,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               type="button"
                               disabled={safePage <= 1}
                               onClick={() => setPreviewTablePage((p) => Math.max(1, p - 1))}
-                              className={`px-3 py-1 border rounded ${safePage <= 1 ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]'}`}
+                              className={`px-3 py-1 border rounded ${safePage <= 1 ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-[#274d73] border-[#d5deea] hover:bg-[#eef4fb]'}`}
                             >
                               Précédent
                             </button>
@@ -3094,7 +3482,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               type="button"
                               disabled={safePage >= totalPages}
                               onClick={() => setPreviewTablePage((p) => Math.min(totalPages, p + 1))}
-                              className={`px-3 py-1 border rounded ${safePage >= totalPages ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-[#7A0A4A] border-[#d8b6c8] hover:bg-[#f7eaf1]'}`}
+                              className={`px-3 py-1 border rounded ${safePage >= totalPages ? 'bg-gray-100 text-gray-400 border-gray-200' : 'bg-white text-[#274d73] border-[#d5deea] hover:bg-[#eef4fb]'}`}
                             >
                               Suivant
                             </button>
@@ -3111,8 +3499,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               {/* Configuration Visiteur soumise par le saisisseur */}
               {previewContent.notes.visitor_config && typeof previewContent.notes.visitor_config === 'object' && (
                 <div>
-                  <h3 className="font-bold mb-2">Configuration Visiteur (soumise par le saisisseur)</h3>
-                  <div className="border border-[#e5c9d7] rounded-lg p-4 bg-[#fcf4f8] space-y-3">
+                  <h3 className="text-sm font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">Configuration visiteur (soumise par le saisisseur)</h3>
+                  <div className="border border-[#d5deea] rounded-xl p-4 bg-[#f7f9fc] space-y-3">
                     {(() => {
                       const vc = previewContent.notes.visitor_config;
                       return (
@@ -3122,7 +3510,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             {Array.isArray(vc.visitor_visible_columns) && vc.visitor_visible_columns.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {vc.visitor_visible_columns.map(c => (
-                                  <span key={c} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{c}</span>
+                                  <span key={c} className="bg-[#eef4fb] text-[#274d73] px-2 py-0.5 rounded text-xs border border-[#d5deea]">{c}</span>
                                 ))}
                               </div>
                             ) : <span className="text-sm text-gray-500">Toutes les colonnes</span>}
@@ -3132,7 +3520,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             {Array.isArray(vc.visitor_filters) && vc.visitor_filters.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {vc.visitor_filters.map(f => (
-                                  <span key={f} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{f}</span>
+                                  <span key={f} className="bg-[#eef4fb] text-[#274d73] px-2 py-0.5 rounded text-xs border border-[#d5deea]">{f}</span>
                                 ))}
                               </div>
                             ) : <span className="text-sm text-gray-500">Aucun</span>}
@@ -3142,7 +3530,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                             {Array.isArray(vc.visitor_pivot_columns) && vc.visitor_pivot_columns.length > 0 ? (
                               <div className="flex flex-wrap gap-1">
                                 {vc.visitor_pivot_columns.map(c => (
-                                  <span key={c} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{c}</span>
+                                  <span key={c} className="bg-[#eef4fb] text-[#274d73] px-2 py-0.5 rounded text-xs border border-[#d5deea]">{c}</span>
                                 ))}
                               </div>
                             ) : <span className="text-sm text-gray-500">Aucune</span>}
@@ -3156,7 +3544,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               <div className="text-xs uppercase tracking-wide text-[#8c4f6a] mb-1">Filtres par défaut</div>
                               <div className="flex flex-wrap gap-1">
                                 {Object.entries(vc.visitor_default_filters).map(([k, v]) => (
-                                  <span key={k} className="bg-[#f4e3ed] text-[#7A0A4A] px-2 py-0.5 rounded text-xs border border-[#d8b6c8]">{k} = {String(v)}</span>
+                                  <span key={k} className="bg-[#eef4fb] text-[#274d73] px-2 py-0.5 rounded text-xs border border-[#d5deea]">{k} = {String(v)}</span>
                                 ))}
                               </div>
                             </div>
@@ -3169,8 +3557,39 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               )}
             </div>
 
-            <div className="mt-4 flex justify-end gap-2">
-              <button onClick={() => setPreviewModalOpen(false)} className="px-4 py-2 bg-[#f4e3ed] text-[#7A0A4A] border border-[#d8b6c8] rounded">Fermer</button>
+            <div className="mt-6 flex flex-wrap justify-end gap-2 border-t border-[#e3e9f2] pt-4">
+              <button
+                onClick={async () => {
+                  await handleOpenSubmissionPreview(previewContent.assignment.id);
+                }}
+                className="px-4 py-2.5 bg-white text-[#274d73] border border-[#d5deea] rounded-xl font-semibold hover:bg-[#eef4fb]"
+              >
+                Actualiser
+              </button>
+              <button
+                onClick={async () => {
+                  if (!previewContent.assignment?.id) return;
+                  openReviewModal('reject', previewContent.assignment.id);
+                }}
+                className="px-4 py-2.5 bg-white text-[#8f245e] border border-[#d5deea] rounded-xl font-semibold hover:bg-[#f5f7fb]"
+              >
+                Demander correction
+              </button>
+              <button
+                onClick={async () => {
+                  if (!previewContent.assignment?.id) return;
+                  openReviewModal('approve', previewContent.assignment.id);
+                }}
+                className="px-4 py-2.5 bg-[#7A0A4A] text-white border border-[#B03372] rounded-xl font-semibold hover:bg-[#5E0738]"
+              >
+                Approuver
+              </button>
+              <button
+                onClick={() => setPreviewModalOpen(false)}
+                className="px-5 py-2.5 bg-[#eef4fb] text-[#274d73] border border-[#d5deea] rounded-xl font-semibold hover:bg-[#e4edf8]"
+              >
+                Fermer
+              </button>
             </div>
           </div>
         </div>

@@ -240,6 +240,8 @@ function App({ forceVisitor = false }) {
   const [importDialog, setImportDialog] = useState({ open: false, mode: null, file: null, fileAr: null, fileEn: null });
   const [showAll, setShowAll] = useState(false);
   const [activeDataTab, setActiveDataTab] = useState('tableau');
+  const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
+  const [submitConfirmLoading, setSubmitConfirmLoading] = useState(false);
   const [visitorTableView, setVisitorTableView] = useState('horizontal');
   const [columnFilters, setColumnFilters] = useState({});
   const [dynamicFilters, setDynamicFilters] = useState({});
@@ -943,10 +945,28 @@ function App({ forceVisitor = false }) {
 
     const notes = parseAssignmentNotes(linkedAssignment.notes);
     const draftSubTheme = { ...subTheme };
+    const draftI18nTables = (notes.tables_i18n && typeof notes.tables_i18n === 'object') ? notes.tables_i18n : {};
 
-    if (Array.isArray(notes.tables)) {
-      draftSubTheme.data = notes.tables;
-      draftSubTheme.data_json = notes.tables;
+    const preferredDraftRows = (() => {
+      if (activeDataLanguage === 'ar' && Array.isArray(draftI18nTables.ar) && draftI18nTables.ar.length > 0) {
+        return draftI18nTables.ar;
+      }
+      if (activeDataLanguage === 'en' && Array.isArray(draftI18nTables.en) && draftI18nTables.en.length > 0) {
+        return draftI18nTables.en;
+      }
+      if (Array.isArray(notes.tables) && notes.tables.length > 0) {
+        return notes.tables;
+      }
+      return null;
+    })();
+
+    if (Array.isArray(preferredDraftRows)) {
+      draftSubTheme.data = preferredDraftRows;
+      draftSubTheme.data_json = preferredDraftRows;
+      // In draft mode, always render from draft rows (not from persisted i18n payload)
+      // to avoid showing stale visitor/admin published tables with empty mapped cells.
+      draftSubTheme.data_is_bilingual = false;
+      draftSubTheme.data_json_i18n = {};
     }
 
     if (Array.isArray(notes.columns_order) && notes.columns_order.length > 0) {
@@ -1081,6 +1101,49 @@ function App({ forceVisitor = false }) {
     } catch (err) {
       console.error('Erreur sauvegarde brouillon saisisseur', err);
       alert('Erreur lors de l\'enregistrement du brouillon');
+    }
+  };
+
+  const submitCurrentSubThemeForReview = async () => {
+    try {
+      setSubmitConfirmLoading(true);
+      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurRequestConfig = saisisseurToken
+        ? { headers: { Authorization: `Token ${saisisseurToken}` } }
+        : {};
+
+      const notes = collectCurrentSaisisseurDraftPayload();
+      await saveDraftAssignmentForSaisisseur(notes, 'En cours');
+
+      let assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme?.id);
+      if (!assignment?.id) {
+        const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+        const refreshResp = await axios.get(`${API_BASE}/user-theme-assignments/`, saisisseurRequestConfig);
+        const myAssignments = (refreshResp.data || []).filter((a) => String(a.user) === String(userId) && a.sous_theme);
+        setSaisisseurAssignments(myAssignments);
+        assignment = myAssignments.find((a) => String(a.sous_theme) === String(selectedSubTheme?.id));
+      }
+
+      if (!assignment?.id) {
+        throw new Error('Assignation introuvable pour ce sous-thème.');
+      }
+
+      const submitRes = await axios.post(
+        `${API_BASE}/user-theme-assignments/${assignment.id}/submit/`,
+        {
+          message: 'Soumission depuis l\'éditeur du sous-thème',
+          progression: 100,
+        },
+        saisisseurRequestConfig,
+      );
+      applyUpdatedAssignmentToState(submitRes.data);
+      showToast('Soumis aux administrateurs', 'success');
+      setSubmitConfirmOpen(false);
+    } catch (err) {
+      console.error(err);
+      alert(err?.response?.data?.error || err?.message || 'Impossible de soumettre');
+    } finally {
+      setSubmitConfirmLoading(false);
     }
   };
 
@@ -2459,9 +2522,11 @@ function App({ forceVisitor = false }) {
 
   const saveEditedTable = async () => {
     try {
-      const finalColumns = (editTableColumns || [])
-        .map((c) => String(c ?? '').trim())
-        .filter((c) => c !== '');
+      const rawColumns = (editTableColumns || []).map((c) => String(c ?? ''));
+      const columnPairs = rawColumns
+        .map((raw) => ({ raw, trimmed: raw.trim() }))
+        .filter((item) => item.trimmed !== '');
+      const finalColumns = columnPairs.map((item) => item.trimmed);
 
       if (finalColumns.length === 0) {
         alert('Veuillez définir au moins une colonne');
@@ -2474,7 +2539,12 @@ function App({ forceVisitor = false }) {
       }
 
       const normalizedRows = (editTableRows || []).map((row) =>
-        Object.fromEntries(finalColumns.map((col) => [col, row?.[col] ?? '']))
+        Object.fromEntries(
+          columnPairs.map(({ raw, trimmed }) => [
+            trimmed,
+            row?.[raw] ?? row?.[trimmed] ?? '',
+          ])
+        )
       );
 
       if (isSaisisseur) {
@@ -2508,7 +2578,75 @@ function App({ forceVisitor = false }) {
     }
   };
 
-  const normalizeCol = (v) => String(v || '').trim().toLowerCase().replace(/[^a-z0-9]/g, '');
+  const normalizeCol = (v) => normalizeDataToken(v);
+
+  const buildSourceColumnLookup = (sourceColumns = []) => {
+    const lookup = new Map();
+    (sourceColumns || []).forEach((sourceCol) => {
+      const raw = String(sourceCol || '').trim();
+      if (!raw) return;
+      const normalized = normalizeCol(raw);
+      if (normalized && !lookup.has(`norm:${normalized}`)) {
+        lookup.set(`norm:${normalized}`, raw);
+      }
+
+      const canonical = getCanonicalColumnCode(raw);
+      if (canonical && !lookup.has(`code:${canonical}`)) {
+        lookup.set(`code:${canonical}`, raw);
+      }
+
+      const englishFallback = normalizeCol(toEnglishLabelFallback(raw));
+      if (englishFallback && !lookup.has(`norm:${englishFallback}`)) {
+        lookup.set(`norm:${englishFallback}`, raw);
+      }
+    });
+    return lookup;
+  };
+
+  const resolveSourceColumn = (targetCol, sourceLookup) => {
+    const targetRaw = String(targetCol || '').trim();
+    if (!targetRaw) return null;
+
+    const directNorm = normalizeCol(targetRaw);
+    if (directNorm && sourceLookup.has(`norm:${directNorm}`)) {
+      return sourceLookup.get(`norm:${directNorm}`);
+    }
+
+    const canonical = getCanonicalColumnCode(targetRaw);
+    if (canonical) {
+      if (sourceLookup.has(`code:${canonical}`)) {
+        return sourceLookup.get(`code:${canonical}`);
+      }
+
+      const labels = bilingualLabelLookup.columnLabelsByCode?.[canonical] || {};
+      const candidateLabels = [labels.fr, labels.ar, labels.en].filter(Boolean);
+      for (const label of candidateLabels) {
+        const labelNorm = normalizeCol(label);
+        if (labelNorm && sourceLookup.has(`norm:${labelNorm}`)) {
+          return sourceLookup.get(`norm:${labelNorm}`);
+        }
+      }
+    }
+
+    const englishFallback = normalizeCol(toEnglishLabelFallback(targetRaw));
+    if (englishFallback && sourceLookup.has(`norm:${englishFallback}`)) {
+      return sourceLookup.get(`norm:${englishFallback}`);
+    }
+
+    return null;
+  };
+
+  const mapRowsToTargetColumns = (rows, sourceColumns, targetColumns) => {
+    const sourceLookup = buildSourceColumnLookup(sourceColumns || []);
+    return (rows || []).map((row) => {
+      const output = {};
+      (targetColumns || []).forEach((targetCol) => {
+        const sourceCol = resolveSourceColumn(targetCol, sourceLookup);
+        output[targetCol] = sourceCol ? (row?.[sourceCol] ?? '') : '';
+      });
+      return output;
+    });
+  };
 
   const readExcelRows = async (excelFile) => {
     const XLSX = await import('xlsx-js-style');
@@ -2565,11 +2703,22 @@ function App({ forceVisitor = false }) {
     if (isSaisisseur) {
       const imported = await readExcelRows(file);
       if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
-      await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
+      const importedAr = fileAr ? await readExcelRows(fileAr) : null;
+      const importedEn = fileEn ? await readExcelRows(fileEn) : null;
+      const targetColumns = imported.columns;
+      const draftI18nTables = {
+        fr: imported.rows,
+      };
+      if (importedAr?.rows?.length) {
+        draftI18nTables.ar = mapRowsToTargetColumns(importedAr.rows, importedAr.columns, targetColumns);
+      }
+      if (importedEn?.rows?.length) {
+        draftI18nTables.en = mapRowsToTargetColumns(importedEn.rows, importedEn.columns, targetColumns);
+      }
+      await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: targetColumns, tables_i18n: draftI18nTables }, 'En cours');
       setEditTableColumns(imported.columns);
       setEditTableRows(imported.rows);
-      alert('Import effectue en brouillon (saisisseur).');
+      alert('Import effectue en brouillon (saisisseur) avec gestion FR/AR/EN.');
       return;
     }
 
@@ -2592,35 +2741,28 @@ function App({ forceVisitor = false }) {
   const executeSmartImport = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
-      const imported = await readExcelRows(file);
-      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
+      const fd = new FormData();
+      fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
+      fd.append('free_schema', 'true');
 
-      const targetColumns = (editTableColumns && editTableColumns.length > 0)
-        ? editTableColumns
-        : (selectedSubTheme?.columns || (getTableRows(selectedSubTheme)?.[0] ? Object.keys(getTableRows(selectedSubTheme)[0]) : []));
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/import-smart-preview/`, fd);
+      const mappedRows = Array.isArray(result?.data?.data) ? result.data.data : [];
+      const targetColumns = Array.isArray(result?.data?.columns_order) && result.data.columns_order.length > 0
+        ? result.data.columns_order
+        : (mappedRows[0] ? Object.keys(mappedRows[0]) : []);
+      if (!targetColumns.length) throw new Error('Impossible de déterminer les colonnes cibles après import IA.');
 
-      if (!targetColumns || targetColumns.length === 0) {
-        await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: imported.columns }, 'En cours');
-        setEditTableColumns(imported.columns);
-        setEditTableRows(imported.rows);
-        alert('Import brouillon effectue. Aucune structure cible trouvee, colonnes source conservees.');
-        return;
-      }
+      const draftI18nTables = (result?.data?.tables_i18n && typeof result.data.tables_i18n === 'object')
+        ? result.data.tables_i18n
+        : { fr: mappedRows };
 
-      const sourceByNorm = new Map(imported.columns.map((c) => [normalizeCol(c), c]));
-      const mappedRows = imported.rows.map((r) => {
-        const out = {};
-        targetColumns.forEach((tc) => {
-          const src = sourceByNorm.get(normalizeCol(tc));
-          out[tc] = src ? (r?.[src] ?? '') : '';
-        });
-        return out;
-      });
-      await saveDraftAssignmentForSaisisseur({ tables: mappedRows, columns_order: targetColumns }, 'En cours');
+      await saveDraftAssignmentForSaisisseur({ tables: mappedRows, columns_order: targetColumns, tables_i18n: draftI18nTables }, 'En cours');
       setEditTableColumns(targetColumns);
       setEditTableRows(mappedRows);
-      alert('Import IA brouillon effectue (remappage local vers la structure cible).');
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      alert(warningText ? `Import IA brouillon effectue\n${warningText}` : 'Import IA brouillon effectue.');
       return;
     }
 
@@ -2645,9 +2787,13 @@ function App({ forceVisitor = false }) {
     if (isSaisisseur) {
       const imported = await readExcelRows(file);
       if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
+      const importedAr = fileAr ? await readExcelRows(fileAr) : null;
+      const importedEn = fileEn ? await readExcelRows(fileEn) : null;
       const existingRows = editTableRows || [];
       const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
+      const assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme?.id);
+      const existingNotes = parseAssignmentNotes(assignment?.notes);
+      const existingI18nTables = (existingNotes.tables_i18n && typeof existingNotes.tables_i18n === 'object') ? existingNotes.tables_i18n : {};
       if (existingColumns.length > 0) {
         const expectedSet = new Set(existingColumns.map((c) => String(c || '').trim()));
         const incomingSet = new Set((imported.columns || []).map((c) => String(c || '').trim()));
@@ -2656,7 +2802,19 @@ function App({ forceVisitor = false }) {
       }
       const normalizedRows = imported.rows.map((row) => Object.fromEntries(existingColumns.map((col) => [col, row?.[col] ?? ''])));
       const mergedRows = [...existingRows, ...normalizedRows];
-      await saveDraftAssignmentForSaisisseur({ tables: mergedRows, columns_order: existingColumns }, 'En cours');
+      const mergedI18nTables = {
+        ...existingI18nTables,
+        fr: Array.isArray(existingI18nTables.fr) ? [...existingI18nTables.fr, ...normalizedRows] : mergedRows,
+      };
+      if (importedAr?.rows?.length) {
+        const normalizedRowsAr = mapRowsToTargetColumns(importedAr.rows, importedAr.columns, existingColumns);
+        mergedI18nTables.ar = Array.isArray(existingI18nTables.ar) ? [...existingI18nTables.ar, ...normalizedRowsAr] : normalizedRowsAr;
+      }
+      if (importedEn?.rows?.length) {
+        const normalizedRowsEn = mapRowsToTargetColumns(importedEn.rows, importedEn.columns, existingColumns);
+        mergedI18nTables.en = Array.isArray(existingI18nTables.en) ? [...existingI18nTables.en, ...normalizedRowsEn] : normalizedRowsEn;
+      }
+      await saveDraftAssignmentForSaisisseur({ tables: mergedRows, columns_order: existingColumns, tables_i18n: mergedI18nTables }, 'En cours');
       setEditTableColumns(existingColumns);
       setEditTableRows(mergedRows);
       alert(`${normalizedRows.length} ligne(s) ajoutee(s) au brouillon.`);
@@ -2683,25 +2841,44 @@ function App({ forceVisitor = false }) {
   const executeSmartAppend = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
-      const imported = await readExcelRows(file);
-      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      if (fileAr || fileEn) throw new Error('Les versions AR/EN ne sont pas prises en charge en brouillon saisisseur.');
-      const existingRows = editTableRows || [];
-      const existingColumns = (editTableColumns && editTableColumns.length > 0) ? editTableColumns : imported.columns;
-      const sourceByNorm = new Map((imported.columns || []).map((c) => [normalizeCol(c), c]));
-      const mappedRows = imported.rows.map((row) => {
-        const out = {};
-        existingColumns.forEach((targetCol) => {
-          const src = sourceByNorm.get(normalizeCol(targetCol));
-          out[targetCol] = src ? (row?.[src] ?? '') : '';
-        });
-        return out;
-      });
-      const mergedRows = [...existingRows, ...mappedRows];
-      await saveDraftAssignmentForSaisisseur({ tables: mergedRows, columns_order: existingColumns }, 'En cours');
+      const fd = new FormData();
+      fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
+
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/append-smart-preview/`, fd);
+      const mergedRows = Array.isArray(result?.data?.data) ? result.data.data : [];
+      const appendRows = Array.isArray(result?.data?.append_rows) ? result.data.append_rows : [];
+      const existingColumns = Array.isArray(result?.data?.columns_order) && result.data.columns_order.length > 0
+        ? result.data.columns_order
+        : (mergedRows[0] ? Object.keys(mergedRows[0]) : []);
+      const assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme?.id);
+      const existingNotes = parseAssignmentNotes(assignment?.notes);
+      const existingI18nTables = (existingNotes.tables_i18n && typeof existingNotes.tables_i18n === 'object') ? existingNotes.tables_i18n : {};
+      const appendRowsI18n = (result?.data?.append_rows_i18n && typeof result.data.append_rows_i18n === 'object')
+        ? result.data.append_rows_i18n
+        : { fr: appendRows };
+      const mergedI18nTables = {
+        ...existingI18nTables,
+        fr: Array.isArray(existingI18nTables.fr)
+          ? [...existingI18nTables.fr, ...(appendRowsI18n.fr || appendRows)]
+          : (appendRowsI18n.fr || mergedRows),
+      };
+      if (Array.isArray(appendRowsI18n.ar)) {
+        mergedI18nTables.ar = Array.isArray(existingI18nTables.ar)
+          ? [...existingI18nTables.ar, ...appendRowsI18n.ar]
+          : appendRowsI18n.ar;
+      }
+      if (Array.isArray(appendRowsI18n.en)) {
+        mergedI18nTables.en = Array.isArray(existingI18nTables.en)
+          ? [...existingI18nTables.en, ...appendRowsI18n.en]
+          : appendRowsI18n.en;
+      }
+      await saveDraftAssignmentForSaisisseur({ tables: mergedRows, columns_order: existingColumns, tables_i18n: mergedI18nTables }, 'En cours');
       setEditTableColumns(existingColumns);
       setEditTableRows(mergedRows);
-      alert(`${mappedRows.length} ligne(s) ajoutee(s) au brouillon (remappage IA local).`);
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      alert(warningText ? `${appendRows.length} ligne(s) ajoutee(s) au brouillon (IA backend).\n${warningText}` : `${appendRows.length} ligne(s) ajoutee(s) au brouillon (IA backend).`);
       return;
     }
 
@@ -5875,7 +6052,7 @@ function App({ forceVisitor = false }) {
                     {getSubThemeDisplayName(selectedSubTheme)}
                   </h3>
                 </div>
-                <div className="flex flex-wrap items-center gap-2">
+                <div className="flex flex-wrap items-center gap-2.5">
                   {canEdit && userRole === 'ADMIN' ? (
                     <>
                       <div className={`w-5 h-5 rounded-full border border-black ${selectedSubTheme.is_visible ? 'bg-green-400' : 'bg-red-500'}`}></div>
@@ -5912,13 +6089,13 @@ function App({ forceVisitor = false }) {
                         }
                         showToast('Ouverture configuration visiteur', 'info');
                       }}
-                      className="bg-[#df4a4a] text-white px-4 py-2 rounded-xl border border-[#9a2d2d] font-bold shadow-sm hover:bg-[#c93b3b]"
+                      className="h-11 px-4 inline-flex items-center justify-center rounded-xl border border-[#B03372] bg-[#7A0A4A] text-white text-sm font-semibold shadow-sm hover:bg-[#5E0738] transition"
                     >
                       ⚙ Visiteur
                     </button>
                   )}
 
-                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta(buildMetadataState(selectedSubTheme)); setShowSubThemeMeta(true); }} className={`${isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#134f70] border-[#CCB47F] hover:bg-[#f3f3f3]'} px-4 py-2 rounded-xl border font-bold shadow-sm`}>{t('metadata')}</button>
+                  <button onClick={(e) => { e.stopPropagation(); setShowAdvancedConfig(false); setSubThemeMeta(buildMetadataState(selectedSubTheme)); setShowSubThemeMeta(true); }} className={`${isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f7f0f4]' : 'bg-white text-[#134f70] border-[#CCB47F] hover:bg-[#f8f3e7]'} h-11 px-4 inline-flex items-center justify-center rounded-xl border text-sm font-semibold shadow-sm transition`}>{t('metadata')}</button>
                   {/* Saisisseur: Enregistrer / Envoyer au admin */}
                   {isSaisisseur && (
                     <>
@@ -5933,53 +6110,19 @@ function App({ forceVisitor = false }) {
                             alert('Impossible d\'enregistrer le brouillon');
                           }
                         }}
-                        className="bg-gray-200 px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-gray-300"
+                        className="h-11 px-4 inline-flex items-center justify-center rounded-xl border border-[#d5deea] bg-white text-[#344054] text-sm font-semibold shadow-sm hover:bg-[#f7f9fc] transition"
                       >
-                        💾 Enregistrer (brouillon)
+                        Enregistrer (brouillon)
                       </button>
 
                       <button
-                        onClick={async (e) => {
+                        onClick={(e) => {
                           e.stopPropagation();
-                          if (!confirm('Envoyer ce sous-thème aux administrateurs pour révision ?')) return;
-                          try {
-                            const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
-                            const saisisseurRequestConfig = saisisseurToken
-                              ? { headers: { Authorization: `Token ${saisisseurToken}` } }
-                              : {};
-                            const notes = collectCurrentSaisisseurDraftPayload();
-                            await saveDraftAssignmentForSaisisseur(notes, 'En cours');
-                            let assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme.id);
-                            if (!assignment?.id) {
-                              const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
-                              const refreshResp = await axios.get(`${API_BASE}/user-theme-assignments/`, saisisseurRequestConfig);
-                              const myAssignments = (refreshResp.data || []).filter((a) => String(a.user) === String(userId) && a.sous_theme);
-                              setSaisisseurAssignments(myAssignments);
-                              assignment = myAssignments.find((a) => String(a.sous_theme) === String(selectedSubTheme.id));
-                            }
-
-                            if (!assignment?.id) {
-                              throw new Error('Assignation introuvable pour ce sous-thème.');
-                            }
-
-                            const submitRes = await axios.post(
-                              `${API_BASE}/user-theme-assignments/${assignment.id}/submit/`,
-                              {
-                                message: 'Soumission depuis l\'éditeur du sous-thème',
-                                progression: 100,
-                              },
-                              saisisseurRequestConfig,
-                            );
-                            applyUpdatedAssignmentToState(submitRes.data);
-                            showToast('Soumis aux administrateurs', 'success');
-                          } catch (err) {
-                            console.error(err);
-                            alert(err?.response?.data?.error || err?.message || 'Impossible de soumettre');
-                          }
+                          setSubmitConfirmOpen(true);
                         }}
-                        className="bg-blue-600 text-white px-4 py-2 rounded-xl border-2 border-black font-bold shadow-md hover:bg-blue-700"
+                        className="h-11 px-4 inline-flex items-center justify-center rounded-xl border border-[#1e4db7] bg-[#2563eb] text-white text-sm font-semibold shadow-sm hover:bg-[#1d4ed8] transition"
                       >
-                        📄 Envoyer au admin
+                        Envoyer à l'admin
                       </button>
                     </>
                   )}
@@ -5995,7 +6138,7 @@ function App({ forceVisitor = false }) {
                     setAdvancedConfig(init); 
                     setAdvancedConfigFiltersText(Array.isArray(init.filtres_disponibles) ? init.filtres_disponibles.join(', ') : String(init.filtres_disponibles || ''));
                     setShowAdvancedConfig(true); 
-                  }} className="bg-blue-400 text-white px-6 py-2 border-2 border-black rounded-xl font-bold text-sm shadow-md hover:bg-blue-500">⚙️ Configuration Avancée</button>
+                  }} className="h-11 px-5 inline-flex items-center justify-center rounded-xl border border-[#60a5fa] bg-[#3b82f6] text-white text-sm font-semibold shadow-sm hover:bg-[#2563eb] transition">Configuration Avancée</button>
               )}
 
               <div className="flex justify-center">
@@ -6227,7 +6370,7 @@ function App({ forceVisitor = false }) {
                                       rowSpan={span}
                                       className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${(isYearCol || isProvinceCol) ? 'text-center align-middle' : 'text-left align-top'}`}
                                     >
-                                      <span className={`font-semibold ${(isYearCol || isProvinceCol) ? 'text-3xl leading-none' : ''}`}>{translateDataValue(String(row?.dimensions?.[col] ?? '—'))}</span>
+                                      <span className={`font-semibold ${(isYearCol || isProvinceCol) ? 'text-2xl leading-snug' : ''}`}>{translateDataValue(String(row?.dimensions?.[col] ?? '—'))}</span>
                                     </td>
                                   );
                                 })}
@@ -6393,18 +6536,18 @@ function App({ forceVisitor = false }) {
                   )}
                 </div>
                 <div className="flex flex-wrap gap-4 items-center justify-between">
-                  <button onClick={() => setShowAll(!showAll)} className="bg-[#9E6F2F] text-white px-6 py-2 border-2 border-black rounded-xl font-bold shadow-md">
+                  <button onClick={() => setShowAll(!showAll)} className="h-11 px-5 inline-flex items-center justify-center rounded-xl border border-[#8a632b] bg-[#9E6F2F] text-white text-sm font-semibold shadow-sm hover:bg-[#875c26] transition">
                     {showAll ? t('reduce_table') : (isVisitor ? t('show_more_rows') : t('show_all_table'))}
                   </button>
 
                   {canEdit && (userRole === 'ADMIN' || isSaisisseur) && (
-                    <button onClick={openEditTable} className="bg-[#ffd56b] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md">Modifier le tableau</button>
+                    <button onClick={openEditTable} className="h-11 px-5 inline-flex items-center justify-center rounded-xl border border-[#d9b45f] bg-[#ffd56b] text-[#1f2937] text-sm font-semibold shadow-sm hover:bg-[#f7c94d] transition">Modifier le tableau</button>
                   )}
 
                   <div className="flex gap-2">
-                    <button onClick={exportTableXLSX} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">{t('export_xlsx')}</button>
-                    <button onClick={exportTableCSV} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">{t('export_csv')}</button>
-                    <button onClick={exportTableTXT} className="bg-[#2f3b47] text-white px-4 py-2 border border-[#1d2730] rounded-lg font-semibold shadow-sm hover:bg-[#26313c]">{t('export_txt')}</button>
+                    <button onClick={exportTableXLSX} className="h-11 px-4 inline-flex items-center justify-center rounded-xl border border-[#1d2730] bg-[#2f3b47] text-white text-sm font-semibold shadow-sm hover:bg-[#26313c] transition">{t('export_xlsx')}</button>
+                    <button onClick={exportTableCSV} className="h-11 px-4 inline-flex items-center justify-center rounded-xl border border-[#1d2730] bg-[#2f3b47] text-white text-sm font-semibold shadow-sm hover:bg-[#26313c] transition">{t('export_csv')}</button>
+                    <button onClick={exportTableTXT} className="h-11 px-4 inline-flex items-center justify-center rounded-xl border border-[#1d2730] bg-[#2f3b47] text-white text-sm font-semibold shadow-sm hover:bg-[#26313c] transition">{t('export_txt')}</button>
                   </div>
                 </div>
               </div>
@@ -6771,13 +6914,13 @@ function App({ forceVisitor = false }) {
                   </div>
                   <div>
                     <label className="block text-sm font-bold text-[#5a2436] mb-1">Version arabe du meme tableau</label>
-                    <input type="file" accept=".xlsx,.xls" disabled={isSaisisseur} className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-400" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileAr: e.target.files?.[0] || null }))} />
+                    <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileAr: e.target.files?.[0] || null }))} />
                     <div className="mt-1 text-xs text-gray-600">Optionnelle pour un sous-theme monolingue. Obligatoire si le sous-theme est deja bilingue.</div>
                     {importDialog.fileAr && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileAr.name}</div>}
                   </div>
                   <div>
                     <label className="block text-sm font-bold text-[#5a2436] mb-1">Version anglaise du meme tableau</label>
-                    <input type="file" accept=".xlsx,.xls" disabled={isSaisisseur} className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm disabled:bg-gray-100 disabled:text-gray-400" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileEn: e.target.files?.[0] || null }))} />
+                    <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileEn: e.target.files?.[0] || null }))} />
                     <div className="mt-1 text-xs text-gray-600">Optionnelle si EN absent. Obligatoire si le sous-theme contient deja une version EN.</div>
                     {importDialog.fileEn && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileEn.name}</div>}
                   </div>
@@ -6842,7 +6985,7 @@ function App({ forceVisitor = false }) {
       {showAdvancedConfig && (
         <div className="fixed inset-0 bg-black/30 flex items-center justify-center z-[9999] p-4" onClick={(e) => e.stopPropagation()}>
           <div className="bg-white border border-black p-6 rounded-2xl w-full max-w-xl max-h-[80vh] overflow-y-auto shadow-lg z-[10000]" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-center mb-4">⚙️ Configuration Avancée</h2>
+            <h2 className="text-lg font-bold text-center mb-4"> Configuration Avancée</h2>
             <div className="space-y-4">
               <div>
                 <label className="block font-bold mb-2">Granularité Géographique</label>
@@ -6991,7 +7134,7 @@ function App({ forceVisitor = false }) {
       {configModalOpen && configSubTheme && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" onClick={() => setConfigModalOpen(false)}>
           <div className="bg-white border border-black p-6 rounded-2xl w-full max-w-3xl max-h-[80vh] overflow-y-auto shadow-lg" onClick={(e) => e.stopPropagation()}>
-            <h2 className="text-lg font-bold text-center mb-4">⚙️ Configuration Visiteur</h2>
+            <h2 className="text-lg font-bold text-center mb-4"> Configuration Visiteur</h2>
 
             <div className="space-y-4">
               {(() => {
@@ -7198,6 +7341,50 @@ function App({ forceVisitor = false }) {
                   showToast('Erreur lors de l\'enregistrement', 'error');
                 }
               }} className="flex-1 bg-[#ffb366] py-2 border-2 border-black rounded-xl font-bold">Enregistrer</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {submitConfirmOpen && (
+        <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50 p-4">
+          <div className="bg-white border border-[#d5deea] rounded-2xl w-full max-w-md shadow-[0_20px_50px_rgba(24,46,78,0.2)] overflow-hidden">
+            <div className="px-5 py-4 border-b border-[#e3e9f2] bg-[#f7f9fc] flex items-center justify-between">
+              <h3 className="text-lg font-bold text-[#7A0A4A]">Envoyer à l'admin</h3>
+              <button
+                type="button"
+                onClick={() => !submitConfirmLoading && setSubmitConfirmOpen(false)}
+                className="text-[#667085] hover:text-[#274d73] text-xl leading-none"
+                aria-label="Fermer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="p-5 space-y-3">
+              <p className="text-sm text-[#344054] leading-relaxed">
+                Cette action envoie le sous-thème courant aux administrateurs pour révision.
+              </p>
+              <p className="text-xs text-[#667085]">
+                Le brouillon actuel sera sauvegardé automatiquement avant l'envoi.
+              </p>
+            </div>
+            <div className="px-5 py-4 border-t border-[#e3e9f2] bg-white flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setSubmitConfirmOpen(false)}
+                disabled={submitConfirmLoading}
+                className="px-4 py-2 rounded-lg border border-[#d5deea] text-[#274d73] font-semibold hover:bg-[#eef4fb] disabled:opacity-60"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={submitCurrentSubThemeForReview}
+                disabled={submitConfirmLoading}
+                className="px-4 py-2 rounded-lg border border-[#1e4db7] bg-[#2563eb] text-white font-semibold hover:bg-[#1d4ed8] disabled:opacity-60"
+              >
+                {submitConfirmLoading ? 'Envoi...' : 'Confirmer l\'envoi'}
+              </button>
             </div>
           </div>
         </div>

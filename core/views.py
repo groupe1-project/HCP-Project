@@ -1418,6 +1418,19 @@ def _merge_bilingual_payloads(existing_payload, incoming_payload):
     return existing
 
 
+def _align_df_rows_to_columns(df_source, target_columns):
+    """Align rows to target columns by column index (used for i18n preview rows)."""
+    cols = [str(c) for c in list(df_source.columns)]
+    out = []
+    for _, row in df_source.iterrows():
+        obj = {}
+        for idx, target in enumerate(target_columns):
+            source_col = cols[idx] if idx < len(cols) else None
+            obj[str(target)] = row.get(source_col, '') if source_col is not None else ''
+        out.append(obj)
+    return out
+
+
 def _maybe_build_bilingual_payload(df_fr, file_ar, file_en=None, use_ai=True):
     if not file_ar:
         return None, None, [], []
@@ -2137,6 +2150,234 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             logger.exception('Erreur import intelligent')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
+    @action(detail=True, methods=['post'], url_path='import-smart-preview')
+    def import_table_smart_preview(self, request, pk=None):
+        """
+        Preview smart import using the same backend IA/fallback logic as admin,
+        but without persisting anything. Intended for saisisseur draft workflow.
+        """
+        st = self.get_object()
+        excel_file = request.FILES.get('file')
+        arabic_file = request.FILES.get('file_ar')
+        english_file = request.FILES.get('file_en')
+        if not excel_file:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if st.data_is_bilingual and not arabic_file:
+                return Response(
+                    {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if _has_english_i18n_payload(st) and not english_file:
+                return Response(
+                    {'error': 'Ce sous-theme contient deja une version EN. Le fichier anglais correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            df, warnings = _normalize_import_dataframe(excel_file, use_ai=True)
+            incoming_columns = [str(c) for c in df.columns]
+            free_schema = str(request.data.get('free_schema', 'true')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
+
+            expected_columns = list(st.columns_order or st.columns or [])
+            overlap = _schema_overlap_ratio(expected_columns, incoming_columns)
+            should_adopt_incoming = bool(free_schema and incoming_columns)
+
+            if should_adopt_incoming:
+                mapped_rows = df.to_dict(orient='records')
+                expected_columns = incoming_columns
+                mapped_df = df.copy()
+                warnings.append('Mode schema libre: colonnes du fichier adoptees')
+                if overlap > 0:
+                    warnings.append(f'Recouvrement schema precedent: {round(overlap * 100)}%')
+            else:
+                if not expected_columns:
+                    expected_columns = [str(c) for c in df.columns]
+                    mapped_rows = df.to_dict(orient='records')
+                    mapped_df = df.copy()
+                    warnings.append('Schema cible vide: import classique applique')
+                else:
+                    try:
+                        mapped_rows = _run_gemini_mapping(df, expected_columns)
+                        warnings.append('Mapping IA applique')
+                    except Exception as ai_err:
+                        logger.warning('Fallback mapping preview active: %s', ai_err)
+                        mapped_rows = _fallback_map_rows(df, expected_columns)
+                        warnings.append('Mapping IA indisponible: fallback heuristique utilise')
+                    mapped_df = pd.DataFrame(mapped_rows, columns=expected_columns)
+
+            response = {
+                'message': 'Preview import intelligent reussi',
+                'data': mapped_rows,
+                'columns_order': expected_columns,
+                'warnings': warnings,
+            }
+
+            if arabic_file:
+                try:
+                    arabic_file.seek(0)
+                except Exception:
+                    pass
+                df_ar, warnings_ar = _normalize_import_dataframe(arabic_file, use_ai=True)
+
+                df_en = None
+                warnings_en = []
+                if english_file:
+                    try:
+                        english_file.seek(0)
+                    except Exception:
+                        pass
+                    df_en, warnings_en = _normalize_import_dataframe(english_file, use_ai=True)
+
+                payload, report = _build_bilingual_payload(mapped_df, df_ar, df_en=df_en)
+                if payload is None:
+                    return Response(
+                        {
+                            'error': 'Validation i18n echouee.',
+                            'validation_report': report,
+                            'warnings': {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en},
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                tables_i18n = {
+                    'fr': mapped_rows,
+                    'ar': _align_df_rows_to_columns(df_ar, expected_columns),
+                }
+                if df_en is not None:
+                    tables_i18n['en'] = _align_df_rows_to_columns(df_en, expected_columns)
+
+                response['tables_i18n'] = tables_i18n
+                response['validation_report'] = report
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
+
+            return Response(response, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception('Erreur preview import intelligent')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='append-smart-preview')
+    def append_table_smart_preview(self, request, pk=None):
+        """
+        Preview smart append using the same backend IA/fallback logic as admin,
+        but without persisting anything. Intended for saisisseur draft workflow.
+        """
+        st = self.get_object()
+        excel_file = request.FILES.get('file')
+        arabic_file = request.FILES.get('file_ar')
+        english_file = request.FILES.get('file_en')
+        if not excel_file:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if st.data_is_bilingual and not arabic_file:
+                return Response(
+                    {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe est obligatoire pour tout ajout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if _has_english_i18n_payload(st) and not english_file:
+                return Response(
+                    {'error': 'Ce sous-theme contient deja des donnees EN. Le fichier anglais est obligatoire pour tout ajout.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if (arabic_file or english_file) and not st.data_is_bilingual and list(st.data_json or []):
+                return Response(
+                    {'error': 'Ajout i18n sur un sous-theme monolingue non supporte. Faites d\'abord un remplacement complet FR/AR(/EN).'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            df, warnings = _normalize_import_dataframe(excel_file, use_ai=True)
+            incoming_columns = [str(c) for c in df.columns]
+
+            existing_rows = list(st.data_json or [])
+            existing_columns = list(st.columns_order or [])
+
+            if _is_bad_header_shape(existing_columns) and df is not None:
+                existing_columns = [str(c) for c in df.columns]
+                warnings.append('Schema cible corrige a partir de la table normalisee')
+
+            overlap = _schema_overlap_ratio(existing_columns, incoming_columns)
+
+            if not existing_columns:
+                mapped_rows = df.to_dict(orient='records')
+                final_columns = incoming_columns
+                warnings.append('Schema cible vide: colonnes du fichier adoptees')
+            elif set(incoming_columns) == set(existing_columns):
+                mapped_rows = [
+                    {col: row.get(col, '') for col in existing_columns}
+                    for row in df.to_dict(orient='records')
+                ]
+                final_columns = existing_columns
+                warnings.append('Colonnes compatibles: ajout direct ordonne')
+            else:
+                try:
+                    mapped_rows = _run_gemini_mapping(df, existing_columns)
+                    final_columns = existing_columns
+                    warnings.append('Mapping IA applique pour ajout')
+                except Exception as ai_err:
+                    logger.warning('Fallback append mapping preview active: %s', ai_err)
+                    mapped_rows = _fallback_map_rows(df, existing_columns)
+                    final_columns = existing_columns
+                    warnings.append('Mapping IA indisponible: fallback heuristique utilise pour ajout')
+
+                warnings.append(
+                    f'Colonnes source differentes. Recouvrement schema: {round(overlap * 100)}%'
+                )
+
+            mapped_df = pd.DataFrame(mapped_rows, columns=final_columns)
+            merged = existing_rows + mapped_rows
+
+            response = {
+                'message': f'{len(mapped_rows)} ligne(s) pretes a ajouter. Total projete : {len(merged)} ligne(s).',
+                'data': merged,
+                'columns_order': final_columns,
+                'warnings': warnings,
+                'append_rows': mapped_rows,
+            }
+
+            if arabic_file:
+                try:
+                    arabic_file.seek(0)
+                except Exception:
+                    pass
+                df_ar, warnings_ar = _normalize_import_dataframe(arabic_file, use_ai=True)
+
+                df_en = None
+                warnings_en = []
+                if english_file:
+                    try:
+                        english_file.seek(0)
+                    except Exception:
+                        pass
+                    df_en, warnings_en = _normalize_import_dataframe(english_file, use_ai=True)
+
+                payload, report = _build_bilingual_payload(mapped_df, df_ar, df_en=df_en)
+                if payload is None:
+                    return Response(
+                        {
+                            'error': 'Validation i18n echouee.',
+                            'validation_report': report,
+                            'warnings': {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en},
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                append_i18n = {
+                    'fr': mapped_rows,
+                    'ar': _align_df_rows_to_columns(df_ar, final_columns),
+                }
+                if df_en is not None:
+                    append_i18n['en'] = _align_df_rows_to_columns(df_en, final_columns)
+
+                response['append_rows_i18n'] = append_i18n
+                response['validation_report'] = report
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
+
+            return Response(response, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception('Erreur preview append intelligent')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
     @action(detail=True, methods=['post'], url_path='import-bilingual')
     def import_table_bilingual(self, request, pk=None):
         """
@@ -2837,11 +3078,36 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
             if assignment.sous_theme_id:
                 sous_theme = assignment.sous_theme
 
-                if isinstance(notes_obj.get('tables'), list):
-                    sous_theme.data_json = notes_obj.get('tables')
+                draft_rows = notes_obj.get('tables') if isinstance(notes_obj.get('tables'), list) else None
+                draft_columns = notes_obj.get('columns_order') if isinstance(notes_obj.get('columns_order'), list) and notes_obj.get('columns_order') else None
+                draft_i18n = notes_obj.get('tables_i18n') if isinstance(notes_obj.get('tables_i18n'), dict) else {}
 
-                if isinstance(notes_obj.get('columns_order'), list) and notes_obj.get('columns_order'):
-                    sous_theme.columns_order = notes_obj.get('columns_order')
+                if draft_rows is not None:
+                    df_fr = pd.DataFrame(draft_rows)
+                    if draft_columns:
+                        df_fr = df_fr.reindex(columns=draft_columns, fill_value='')
+                    df_fr = df_fr.fillna('')
+
+                    draft_rows_ar = draft_i18n.get('ar') if isinstance(draft_i18n.get('ar'), list) else None
+                    draft_rows_en = draft_i18n.get('en') if isinstance(draft_i18n.get('en'), list) else None
+
+                    if draft_rows_ar:
+                        df_ar = pd.DataFrame(draft_rows_ar).reindex(columns=list(df_fr.columns), fill_value='').fillna('')
+                        df_en = None
+                        if draft_rows_en:
+                            df_en = pd.DataFrame(draft_rows_en).reindex(columns=list(df_fr.columns), fill_value='').fillna('')
+
+                        payload, report = _build_bilingual_payload(df_fr, df_ar, df_en=df_en)
+                        if payload is not None:
+                            _persist_bilingual_table(sous_theme, df_fr, payload, report)
+                        else:
+                            # If i18n payload is invalid in draft, publish FR table only and clear stale i18n payload.
+                            _persist_monolingual_table(sous_theme, df_fr)
+                    else:
+                        # Draft without AR table: publish FR table and clear stale i18n payload.
+                        _persist_monolingual_table(sous_theme, df_fr)
+                elif draft_columns:
+                    sous_theme.columns_order = draft_columns
 
                 if isinstance(notes_obj.get('charts'), list):
                     sous_theme.charts_config = notes_obj.get('charts')
