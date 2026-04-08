@@ -11,7 +11,7 @@ def _normalize_name(value):
 class UserSerializer(serializers.ModelSerializer):
     class Meta:
         model = CustomUser
-        fields = ['id', 'username', 'email', 'role', 'is_active']
+        fields = ['id', 'username', 'first_name', 'email', 'role', 'is_active']
         read_only_fields = ['username', 'role', 'is_active']
 
 class SousThemeSerializer(serializers.ModelSerializer):
@@ -221,7 +221,7 @@ class DonneeSerializer(serializers.ModelSerializer):
         fields = '__all__'
 
 class UserThemeAssignmentSerializer(serializers.ModelSerializer):
-    user_name = serializers.ReadOnlyField(source='user.username')
+    user_name = serializers.SerializerMethodField()
     user_email = serializers.ReadOnlyField(source='user.email')
     user_role = serializers.ReadOnlyField(source='user.role')
     user_is_active = serializers.ReadOnlyField(source='user.is_active')
@@ -229,6 +229,7 @@ class UserThemeAssignmentSerializer(serializers.ModelSerializer):
     sous_theme_nom = serializers.ReadOnlyField(source='sous_theme.nom')
     indicateur_libelle = serializers.ReadOnlyField(source='indicateur.libelle')
     assignment_archived = serializers.SerializerMethodField()
+    admin_review_notification = serializers.SerializerMethodField()
 
     def get_assignment_archived(self, obj):
         raw_notes = obj.notes
@@ -243,6 +244,36 @@ class UserThemeAssignmentSerializer(serializers.ModelSerializer):
         except Exception:
             return False
         return False
+
+    def get_user_name(self, obj):
+        user = getattr(obj, 'user', None)
+        if not user:
+            return ''
+        return str(getattr(user, 'first_name', '') or getattr(user, 'username', '') or '').strip()
+
+    def get_admin_review_notification(self, obj):
+        raw_notes = obj.notes
+        notes_obj = {}
+        if isinstance(raw_notes, dict):
+            notes_obj = raw_notes
+        else:
+            try:
+                notes_obj = json.loads(raw_notes) if raw_notes else {}
+            except Exception:
+                notes_obj = {}
+
+        if not isinstance(notes_obj, dict):
+            return None
+
+        review = notes_obj.get('admin_last_review')
+        if not isinstance(review, dict):
+            return None
+
+        return {
+            'decision': str(review.get('decision') or ''),
+            'message': str(review.get('message') or ''),
+            'at': str(review.get('at') or ''),
+        }
     
     class Meta:
         model = UserThemeAssignment
@@ -251,7 +282,7 @@ class UserThemeAssignmentSerializer(serializers.ModelSerializer):
             'theme', 'theme_titre', 'sous_theme', 'sous_theme_nom',
             'indicateur', 'indicateur_libelle', 'statut',
             'date_assignation', 'date_modification', 'date_completion',
-            'notes', 'progression', 'priorite', 'assignment_archived'
+            'notes', 'progression', 'priorite', 'assignment_archived', 'admin_review_notification'
         ]
 
 class UserRequestSerializer(serializers.ModelSerializer):

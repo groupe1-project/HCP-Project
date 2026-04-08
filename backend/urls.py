@@ -21,7 +21,7 @@ router.register(r'user-theme-assignments', UserThemeAssignmentViewSet)
 router.register(r'user-requests', UserRequestViewSet)
 
 urlpatterns = [
-    path('admin/', admin.site.urls),
+    path('django-admin/', admin.site.urls),
     path('health/', HealthCheckView.as_view(), name='health'),
     path('api/', include(router.urls)),
     path('api/auth/login/', login, name='login'),

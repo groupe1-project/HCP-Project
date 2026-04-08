@@ -278,3 +278,41 @@ class PublicThemeVisibilityTests(TestCase):
 		sub_names = [st.get('nom') for st in subthemes]
 		self.assertIn('Sous-theme visible', sub_names)
 		self.assertNotIn('Sous-theme cache', sub_names)
+
+
+class UserDeletionSafetyTests(TestCase):
+	def setUp(self):
+		self.client = APIClient()
+		self.admin = CustomUser.objects.create_user(
+			username='admin_delete_actor',
+			email='admin_delete_actor@example.com',
+			password='Passw0rd!Strong',
+			role='ADMIN',
+		)
+		self.target_user = CustomUser.objects.create_user(
+			username='target_saisisseur',
+			email='target_saisisseur@example.com',
+			password='Passw0rd!Strong',
+			role='SAISISSEUR',
+		)
+		self.target_admin = CustomUser.objects.create_user(
+			username='target_admin',
+			email='target_admin@example.com',
+			password='Passw0rd!Strong',
+			role='ADMIN',
+		)
+
+		token = Token.objects.create(user=self.admin)
+		self.client.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
+
+	def test_delete_user_hard_deletes_non_admin(self):
+		response = self.client.delete(f'/api/users/{self.target_user.id}/', secure=True)
+		self.assertEqual(response.status_code, 204)
+		self.assertFalse(CustomUser.objects.filter(id=self.target_user.id).exists())
+
+	def test_delete_admin_is_blocked(self):
+		response = self.client.delete(f'/api/users/{self.target_admin.id}/', secure=True)
+		self.assertEqual(response.status_code, 400)
+
+		self.target_admin.refresh_from_db()
+		self.assertTrue(self.target_admin.is_active)

@@ -4,6 +4,7 @@ import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
 import LoginPage from './LoginPage';
 import { DATA_TRANSLATIONS_FR_AR } from './i18n';
+import logoMain from './Image3.png';
 
 const AdministratorsPage = lazy(() => import('./AdministratorsPage'));
 const ChartModal = lazy(() => import('./components/ChartModal'));
@@ -11,6 +12,45 @@ const ChartModal = lazy(() => import('./components/ChartModal'));
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const INFO_BANNER_CACHE_KEY = 'info_banner_cache';
 const DEFAULT_INFO_BANNER_ITEMS = [{ text: "L'ICP du mois de Janvier 2026 est disponible", text_ar: '', text_en: '', url: '' }];
+const AUTH_STORAGE_KEYS = [
+  'auth_token',
+  'user_id',
+  'username',
+  'first_name',
+  'user_email',
+  'user_role',
+  'auth_token_admin',
+  'user_id_admin',
+  'username_admin',
+  'first_name_admin',
+  'user_email_admin',
+  'user_role_admin',
+  'auth_token_saisisseur',
+  'user_id_saisisseur',
+  'username_saisisseur',
+  'first_name_saisisseur',
+  'user_email_saisisseur',
+  'user_role_saisisseur',
+  'auth_context',
+];
+
+const getAuthStorageItem = (key) => {
+  try { return sessionStorage.getItem(key) || ''; } catch { return ''; }
+};
+
+const hasAuthStorageItem = (key) => {
+  try { return sessionStorage.getItem(key) !== null; } catch { return false; }
+};
+
+const setAuthStorageItem = (key, value) => {
+  try { sessionStorage.setItem(key, String(value ?? '')); } catch { /* ignore storage errors */ }
+  try { localStorage.removeItem(key); } catch { /* ignore storage errors */ }
+};
+
+const removeAuthStorageItem = (key) => {
+  try { sessionStorage.removeItem(key); } catch { /* ignore storage errors */ }
+  try { localStorage.removeItem(key); } catch { /* ignore storage errors */ }
+};
 
 const readInfoBannerCache = () => {
   try {
@@ -146,16 +186,21 @@ function App({ forceVisitor = false }) {
     const pathname = (typeof window !== 'undefined' && window.location.pathname)
       ? window.location.pathname.toLowerCase()
       : '/';
-    const isVisitorRoute = forceVisitor || pathname === '/visiteur' || pathname.startsWith('/visiteur/');
+    const isAuthLoginRoute = pathname === '/admin/login' || pathname === '/saisisseur/login';
+    const isVisitorRoute = forceVisitor || pathname === '/' || pathname === '/visiteur' || pathname.startsWith('/visiteur/');
     const isAdminRoute = pathname === '/admin' || pathname.startsWith('/admin/');
     const isSaisisseurRoute = pathname === '/saisisseur' || pathname.startsWith('/saisisseur/');
-    const canUseRouteLanguage = isVisitorRoute || isAdminRoute || isSaisisseurRoute;
+    const canUseRouteLanguage = !isAuthLoginRoute && (isVisitorRoute || isAdminRoute || isSaisisseurRoute);
+
+    if (isAuthLoginRoute && i18n.language !== 'fr') {
+      i18n.changeLanguage('fr');
+    }
 
     if (!canUseRouteLanguage && i18n.language !== 'fr') {
       i18n.changeLanguage('fr');
     }
 
-    const effectiveLang = canUseRouteLanguage ? i18n.language : 'fr';
+    const effectiveLang = isAuthLoginRoute ? 'fr' : (canUseRouteLanguage ? i18n.language : 'fr');
     document.documentElement.dir = effectiveLang === 'ar' ? 'rtl' : 'ltr';
     document.documentElement.lang = effectiveLang;
 
@@ -173,7 +218,7 @@ function App({ forceVisitor = false }) {
   const [authLoading, setAuthLoading] = useState(true);
   const [userRole, setUserRole] = useState('');
   const [authContext, setAuthContext] = useState(() => {
-    try { return localStorage.getItem('auth_context') || ''; } catch { return ''; }
+    return getAuthStorageItem('auth_context');
   });
 
   // --- ÉTATS (toujours déclarés, même s'ils ne sont pas utilisés si non authentifié) ---
@@ -238,6 +283,9 @@ function App({ forceVisitor = false }) {
   const [isAppending, setIsAppending] = useState(false);
   const [isAppendingAI, setIsAppendingAI] = useState(false);
   const [importDialog, setImportDialog] = useState({ open: false, mode: null, file: null, fileAr: null, fileEn: null });
+  const importMainInputRef = React.useRef(null);
+  const importArInputRef = React.useRef(null);
+  const importEnInputRef = React.useRef(null);
   const [showAll, setShowAll] = useState(false);
   const [activeDataTab, setActiveDataTab] = useState('tableau');
   const [submitConfirmOpen, setSubmitConfirmOpen] = useState(false);
@@ -273,7 +321,9 @@ function App({ forceVisitor = false }) {
   const [excludedRowIndices, setExcludedRowIndices] = useState({});
   const [manageRowsModalChartId, setManageRowsModalChartId] = useState(null);
   const [showSettings, setShowSettings] = useState(false);
-  const [settingsForm, setSettingsForm] = useState({ email: '', newPassword: '', confirmPassword: '' });
+  const [showHeaderProfileMenu, setShowHeaderProfileMenu] = useState(false);
+  const [settingsForm, setSettingsForm] = useState({ firstName: '', email: '', newPassword: '', confirmPassword: '' });
+  const [settingsError, setSettingsError] = useState('');
   const [searchTheme, setSearchTheme] = useState('');
   const [searchSubTheme, setSearchSubTheme] = useState('');
   const [searchIndicateur, setSearchIndicateur] = useState('');
@@ -339,11 +389,10 @@ function App({ forceVisitor = false }) {
 
   // --- TOUS LES useEffect EN MأٹME TEMPS ---
   const pathname = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
-  const pathHasVisiteur = pathname === '/visiteur' || pathname.startsWith('/visiteur/');
+  const pathHasVisiteur = pathname === '/' || pathname === '/visiteur' || pathname.startsWith('/visiteur/');
   const pathHasSaisisseur = pathname === '/saisisseur' || pathname.startsWith('/saisisseur/');
   const pathHasAdmin = pathname === '/admin' || pathname.startsWith('/admin/');
-  const pathLooksLikeSaisisseurUser = pathname !== '/' && !pathHasSaisisseur && !pathHasVisiteur && !pathHasAdmin && !pathname.includes('.');
-  const isSaisisseurRoute = pathHasSaisisseur || pathLooksLikeSaisisseurUser;
+  const isSaisisseurRoute = pathHasSaisisseur;
   const isVisitor = forceVisitor || pathHasVisiteur;
   const isSaisisseur = isSaisisseurRoute || (userRole === 'SAISISSEUR' && isAuthenticated);
   const canEdit = isAuthenticated && !isVisitor;
@@ -357,6 +406,7 @@ function App({ forceVisitor = false }) {
     : 'fr';
   const isArabicDataView = activeDataLanguage === 'ar';
   const isArabicVisitor = isVisitor && i18n.language === 'ar';
+  const enableVisitorHeaderSearch = true;
   const localeCode = activeDataLanguage === 'ar' ? 'ar-MA' : activeDataLanguage === 'en' ? 'en-GB' : 'fr-FR';
   const hasEnglishI18nData = Boolean(
     selectedSubTheme?.data_json_i18n?.source_columns?.en &&
@@ -630,13 +680,23 @@ function App({ forceVisitor = false }) {
     const targetLang = langOverride || activeDataLanguage;
     const columnCode = getCanonicalColumnCode(columnIdentifier);
     if (!columnCode) {
-      if (targetLang === 'ar' && DATA_TRANSLATIONS_FR_AR[fallback] !== undefined) return DATA_TRANSLATIONS_FR_AR[fallback];
+      if (targetLang === 'ar') {
+        if (DATA_TRANSLATIONS_FR_AR[fallback] !== undefined) return DATA_TRANSLATIONS_FR_AR[fallback];
+        const normalized = normalizeDataToken(fallback);
+        const looksLikeValueColumn = /(valeur|value|metric|mesure|amount|count|nombre|effectif|montant|ratio|taux|pourcentage|percent|قيمة|القيمة|نسبة)/i.test(normalized);
+        if (looksLikeValueColumn) {
+          const hasPercent = /%|pourcent|percent/i.test(String(fallback));
+          return hasPercent ? 'القيمة (%)' : 'القيمة';
+        }
+      }
       if (targetLang === 'en') return toEnglishLabelFallback(fallback);
       return fallback;
     }
     const labels = bilingualLabelLookup.columnLabelsByCode[columnCode] || {};
     if (targetLang === 'en') {
-      return labels.en || toEnglishLabelFallback(labels.fr || fallback);
+      // Some imported EN payloads may still contain French labels (e.g. "Sexe", "Annee").
+      // Normalize through the EN fallback mapper to guarantee English display.
+      return toEnglishLabelFallback(labels.en || labels.fr || fallback);
     }
     return labels[targetLang] || labels.fr || fallback;
   };
@@ -649,7 +709,13 @@ function App({ forceVisitor = false }) {
     const normalizedValue = normalizeDataToken(valueIdentifier);
     const columnMapping = bilingualLabelLookup.valueLabelsByColumn[columnCode] || {};
     const entry = columnMapping[normalizedValue] || bilingualLabelLookup.globalValueLabels[normalizedValue];
-    if (entry) return entry[targetLang] || entry.fr || rawValue;
+    if (entry) {
+      if (targetLang === 'en') {
+        // Keep EN consistent even when payload EN values are not translated.
+        return toEnglishValueFallback(entry.en || entry.fr || rawValue);
+      }
+      return entry[targetLang] || entry.fr || rawValue;
+    }
     if (targetLang === 'en') {
       return toEnglishValueFallback(rawValue);
     }
@@ -669,6 +735,31 @@ function App({ forceVisitor = false }) {
         return canonical || raw;
       })
       .filter(Boolean);
+  };
+
+  const dedupeConfiguredColumns = (items) => {
+    const normalized = normalizeConfiguredColumns(items);
+    const seen = new Set();
+    const unique = [];
+    normalized.forEach((item) => {
+      const key = normalizeDataToken(item);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      unique.push(item);
+    });
+    return unique;
+  };
+
+  const containsConfiguredColumn = (items, candidate) => {
+    const candidateKey = normalizeDataToken(candidate);
+    if (!candidateKey) return false;
+    return dedupeConfiguredColumns(items).some((item) => normalizeDataToken(item) === candidateKey);
+  };
+
+  const appendUniqueConfiguredColumn = (items, candidate) => {
+    const base = Array.isArray(items) ? items : [];
+    if (!candidate || containsConfiguredColumn(base, candidate)) return base;
+    return [...base, candidate];
   };
 
   const localizeConfiguredColumns = (items, langOverride = null) => normalizeConfiguredColumns(items)
@@ -715,6 +806,71 @@ function App({ forceVisitor = false }) {
     );
   };
 
+  const localizeFilterStateMap = (filtersMap, langOverride = null) => {
+    const source = filtersMap && typeof filtersMap === 'object' ? filtersMap : {};
+    const out = {};
+    Object.entries(source).forEach(([rawKey, rawVal]) => {
+      const canonicalKey = getCanonicalColumnCode(rawKey) || rawKey;
+      const localizedKey = getLocalizedColumnLabel(canonicalKey, langOverride);
+      if (!localizedKey) return;
+
+      if (Array.isArray(rawVal)) {
+        out[localizedKey] = rawVal.map((entry) => {
+          const canonicalValue = getCanonicalValueCode(canonicalKey, entry);
+          return getLocalizedValueLabel(canonicalKey, canonicalValue, langOverride);
+        });
+        return;
+      }
+
+      if (rawVal === null || rawVal === undefined || rawVal === '') {
+        out[localizedKey] = '';
+        return;
+      }
+
+      const canonicalValue = getCanonicalValueCode(canonicalKey, rawVal);
+      out[localizedKey] = getLocalizedValueLabel(canonicalKey, canonicalValue, langOverride);
+    });
+    return out;
+  };
+
+  const localizeChartVisitorFilterMap = (chartFiltersMap, charts, langOverride = null) => {
+    const source = chartFiltersMap && typeof chartFiltersMap === 'object' ? chartFiltersMap : {};
+    const out = {};
+    Object.entries(source).forEach(([chartId, valuesMap]) => {
+      const valueSource = valuesMap && typeof valuesMap === 'object' ? valuesMap : {};
+      const currentChart = (charts || []).find((chart) => String(chart.id) === String(chartId));
+      const normalized = {};
+
+      Object.entries(valueSource).forEach(([rawKey, rawVal]) => {
+        const fromVisibleFilters = currentChart?.visible_filters;
+        const matchedFilter = Array.isArray(fromVisibleFilters)
+          ? fromVisibleFilters.find((vf) => {
+              const vfCol = typeof vf === 'string' ? vf : (vf?.column || '');
+              return String(vfCol) === String(rawKey) || normalizeDataToken(vfCol) === normalizeDataToken(rawKey);
+            })
+          : null;
+        const vfColumn = matchedFilter
+          ? (typeof matchedFilter === 'string' ? matchedFilter : matchedFilter.column)
+          : rawKey;
+
+        const canonicalKey = getCanonicalColumnCode(vfColumn) || getCanonicalColumnCode(rawKey) || rawKey;
+        const localizedKey = getLocalizedColumnLabel(canonicalKey, langOverride);
+        if (!localizedKey) return;
+
+        if (rawVal === null || rawVal === undefined || rawVal === '') {
+          normalized[localizedKey] = '';
+          return;
+        }
+
+        const canonicalValue = getCanonicalValueCode(canonicalKey, rawVal);
+        normalized[localizedKey] = getLocalizedValueLabel(canonicalKey, canonicalValue, langOverride);
+      });
+
+      out[chartId] = normalized;
+    });
+    return out;
+  };
+
   const isPeriodColumnIdentifier = (columnIdentifier) => {
     const canonical = getCanonicalColumnCode(columnIdentifier) || String(columnIdentifier ?? '');
     const normalized = normalizeDataToken(canonical);
@@ -738,10 +894,16 @@ function App({ forceVisitor = false }) {
     const columnCode = getCanonicalColumnCode(s);
     if (columnCode) {
       const labels = bilingualLabelLookup.columnLabelsByCode[columnCode] || {};
+      if (activeDataLanguage === 'en') {
+        return toEnglishLabelFallback(labels.en || labels.fr || s);
+      }
       return labels[activeDataLanguage] || labels.fr || s;
     }
     const valueEntry = bilingualLabelLookup.globalValueLabels[normalized];
     if (valueEntry) {
+      if (activeDataLanguage === 'en') {
+        return toEnglishValueFallback(valueEntry.en || valueEntry.fr || s);
+      }
       return valueEntry[activeDataLanguage] || valueEntry.fr || s;
     }
     if (activeDataLanguage === 'en') {
@@ -948,14 +1110,14 @@ function App({ forceVisitor = false }) {
     const draftI18nTables = (notes.tables_i18n && typeof notes.tables_i18n === 'object') ? notes.tables_i18n : {};
 
     const preferredDraftRows = (() => {
+      if (Array.isArray(notes.tables) && notes.tables.length > 0) {
+        return notes.tables;
+      }
       if (activeDataLanguage === 'ar' && Array.isArray(draftI18nTables.ar) && draftI18nTables.ar.length > 0) {
         return draftI18nTables.ar;
       }
       if (activeDataLanguage === 'en' && Array.isArray(draftI18nTables.en) && draftI18nTables.en.length > 0) {
         return draftI18nTables.en;
-      }
-      if (Array.isArray(notes.tables) && notes.tables.length > 0) {
-        return notes.tables;
       }
       return null;
     })();
@@ -1058,11 +1220,11 @@ function App({ forceVisitor = false }) {
   // Helper: when a saisisseur saves, persist changes as a draft in UserThemeAssignment.notes
   const saveDraftAssignmentForSaisisseur = async (partialNotes = {}, statut = 'En cours') => {
     try {
-      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurToken = getAuthStorageItem('auth_token_saisisseur') || getAuthStorageItem('auth_token');
       const saisisseurRequestConfig = saisisseurToken
         ? { headers: { Authorization: `Token ${saisisseurToken}` } }
         : {};
-      const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+      const userId = getAuthStorageItem('user_id_saisisseur') || getAuthStorageItem('user_id');
       if (!userId) return alert('Utilisateur non identifié (saisisseur)');
       if (!selectedSubTheme) return alert('Aucun sous-thème sélectionné');
 
@@ -1107,7 +1269,7 @@ function App({ forceVisitor = false }) {
   const submitCurrentSubThemeForReview = async () => {
     try {
       setSubmitConfirmLoading(true);
-      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurToken = getAuthStorageItem('auth_token_saisisseur') || getAuthStorageItem('auth_token');
       const saisisseurRequestConfig = saisisseurToken
         ? { headers: { Authorization: `Token ${saisisseurToken}` } }
         : {};
@@ -1117,7 +1279,7 @@ function App({ forceVisitor = false }) {
 
       let assignment = getSaisisseurAssignmentForSubTheme(selectedSubTheme?.id);
       if (!assignment?.id) {
-        const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+        const userId = getAuthStorageItem('user_id_saisisseur') || getAuthStorageItem('user_id');
         const refreshResp = await axios.get(`${API_BASE}/user-theme-assignments/`, saisisseurRequestConfig);
         const myAssignments = (refreshResp.data || []).filter((a) => String(a.user) === String(userId) && a.sous_theme);
         setSaisisseurAssignments(myAssignments);
@@ -1150,7 +1312,7 @@ function App({ forceVisitor = false }) {
   useEffect(() => {
     // Select token/user info based on current route first to avoid cross-tab context takeover.
     try {
-      const storedContext = localStorage.getItem('auth_context') || '';
+      const storedContext = getAuthStorageItem('auth_context') || '';
       let token = null;
       let role = '';
       let resolvedContext = '';
@@ -1159,24 +1321,24 @@ function App({ forceVisitor = false }) {
         resolvedContext = '';
       } else if (isSaisisseurRoute) {
         resolvedContext = 'saisisseur';
-        token = localStorage.getItem('auth_token_saisisseur');
-        role = localStorage.getItem('user_role_saisisseur') || '';
+        token = getAuthStorageItem('auth_token_saisisseur');
+        role = getAuthStorageItem('user_role_saisisseur') || '';
       } else if (pathHasAdmin) {
         resolvedContext = 'admin';
-        token = localStorage.getItem('auth_token_admin');
-        role = localStorage.getItem('user_role_admin') || '';
+        token = getAuthStorageItem('auth_token_admin');
+        role = getAuthStorageItem('user_role_admin') || '';
       } else if (storedContext === 'saisisseur') {
         resolvedContext = 'saisisseur';
-        token = localStorage.getItem('auth_token_saisisseur');
-        role = localStorage.getItem('user_role_saisisseur') || '';
+        token = getAuthStorageItem('auth_token_saisisseur');
+        role = getAuthStorageItem('user_role_saisisseur') || '';
       } else if (storedContext === 'admin') {
         resolvedContext = 'admin';
-        token = localStorage.getItem('auth_token_admin');
-        role = localStorage.getItem('user_role_admin') || '';
+        token = getAuthStorageItem('auth_token_admin');
+        role = getAuthStorageItem('user_role_admin') || '';
       } else {
         resolvedContext = 'default';
-        token = localStorage.getItem('auth_token');
-        role = localStorage.getItem('user_role') || '';
+        token = getAuthStorageItem('auth_token');
+        role = getAuthStorageItem('user_role') || '';
       }
 
       if (token && !isVisitor) {
@@ -1268,18 +1430,45 @@ function App({ forceVisitor = false }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  // Normalize auth routes to explicit production-style paths.
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    if (authLoading) return;
+    const currentPath = window.location.pathname.toLowerCase();
+
+    if (!isAuthenticated) {
+      if (currentPath === '/admin' || (currentPath.startsWith('/admin/') && currentPath !== '/admin/login')) {
+        window.location.replace('/admin/login');
+        return;
+      }
+      if (currentPath === '/saisisseur' || (currentPath.startsWith('/saisisseur/') && currentPath !== '/saisisseur/login')) {
+        window.location.replace('/saisisseur/login');
+        return;
+      }
+      return;
+    }
+
+    if (pathHasAdmin && currentPath === '/admin/login') {
+      window.location.replace('/admin/dashboard');
+      return;
+    }
+    if (pathHasSaisisseur && currentPath === '/saisisseur/login') {
+      window.location.replace('/saisisseur/dashboard');
+    }
+  }, [authLoading, isAuthenticated, pathHasAdmin, pathHasSaisisseur]);
+
   // Keep axios Authorization header in sync with route-resolved context
   useEffect(() => {
     try {
-      let ctx = authContext || localStorage.getItem('auth_context');
+      let ctx = authContext || getAuthStorageItem('auth_context');
       if (isSaisisseurRoute) ctx = 'saisisseur';
       else if (pathHasAdmin) ctx = 'admin';
       else if (isVisitor) ctx = '';
 
       let token = null;
-      if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
-      else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
-      else token = localStorage.getItem('auth_token');
+      if (ctx === 'admin') token = getAuthStorageItem('auth_token_admin');
+      else if (ctx === 'saisisseur') token = getAuthStorageItem('auth_token_saisisseur');
+      else token = getAuthStorageItem('auth_token');
 
       if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
       else delete axios.defaults.headers.common['Authorization'];
@@ -1293,16 +1482,16 @@ function App({ forceVisitor = false }) {
     try {
       // Route takes strict priority.
       if (pathHasAdmin) {
-        if (localStorage.getItem('auth_token_admin')) {
-          localStorage.setItem('auth_context', 'admin');
+        if (getAuthStorageItem('auth_token_admin')) {
+          setAuthStorageItem('auth_context', 'admin');
           setAuthContext('admin');
           return;
         }
       }
 
       if (isSaisisseurRoute) {
-        if (localStorage.getItem('auth_token_saisisseur')) {
-          localStorage.setItem('auth_context', 'saisisseur');
+        if (getAuthStorageItem('auth_token_saisisseur')) {
+          setAuthStorageItem('auth_context', 'saisisseur');
           setAuthContext('saisisseur');
           return;
         }
@@ -1310,16 +1499,16 @@ function App({ forceVisitor = false }) {
 
       // Use active menu as hint only when route is ambiguous.
       if (!pathHasAdmin && !isSaisisseurRoute && activeMenu === 'Saisisseur') {
-        if (localStorage.getItem('auth_token_saisisseur')) {
-          localStorage.setItem('auth_context', 'saisisseur');
+        if (getAuthStorageItem('auth_token_saisisseur')) {
+          setAuthStorageItem('auth_context', 'saisisseur');
           setAuthContext('saisisseur');
           return;
         }
       }
 
       if (!pathHasAdmin && !isSaisisseurRoute && activeMenu === 'Admin') {
-        if (localStorage.getItem('auth_token_admin')) {
-          localStorage.setItem('auth_context', 'admin');
+        if (getAuthStorageItem('auth_token_admin')) {
+          setAuthStorageItem('auth_context', 'admin');
           setAuthContext('admin');
           return;
         }
@@ -1371,7 +1560,7 @@ function App({ forceVisitor = false }) {
     if (!isSaisisseur) return;
     const loadAssignments = async () => {
       try {
-        const userId = localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id');
+        const userId = getAuthStorageItem('user_id_saisisseur') || getAuthStorageItem('user_id');
         if (!userId) return;
         const resp = await axios.get(`${API_BASE}/user-theme-assignments/`);
         const my = resp.data.filter(a => String(a.user) === String(userId) && a.sous_theme);
@@ -1442,7 +1631,7 @@ function App({ forceVisitor = false }) {
     const draftedRows = getTableRows(draftedSubTheme) || [];
     setSelectedSubTheme((prev) => (prev ? { ...draftedSubTheme, data: draftedRows } : prev));
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isSaisisseur, saisisseurAssignments]);
+  }, [isSaisisseur, saisisseurAssignments, activeDataLanguage, selectedSubTheme?.id]);
 
   // Écoute globale pour ouvrir la config visiteur depuis le sous-thème
   useEffect(() => {
@@ -1462,6 +1651,15 @@ function App({ forceVisitor = false }) {
           found = res.data;
         }
         if (!found) return;
+
+        if (isSaisisseur) {
+          const assignmentForSt = getSaisisseurAssignmentForSubTheme(found.id);
+          if (assignmentForSt) {
+            const drafted = buildDraftSubTheme(found, assignmentForSt);
+            const draftedRows = getTableRows(drafted) || [];
+            found = { ...drafted, data: draftedRows };
+          }
+        }
 
         setConfigSubTheme(found);
         const cols = found.visitor_visible_columns || [];
@@ -1495,12 +1693,16 @@ function App({ forceVisitor = false }) {
           }
         }
 
-        setModalVisitorCols(vcCols);
-        setModalVisitorFilters(vcFilters);
-        setModalVisitorHierarchy(vcHierarchy);
-        setModalVisitorColsText(Array.isArray(vcCols) ? vcCols.join(', ') : String(vcCols || ''));
-        setModalVisitorFiltersText(vcFilters.join(', '));
-        setModalVisitorHierarchyText(vcHierarchy.join(', '));
+        const safeCols = dedupeConfiguredColumns(vcCols);
+        const safeFilters = dedupeConfiguredColumns(vcFilters);
+        const safeHierarchy = dedupeConfiguredColumns(vcHierarchy);
+
+        setModalVisitorCols(safeCols);
+        setModalVisitorFilters(safeFilters);
+        setModalVisitorHierarchy(safeHierarchy);
+        setModalVisitorColsText(Array.isArray(safeCols) ? safeCols.join(', ') : String(safeCols || ''));
+        setModalVisitorFiltersText(safeFilters.join(', '));
+        setModalVisitorHierarchyText(safeHierarchy.join(', '));
         setModalVisitorDefaultView(vcDefaultView);
         setModalVisitorDefaultFilters(vcDefaultFilters);
         setConfigModalOpen(true);
@@ -1540,6 +1742,16 @@ function App({ forceVisitor = false }) {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedSubTheme?.id, isVisitor]);
 
+  // Keep visitor filter selections consistent when changing language.
+  useEffect(() => {
+    if (!isVisitor && !isSaisisseur) return;
+    if (isVisitor) {
+      setDynamicFilters((prev) => localizeFilterStateMap(prev));
+    }
+    setChartVisitorFilters((prev) => localizeChartVisitorFilterMap(prev, savedCharts));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeDataLanguage, isVisitor, isSaisisseur, savedCharts]);
+
   // Populate chartVisitorFilters with defaults from each chart's visible_filters
   useEffect(() => {
     try {
@@ -1550,10 +1762,13 @@ function App({ forceVisitor = false }) {
         const defaults = {};
         vf.forEach(item => {
           if (!item) return;
+          const rawCol = typeof item === 'string' ? item : (item && item.column) ? item.column : '';
+          const col = getLocalizedColumnLabel(rawCol);
+          if (!col) return;
           if (typeof item === 'string') {
-            defaults[item] = '';
+            defaults[col] = '';
           } else if (item && item.column) {
-            defaults[item.column] = item.default || '';
+            defaults[col] = item.default ? getLocalizedValueLabel(rawCol, item.default) : '';
           }
         });
         map[chart.id] = defaults;
@@ -1562,7 +1777,8 @@ function App({ forceVisitor = false }) {
     } catch (err) {
       console.error('Error initializing chart visitor filters defaults', err);
     }
-  }, [savedCharts]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [savedCharts, activeDataLanguage]);
 
   // Apply sub-theme-level visitor default filters (e.g. Annee=2022) to each chart's visitor selections
   useEffect(() => {
@@ -1570,29 +1786,31 @@ function App({ forceVisitor = false }) {
     try {
       const raw = selectedSubTheme.visitor_default_filters || {};
       const defaultsObj = localizeVisitorDefaults(raw);
-      const newMap = { ...(chartVisitorFilters || {}) };
-      (savedCharts || []).forEach(chart => {
-        const vf = chart.visible_filters || [];
-        if (!vf || vf.length === 0) return;
-        newMap[chart.id] = { ...(newMap[chart.id] || {}) };
-        vf.forEach(item => {
-          const rawCol = typeof item === 'string' ? item : (item && item.column) || '';
-          const col = getLocalizedColumnLabel(rawCol);
-          if (!col) return;
-          if (defaultsObj && Object.prototype.hasOwnProperty.call(defaultsObj, col)) {
-            newMap[chart.id][col] = defaultsObj[col];
-          } else if (typeof item === 'object' && item && item.default) {
-            // fallback to per-chart defined default
-            if (!newMap[chart.id][col]) newMap[chart.id][col] = item.default;
-          }
+      setChartVisitorFilters((prev) => {
+        const newMap = { ...(prev || {}) };
+        (savedCharts || []).forEach(chart => {
+          const vf = chart.visible_filters || [];
+          if (!vf || vf.length === 0) return;
+          newMap[chart.id] = { ...(newMap[chart.id] || {}) };
+          vf.forEach(item => {
+            const rawCol = typeof item === 'string' ? item : (item && item.column) || '';
+            const col = getLocalizedColumnLabel(rawCol);
+            if (!col) return;
+            if (defaultsObj && Object.prototype.hasOwnProperty.call(defaultsObj, col)) {
+              newMap[chart.id][col] = defaultsObj[col];
+            } else if (typeof item === 'object' && item && item.default) {
+              const localizedDefault = getLocalizedValueLabel(rawCol, item.default);
+              if (!newMap[chart.id][col]) newMap[chart.id][col] = localizedDefault;
+            }
+          });
         });
+        return newMap;
       });
-      setChartVisitorFilters(newMap);
     } catch (err) {
       console.error('Error applying subtheme visitor default filters to charts', err);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSubTheme, isVisitor, savedCharts]);
+  }, [selectedSubTheme, isVisitor, savedCharts, activeDataLanguage]);
 
   // Apply sub-theme-level visitor default filters to table dynamic filters (so the table is filtered for visitors)
   useEffect(() => {
@@ -1637,16 +1855,19 @@ function App({ forceVisitor = false }) {
               changed = true;
             }
           });
-          return changed ? next : previous;
         }
 
         if (periodCol) {
-          const current = next[periodCol];
-          const hasCurrent = Array.isArray(current) ? current.length > 0 : (current !== undefined && current !== null && current !== '');
-          if (!hasCurrent) {
-            const latest = findLatestPeriodValue();
-            if (latest !== null && latest !== undefined && latest !== '') {
-              next[periodCol] = String(latest);
+          const latest = findLatestPeriodValue();
+          if (latest !== null && latest !== undefined && latest !== '') {
+            const latestString = String(latest);
+            const current = next[periodCol];
+            const currentSingle = Array.isArray(current)
+              ? (current.length === 1 ? String(current[0]) : '')
+              : String(current ?? '');
+            if (currentSingle !== latestString) {
+              // Visitor rule: year/period filter always follows the latest available period.
+              next[periodCol] = latestString;
               changed = true;
             }
           }
@@ -1658,11 +1879,26 @@ function App({ forceVisitor = false }) {
       console.error('Error applying visitor default filters to table', err);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedSubTheme, isVisitor]);
+  }, [selectedSubTheme, isVisitor, activeDataLanguage, localeCode]);
 
   // Keep chart-level visitor filters initialized from saved charts.
   
   // --- HELPER FUNCTIONS ---
+  const localizeVisitorMonolingualRows = (rows) => {
+    if (!Array.isArray(rows)) return [];
+    if (!isVisitor || activeDataLanguage === 'fr') return rows;
+
+    return rows.map((row) => {
+      const out = {};
+      Object.entries(row || {}).forEach(([col, value]) => {
+        const localizedCol = getLocalizedColumnLabel(col);
+        const keepRaw = isValueColumnIdentifier(col) || isPeriodColumnIdentifier(col);
+        out[localizedCol] = keepRaw ? value : getLocalizedValueLabel(col, value);
+      });
+      return out;
+    });
+  };
+
   const getTableRows = (sub) => {
     if (!sub) return [];
     if (canUseTranslatedDataView && sub.data_is_bilingual && bilingualLabelLookup.payload && Array.isArray(bilingualLabelLookup.payload.rows)) {
@@ -1705,22 +1941,22 @@ function App({ forceVisitor = false }) {
       console.warn('getTableRows debug failed', e);
     }
     // Prefer explicit `data` if it's an array
-    if (Array.isArray(sub.data)) return sub.data;
+    if (Array.isArray(sub.data)) return localizeVisitorMonolingualRows(sub.data);
     // If `data_json` exists, it may be an object or a JSON string
     const dj = sub.data_json ?? sub.dataJson ?? sub.dataJsonString ?? null;
-    if (Array.isArray(dj)) return dj;
+    if (Array.isArray(dj)) return localizeVisitorMonolingualRows(dj);
     if (dj && typeof dj === 'object') {
-      if (Array.isArray(dj.rows)) return dj.rows;
+      if (Array.isArray(dj.rows)) return localizeVisitorMonolingualRows(dj.rows);
       // sometimes the stored object is { "rows": [...] } or similar
       // fallback: try to find the first array value
       const vals = Object.values(dj).find(v => Array.isArray(v));
-      if (Array.isArray(vals)) return vals;
+      if (Array.isArray(vals)) return localizeVisitorMonolingualRows(vals);
     }
     if (typeof dj === 'string') {
       try {
         const parsed = JSON.parse(dj);
-        if (Array.isArray(parsed)) return parsed;
-        if (parsed && Array.isArray(parsed.rows)) return parsed.rows;
+        if (Array.isArray(parsed)) return localizeVisitorMonolingualRows(parsed);
+        if (parsed && Array.isArray(parsed.rows)) return localizeVisitorMonolingualRows(parsed.rows);
       } catch {
         // not JSON — ignore
       }
@@ -1736,11 +1972,11 @@ function App({ forceVisitor = false }) {
           colEntries.forEach(([k, v]) => { obj[k] = v[i] !== undefined ? v[i] : ''; });
           return obj;
         });
-        return rows;
+        return localizeVisitorMonolingualRows(rows);
       }
       // fallback: try to find the first array value
       const vals = Object.values(sub.data).find(v => Array.isArray(v));
-      if (Array.isArray(vals)) return vals;
+      if (Array.isArray(vals)) return localizeVisitorMonolingualRows(vals);
     }
 
     // Handle other common import wrappers (data_json may contain sheet maps etc.)
@@ -1750,18 +1986,18 @@ function App({ forceVisitor = false }) {
         // If keys are sheet names mapping to { rows: [...] } or arrays
         for (const key of Object.keys(djWrapped)) {
           const val = djWrapped[key];
-          if (Array.isArray(val)) return val;
-          if (val && Array.isArray(val.rows)) return val.rows;
+          if (Array.isArray(val)) return localizeVisitorMonolingualRows(val);
+          if (val && Array.isArray(val.rows)) return localizeVisitorMonolingualRows(val.rows);
           // sometimes sheet -> { data: { columns... } }
           if (val && val.data && typeof val.data === 'object') {
             const entries = Object.entries(val.data).filter(([, v]) => Array.isArray(v));
             if (entries.length > 0) {
               const maxLen = Math.max(...entries.map(([, v]) => v.length));
-              return Array.from({ length: maxLen }, (_, i) => {
+              return localizeVisitorMonolingualRows(Array.from({ length: maxLen }, (_, i) => {
                 const obj = {};
                 entries.forEach(([k, v]) => { obj[k] = v[i] !== undefined ? v[i] : ''; });
                 return obj;
-              });
+              }));
             }
           }
         }
@@ -1816,17 +2052,17 @@ function App({ forceVisitor = false }) {
     setIsAuthenticated(true);
     // refresh userRole from stored auth_context
     try {
-      const authContext = localStorage.getItem('auth_context');
-      if (authContext === 'admin') setUserRole(localStorage.getItem('user_role_admin') || '');
-      else if (authContext === 'saisisseur') setUserRole(localStorage.getItem('user_role_saisisseur') || '');
-      else setUserRole(localStorage.getItem('user_role') || '');
-    } catch { setUserRole(localStorage.getItem('user_role') || ''); }
+      const authContext = getAuthStorageItem('auth_context');
+      if (authContext === 'admin') setUserRole(getAuthStorageItem('user_role_admin') || '');
+      else if (authContext === 'saisisseur') setUserRole(getAuthStorageItem('user_role_saisisseur') || '');
+      else setUserRole(getAuthStorageItem('user_role') || '');
+    } catch { setUserRole(getAuthStorageItem('user_role') || ''); }
     // refresh authContext state
-    try { setAuthContext(localStorage.getItem('auth_context') || ''); } catch { setAuthContext(''); }
+    try { setAuthContext(getAuthStorageItem('auth_context') || ''); } catch { setAuthContext(''); }
     // if current path is /admin and user is admin, ensure active menu is Admin
     try {
       const p = (typeof window !== 'undefined' && window.location.pathname) ? window.location.pathname.toLowerCase() : '/';
-      if (p.startsWith('/admin') && (localStorage.getItem('user_role_admin') === 'ADMIN' || localStorage.getItem('user_role') === 'ADMIN')) {
+      if (p.startsWith('/admin') && (getAuthStorageItem('user_role_admin') === 'ADMIN' || getAuthStorageItem('user_role') === 'ADMIN')) {
         setActiveMenu('Admin');
         try { localStorage.setItem('activeMenu', 'Admin'); } catch { /* ignore storage errors */ }
       }
@@ -1836,27 +2072,28 @@ function App({ forceVisitor = false }) {
   };
 
   const handleLogout = () => {
+    let targetLoginPath = '/';
+    try {
+      const currentPath = (typeof window !== 'undefined' && window.location.pathname)
+        ? window.location.pathname.toLowerCase()
+        : '/';
+      if (currentPath.startsWith('/admin')) targetLoginPath = '/admin/login';
+      else if (currentPath.startsWith('/saisisseur')) targetLoginPath = '/saisisseur/login';
+    } catch {
+      // ignore path detection errors
+    }
+
     // remove tokens for all contexts to fully logout
-    localStorage.removeItem('auth_token');
-    localStorage.removeItem('user_id');
-    localStorage.removeItem('username');
-    localStorage.removeItem('user_email');
-    localStorage.removeItem('user_role');
-    localStorage.removeItem('auth_token_admin');
-    localStorage.removeItem('user_id_admin');
-    localStorage.removeItem('username_admin');
-    localStorage.removeItem('user_email_admin');
-    localStorage.removeItem('user_role_admin');
-    localStorage.removeItem('auth_token_saisisseur');
-    localStorage.removeItem('user_id_saisisseur');
-    localStorage.removeItem('username_saisisseur');
-    localStorage.removeItem('user_email_saisisseur');
-    localStorage.removeItem('user_role_saisisseur');
-    try { localStorage.removeItem('activeMenu'); localStorage.removeItem('auth_context'); } catch { /* ignore storage errors */ }
+    AUTH_STORAGE_KEYS.forEach((key) => removeAuthStorageItem(key));
+    try { localStorage.removeItem('activeMenu'); } catch { /* ignore storage errors */ }
     setAuthContext('');
     delete axios.defaults.headers.common['Authorization'];
     setIsAuthenticated(false);
     setUserRole('');
+
+    if (typeof window !== 'undefined' && targetLoginPath !== '/') {
+      window.location.replace(targetLoginPath);
+    }
   };
 
   const resolveCurrentAuthStorage = () => {
@@ -1865,7 +2102,7 @@ function App({ forceVisitor = false }) {
     else if (pathHasAdmin || userRole === 'ADMIN') ctx = 'admin';
     else {
       try {
-        ctx = localStorage.getItem('auth_context') || '';
+        ctx = getAuthStorageItem('auth_context') || '';
       } catch {
         ctx = '';
       }
@@ -1874,46 +2111,79 @@ function App({ forceVisitor = false }) {
     if (ctx === 'saisisseur') {
       return {
         context: 'saisisseur',
-        userId: localStorage.getItem('user_id_saisisseur') || localStorage.getItem('user_id'),
-        email: localStorage.getItem('user_email_saisisseur') || localStorage.getItem('user_email') || '',
-        token: localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token') || '',
-        emailKey: localStorage.getItem('user_email_saisisseur') !== null ? 'user_email_saisisseur' : 'user_email',
+        userId: getAuthStorageItem('user_id_saisisseur') || getAuthStorageItem('user_id'),
+        firstName: getAuthStorageItem('first_name_saisisseur') || getAuthStorageItem('first_name') || '',
+        email: getAuthStorageItem('user_email_saisisseur') || getAuthStorageItem('user_email') || '',
+        token: getAuthStorageItem('auth_token_saisisseur') || getAuthStorageItem('auth_token') || '',
+        firstNameKey: hasAuthStorageItem('first_name_saisisseur') ? 'first_name_saisisseur' : 'first_name',
+        emailKey: hasAuthStorageItem('user_email_saisisseur') ? 'user_email_saisisseur' : 'user_email',
       };
     }
 
     if (ctx === 'admin') {
       return {
         context: 'admin',
-        userId: localStorage.getItem('user_id_admin') || localStorage.getItem('user_id'),
-        email: localStorage.getItem('user_email_admin') || localStorage.getItem('user_email') || '',
-        token: localStorage.getItem('auth_token_admin') || localStorage.getItem('auth_token') || '',
-        emailKey: localStorage.getItem('user_email_admin') !== null ? 'user_email_admin' : 'user_email',
+        userId: getAuthStorageItem('user_id_admin') || getAuthStorageItem('user_id'),
+        firstName: getAuthStorageItem('first_name_admin') || getAuthStorageItem('first_name') || '',
+        email: getAuthStorageItem('user_email_admin') || getAuthStorageItem('user_email') || '',
+        token: getAuthStorageItem('auth_token_admin') || getAuthStorageItem('auth_token') || '',
+        firstNameKey: hasAuthStorageItem('first_name_admin') ? 'first_name_admin' : 'first_name',
+        emailKey: hasAuthStorageItem('user_email_admin') ? 'user_email_admin' : 'user_email',
       };
     }
 
     return {
       context: 'default',
-      userId: localStorage.getItem('user_id') || '',
-      email: localStorage.getItem('user_email') || '',
-      token: localStorage.getItem('auth_token') || '',
+      userId: getAuthStorageItem('user_id') || '',
+      firstName: getAuthStorageItem('first_name') || '',
+      email: getAuthStorageItem('user_email') || '',
+      token: getAuthStorageItem('auth_token') || '',
+      firstNameKey: 'first_name',
       emailKey: 'user_email',
     };
   };
 
+  const getPasswordChecks = (password) => {
+    const value = String(password || '');
+    return [
+      { id: 'len', label: 'Au moins 12 caracteres', valid: value.length >= 12 },
+      { id: 'upper', label: 'Une lettre majuscule', valid: /[A-Z]/.test(value) },
+      { id: 'lower', label: 'Une lettre minuscule', valid: /[a-z]/.test(value) },
+      { id: 'digit', label: 'Un chiffre', valid: /\d/.test(value) },
+      { id: 'special', label: 'Un caractere special (!@#$...)', valid: /[^A-Za-z0-9]/.test(value) },
+    ];
+  };
+
+  const settingsPasswordChecks = getPasswordChecks(settingsForm.newPassword);
+  const settingsHasNewPassword = Boolean(settingsForm.newPassword);
+  const settingsPasswordStrong = settingsPasswordChecks.every((rule) => rule.valid);
+  const settingsPasswordsMatch = !settingsHasNewPassword || settingsForm.newPassword === settingsForm.confirmPassword;
+  const settingsCanSubmit = Boolean(settingsForm.email?.trim())
+    && (!settingsHasNewPassword || (settingsPasswordStrong && settingsPasswordsMatch));
+
   const updateAccount = async () => {
+    setSettingsError('');
     if (settingsForm.newPassword && settingsForm.newPassword !== settingsForm.confirmPassword) {
-      showToast('Les mots de passe ne correspondent pas', 'error');
+      setSettingsError('Les mots de passe ne correspondent pas.');
+      return;
+    }
+
+    if (settingsForm.newPassword && !settingsPasswordStrong) {
+      setSettingsError('Mot de passe insuffisant: respectez toutes les regles de securite ci-dessous.');
       return;
     }
 
     const auth = resolveCurrentAuthStorage();
     if (!auth.userId) {
-      showToast('Utilisateur non identifié', 'error');
+      setSettingsError('Utilisateur non identifie.');
       return;
     }
 
     try {
-      const payload = { email: settingsForm.email };
+      const payload = {
+        first_name: String(settingsForm.firstName || '').trim(),
+        email: settingsForm.email,
+      };
       if (settingsForm.newPassword) payload.password = settingsForm.newPassword;
 
       const requestConfig = auth.token
@@ -1921,15 +2191,24 @@ function App({ forceVisitor = false }) {
         : undefined;
 
       await axios.patch(`${API_BASE}/users/${auth.userId}/`, payload, requestConfig);
+      setAuthStorageItem(auth.firstNameKey, payload.first_name || '');
+      setAuthStorageItem(auth.emailKey, settingsForm.email);
+      localStorage.setItem(auth.firstNameKey, payload.first_name || '');
       localStorage.setItem(auth.emailKey, settingsForm.email);
-      if (auth.context === 'saisisseur') localStorage.setItem('user_email', settingsForm.email);
+      if (auth.context === 'saisisseur') {
+        setAuthStorageItem('first_name', payload.first_name || '');
+        setAuthStorageItem('user_email', settingsForm.email);
+        localStorage.setItem('first_name', payload.first_name || '');
+        localStorage.setItem('user_email', settingsForm.email);
+      }
       showToast('Informations mises à jour', 'success');
+      setSettingsError('');
       setShowSettings(false);
-      setSettingsForm({ email: '', newPassword: '', confirmPassword: '' });
+      setSettingsForm({ firstName: '', email: '', newPassword: '', confirmPassword: '' });
     } catch (err) {
       console.error(err);
       const serverError = err?.response?.data?.error;
-      showToast(serverError || 'Erreur lors de la mise à jour', 'error');
+      setSettingsError(serverError || 'Erreur lors de la mise a jour du compte.');
     }
   };
 
@@ -2038,6 +2317,49 @@ function App({ forceVisitor = false }) {
   const handleConfirmOk = async () => { if (confirmModal.onConfirm) await confirmModal.onConfirm(); closeConfirm(); };
   const handleConfirmCancel = () => { closeConfirm(); };
   const showToast = (message, type = 'info') => { setToast({ message, type }); setTimeout(() => setToast(null), 3800); };
+  const alert = (message) => {
+    const text = String(message || '').trim();
+    const lower = text.toLowerCase();
+    const inferredType =
+      lower.includes('erreur') || lower.includes('impossible') || lower.includes('invalide')
+        ? 'error'
+        : lower.includes('succ') || lower.includes('enregistr') || lower.includes('sauvegard') || lower.includes('supprim')
+          ? 'success'
+          : 'info';
+    showToast(text || 'Notification', inferredType);
+  };
+  const getToastUi = (type) => {
+    if (type === 'success') {
+      return {
+        bar: 'bg-emerald-500',
+        iconWrap: 'bg-emerald-50 text-emerald-700',
+        label: 'Succès',
+        icon: '✓',
+      };
+    }
+    if (type === 'error') {
+      return {
+        bar: 'bg-rose-500',
+        iconWrap: 'bg-rose-50 text-rose-700',
+        label: 'Erreur',
+        icon: '!',
+      };
+    }
+    if (type === 'warning') {
+      return {
+        bar: 'bg-amber-500',
+        iconWrap: 'bg-amber-50 text-amber-700',
+        label: 'Attention',
+        icon: '!',
+      };
+    }
+    return {
+      bar: 'bg-slate-500',
+      iconWrap: 'bg-slate-100 text-slate-700',
+      label: 'Information',
+      icon: 'i',
+    };
+  };
 
   const handleDeleteRowFromChart = (chartId, chart, rowIndex) => {
     // Créer une clé unique basée sur X et Y
@@ -2109,9 +2431,8 @@ function App({ forceVisitor = false }) {
       ? [...(selectedSubTheme.columns || [])]
       : (rowsCopy[0] ? Object.keys(rowsCopy[0]) : []);
 
-    const normalizedRows = rowsCopy.map((row) =>
-      Object.fromEntries(baseCols.map((col) => [col, row?.[col] ?? '']))
-    );
+    const sourceCols = Array.from(new Set((rowsCopy || []).flatMap((row) => Object.keys(row || {}))));
+    const normalizedRows = mapRowsToTargetColumns(rowsCopy, sourceCols, baseCols);
 
     setEditTableColumns(baseCols);
     setEditTableRows(normalizedRows);
@@ -2459,23 +2780,24 @@ function App({ forceVisitor = false }) {
 
   const deleteCategorie = async (categorieId) => {
     try {
-      if (!confirm('Êtes-vous sûr de vouloir supprimer cette catégorie ? Tous les sous-thèmes seront supprimés.')) return;
-      
-      await axios.delete(`${API_BASE}/categories/${categorieId}/`);
-      showToast('Catégorie supprimée', 'success');
-      
-      // Refresh to ensure consistent state
-      const res = await axios.get(themesApiBase);
-      setThemes(res.data);
-      if (selectedTheme) {
-        const fresh = res.data.find(t => t.id === selectedTheme.id);
-        if (fresh) setSelectedTheme(fresh);
-      }
-      if (selectedCategorie && selectedCategorie.id === categorieId) {
-        setSelectedCategorie(null);
-        setFormStep(3);
-      }
-      setOpenCategorieMenu(null);
+      showConfirm('Êtes-vous sûr de vouloir supprimer cette catégorie ? Tous les sous-thèmes seront supprimés.', async () => {
+        await axios.delete(`${API_BASE}/categories/${categorieId}/`);
+        showToast('Catégorie supprimée', 'success');
+        
+        // Refresh to ensure consistent state
+        const res = await axios.get(themesApiBase);
+        setThemes(res.data);
+        if (selectedTheme) {
+          const fresh = res.data.find(t => t.id === selectedTheme.id);
+          if (fresh) setSelectedTheme(fresh);
+        }
+        if (selectedCategorie && selectedCategorie.id === categorieId) {
+          setSelectedCategorie(null);
+          setFormStep(3);
+        }
+        setOpenCategorieMenu(null);
+      });
+      return;
     } catch (err) {
       console.error(err);
       showToast('Erreur lors de la suppression de la catégorie', 'error');
@@ -3297,16 +3619,16 @@ function App({ forceVisitor = false }) {
         if (isVisitor) {
           token = null;
         } else if (pathHasAdmin) {
-          token = localStorage.getItem('auth_token_admin');
+          token = getAuthStorageItem('auth_token_admin');
         } else if (isSaisisseurRoute) {
-          token = localStorage.getItem('auth_token_saisisseur');
+          token = getAuthStorageItem('auth_token_saisisseur');
         } else {
-          const ctx = authContext || localStorage.getItem('auth_context');
-          if (ctx === 'admin') token = localStorage.getItem('auth_token_admin');
-          else if (ctx === 'saisisseur') token = localStorage.getItem('auth_token_saisisseur');
-          else token = localStorage.getItem('auth_token');
+          const ctx = authContext || getAuthStorageItem('auth_context');
+          if (ctx === 'admin') token = getAuthStorageItem('auth_token_admin');
+          else if (ctx === 'saisisseur') token = getAuthStorageItem('auth_token_saisisseur');
+          else token = getAuthStorageItem('auth_token');
         }
-      } catch { token = localStorage.getItem('auth_token'); }
+      } catch { token = getAuthStorageItem('auth_token'); }
 
       const res = await axios.get(url, token ? { headers: { Authorization: `Token ${token}` } } : {});
       setThemes(res.data);
@@ -3352,6 +3674,15 @@ function App({ forceVisitor = false }) {
   };
 
   const chartContainerHeightClass = isArabicDataView ? 'h-[24rem] md:h-[28rem]' : 'h-[22rem] md:h-[26rem]';
+  const chartMargin = isArabicDataView
+    ? { top: 14, right: 20, bottom: 18, left: 48 }
+    : { top: 10, right: 12, bottom: 12, left: 18 };
+  const chartYAxisProps = {
+    width: isArabicDataView ? 76 : 60,
+    tickMargin: isArabicDataView ? 14 : 8,
+    axisLine: !isArabicDataView,
+    tickLine: !isArabicDataView,
+  };
 
   const renderPieChartLabel = ({ cx, cy, midAngle, outerRadius, name, percent }) => {
     const RADIAN = Math.PI / 180;
@@ -3388,7 +3719,9 @@ function App({ forceVisitor = false }) {
     };
     const matchesChartFilter = (row, columnName, expectedValue) => {
       const rowValue = resolveChartColumnValue(row, columnName);
-      const localizedExpectedValue = isArabicDataView ? getLocalizedValueLabel(columnName, expectedValue) : expectedValue;
+      const localizedExpectedValue = activeDataLanguage !== 'fr'
+        ? getLocalizedValueLabel(columnName, expectedValue)
+        : expectedValue;
       return String(rowValue ?? '') === String(expectedValue ?? '') || String(rowValue ?? '') === String(localizedExpectedValue ?? '');
     };
     
@@ -3435,7 +3768,8 @@ function App({ forceVisitor = false }) {
     return null;
   };
 
-  const filteredData = getTableRows(selectedSubTheme).filter(row => {
+  const sourceTableRows = getTableRows(selectedSubTheme) || [];
+  const filteredRows = sourceTableRows.filter(row => {
     // Filtre par recherche texte (columnFilters)
     const passesTextFilter = Object.keys(columnFilters).every(key => {
       const resolved = resolveFilterKeyInRow(key, row);
@@ -3473,6 +3807,9 @@ function App({ forceVisitor = false }) {
 
     return passesTextFilter && passesDynamicFilters;
   }) || [];
+  const filteredData = (isVisitor && sourceTableRows.length > 0 && filteredRows.length === 0)
+    ? sourceTableRows
+    : filteredRows;
 
   const visibleColumnsForRender = React.useMemo(() => {
     if (!selectedSubTheme) return [];
@@ -3494,6 +3831,9 @@ function App({ forceVisitor = false }) {
         ? localizeConfiguredColumns(selectedSubTheme.visitor_visible_columns)
         : fallbackColumns;
     }
+    if (isSaisisseur) {
+      return rowBasedColumns.length > 0 ? rowBasedColumns : fallbackColumns;
+    }
     if (activeDataLanguage !== 'fr') {
       return localizeConfiguredColumns(fallbackColumns);
     }
@@ -3506,6 +3846,9 @@ function App({ forceVisitor = false }) {
     if (isVisitor) {
       const raw = (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
       return localizeConfiguredColumns(raw);
+    }
+    if (isSaisisseur) {
+      return selectedSubTheme.filtres_disponibles || [];
     }
     if (activeDataLanguage !== 'fr') {
       return localizeConfiguredColumns(selectedSubTheme.filtres_disponibles || []);
@@ -3852,26 +4195,27 @@ function App({ forceVisitor = false }) {
   };
 
   const deleteChart = async (id) => {
-    if (!confirm('Supprimer ce graphique ?')) return;
-    try {
-      if (isSaisisseur) {
-        const nextCharts = (savedCharts || []).filter((chart) => chart.id !== id);
-        setSavedCharts(nextCharts);
-        await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
-        return;
-      }
+    showConfirm('Supprimer ce graphique ?', async () => {
+      try {
+        if (isSaisisseur) {
+          const nextCharts = (savedCharts || []).filter((chart) => chart.id !== id);
+          setSavedCharts(nextCharts);
+          await saveDraftAssignmentForSaisisseur({ charts: nextCharts }, 'En cours');
+          return;
+        }
 
-      await axios.delete(`${API_BASE}/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
-      setSavedCharts(prev => prev.filter(c => c.id !== id));
-      // refresh subtheme
-      const themesRes = await axios.get(themesApiBase);
-      const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
-      const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
-      selectSubTheme(freshSubTheme);
-    } catch (err) {
-      console.error('Erreur suppression graphique', err);
-      alert('Erreur lors de la suppression');
-    }
+        await axios.delete(`${API_BASE}/sousthemes/${selectedSubTheme.id}/charts/${id}/`);
+        setSavedCharts(prev => prev.filter(c => c.id !== id));
+        // refresh subtheme
+        const themesRes = await axios.get(themesApiBase);
+        const freshTheme = themesRes.data.find(t => t.id === selectedTheme.id);
+        const freshSubTheme = freshTheme.sous_themes.find(sub => sub.id === selectedSubTheme.id);
+        selectSubTheme(freshSubTheme);
+      } catch (err) {
+        console.error('Erreur suppression graphique', err);
+        alert('Erreur lors de la suppression');
+      }
+    });
   };
 
   // Toggle publication status for a sous-thème
@@ -4058,21 +4402,22 @@ function App({ forceVisitor = false }) {
 
   const removeThemeImage = async (themeId) => {
     if (!themeId) return;
-    if (!confirm('Supprimer l\'image de ce thème ?')) return;
-    try {
-      await axios.patch(`${API_BASE}/themes/${themeId}/`, { theme_image: null });
+    showConfirm('Supprimer l\'image de ce thème ?', async () => {
+      try {
+        await axios.patch(`${API_BASE}/themes/${themeId}/`, { theme_image: null });
 
-      const res = await axios.get(themesApiBase);
-      setThemes(res.data);
-      if (selectedTheme && selectedTheme.id === themeId) {
-        const freshTheme = res.data.find(t => t.id === themeId);
-        if (freshTheme) setSelectedTheme(freshTheme);
+        const res = await axios.get(themesApiBase);
+        setThemes(res.data);
+        if (selectedTheme && selectedTheme.id === themeId) {
+          const freshTheme = res.data.find(t => t.id === themeId);
+          if (freshTheme) setSelectedTheme(freshTheme);
+        }
+        showToast('Image du thème supprimée', 'success');
+      } catch (err) {
+        console.error('Erreur suppression image thème', err);
+        alert('Erreur lors de la suppression de l\'image du thème');
       }
-      showToast('Image du thème supprimée', 'success');
-    } catch (err) {
-      console.error('Erreur suppression image thème', err);
-      alert('Erreur lors de la suppression de l\'image du thème');
-    }
+    });
   };
 
   const goToTable = () => {
@@ -4389,36 +4734,99 @@ function App({ forceVisitor = false }) {
     return Array.from(byId.values());
   }).filter(st => isSubThemeVisibleForCurrentRole(st));
 
+  const sidebarIdentity = React.useMemo(() => {
+    if (!isAuthenticated || isVisitor) return null;
+
+    let context = authContext || '';
+    if (pathHasAdmin) context = 'admin';
+    if (isSaisisseurRoute) context = 'saisisseur';
+
+    const username = context === 'admin'
+      ? (getAuthStorageItem('username_admin') || getAuthStorageItem('username'))
+      : context === 'saisisseur'
+        ? (getAuthStorageItem('username_saisisseur') || getAuthStorageItem('username'))
+        : getAuthStorageItem('username');
+    const firstName = context === 'admin'
+      ? (getAuthStorageItem('first_name_admin') || getAuthStorageItem('first_name'))
+      : context === 'saisisseur'
+        ? (getAuthStorageItem('first_name_saisisseur') || getAuthStorageItem('first_name'))
+        : getAuthStorageItem('first_name');
+    const email = context === 'admin'
+      ? (getAuthStorageItem('user_email_admin') || getAuthStorageItem('user_email'))
+      : context === 'saisisseur'
+        ? (getAuthStorageItem('user_email_saisisseur') || getAuthStorageItem('user_email'))
+        : getAuthStorageItem('user_email');
+    const role = context === 'admin'
+      ? (getAuthStorageItem('user_role_admin') || getAuthStorageItem('user_role') || 'ADMIN')
+      : context === 'saisisseur'
+        ? (getAuthStorageItem('user_role_saisisseur') || getAuthStorageItem('user_role') || 'SAISISSEUR')
+        : (getAuthStorageItem('user_role') || userRole || 'UTILISATEUR');
+
+    const normalizeDisplayName = (value) => {
+      const raw = String(value || '').trim();
+      if (!raw) return '';
+      return raw
+        .replace(/[._-]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((chunk) => chunk.charAt(0).toUpperCase() + chunk.slice(1))
+        .join(' ');
+    };
+
+    const prettyUsername = normalizeDisplayName(String(username || '').trim() || String(email || '').split('@')[0]);
+    const displayName = String(firstName || '').trim() || prettyUsername || String(email || '').trim() || 'Utilisateur';
+    const initialSource = displayName.includes('@') ? displayName.split('@')[0] : displayName;
+    const chunks = initialSource.split(/\s+/).filter(Boolean);
+    const initials = chunks.length > 1
+      ? `${chunks[0][0] || ''}${chunks[1][0] || ''}`
+      : String(initialSource).slice(0, 2);
+
+    return {
+      displayName,
+      email: String(email || '').trim(),
+      roleLabel: role === 'ADMIN' ? 'Administrateur' : role === 'SAISISSEUR' ? 'Saisisseur' : String(role || 'Utilisateur'),
+      initials: String(initials || 'U').toUpperCase(),
+    };
+  }, [authContext, isAuthenticated, isSaisisseurRoute, isVisitor, pathHasAdmin, userRole]);
+  const headerProfileMenuRef = React.useRef(null);
+
+  useEffect(() => {
+    if (!showHeaderProfileMenu) return;
+    const handleOutside = (event) => {
+      if (headerProfileMenuRef.current && !headerProfileMenuRef.current.contains(event.target)) {
+        setShowHeaderProfileMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handleOutside);
+    return () => document.removeEventListener('mousedown', handleOutside);
+  }, [showHeaderProfileMenu]);
+
   // Affiche le loading ou la page de login/admin
   if (authLoading) {
     return <div className="flex min-h-screen bg-[#f4f1e1] justify-center items-center"><p className="text-xl font-bold">Chargement...</p></div>;
   }
 
-  // Early guard: if path is /saisisseur (or starts with) and user not authenticated,
-  // immediately render the saisisseur login page to avoid showing admin login.
+  // If user is not authenticated on a saisisseur route, always show saisisseur login.
   if (!isAuthenticated && pathHasSaisisseur) {
     return <LoginPage onLoginSuccess={handleLogin} loginMode={'saisisseur'} />;
   }
 
-  // If path is /admin and not authenticated, render admin login page
+  // If user is not authenticated on an admin route, always show admin login.
   if (!isAuthenticated && pathHasAdmin) {
     return <LoginPage onLoginSuccess={handleLogin} loginMode={'admin'} />;
   }
 
   if (!isAuthenticated && !isVisitor) {
-    const loginMode = pathHasSaisisseur ? 'saisisseur' : 'admin';
     try {
-      // If the path looks like a direct saisisseur username path (e.g. '/jean')
-      // and the user is not authenticated nor explicitly on /saisisseur or /admin, redirect to the saisisseur login page.
-      if (pathname !== '/' && !pathHasSaisisseur && !pathHasVisiteur && !pathHasAdmin && !pathname.includes('.') ) {
-        window.location.replace('/saisisseur');
+      if (!pathname.includes('.')) {
+        window.location.replace('/admin/login');
         return null;
       }
     } catch {
-      // Ignore selection bootstrap errors.
+      // Ignore URL parsing errors.
     }
 
-    return <LoginPage onLoginSuccess={handleLogin} loginMode={loginMode} />;
+    return <LoginPage onLoginSuccess={handleLogin} loginMode={'admin'} />;
   }
 
   // --- RENDU PRINCIPAL (Admin) ---
@@ -4428,7 +4836,7 @@ function App({ forceVisitor = false }) {
       {/* 1. MENU LATÉRAL */}
       <div className="w-64 h-screen shrink-0 sticky top-0 bg-[var(--color-surface)] border-r border-[var(--color-border)] flex flex-col shadow-sm overflow-y-auto">
         <div className="p-4 bg-[var(--color-surface)] border-b border-[var(--color-border)] flex flex-col items-center min-h-[210px]">
-          <img src="src/Image3.png" alt="Logo HCP" className="w-full h-full object-contain" />
+          <img src={logoMain} alt="Logo HCP" className="w-full h-full object-contain" />
         </div>
         <div className="bg-[#f9fafb] text-[var(--color-text-main)] py-2 px-4 font-semibold text-center border-b border-[var(--color-border)]">{t('menu')}</div>
         <div>
@@ -4452,7 +4860,8 @@ function App({ forceVisitor = false }) {
             <button
               onClick={() => {
                 const auth = resolveCurrentAuthStorage();
-                setSettingsForm({ email: auth.email || '', newPassword: '', confirmPassword: '' });
+                setSettingsForm({ firstName: auth.firstName || '', email: auth.email || '', newPassword: '', confirmPassword: '' });
+                setSettingsError('');
                 setShowSettings(true);
               }}
               className="group w-full flex items-center gap-3 rounded-2xl border border-[#d6b58b] bg-[linear-gradient(135deg,#fffdf8_0%,#f8ecda_100%)] px-4 py-3 text-left text-[#6E001F] font-semibold shadow-[0_8px_20px_rgba(122,10,74,0.08)] transition-all hover:-translate-y-[1px] hover:border-[#B03372] hover:shadow-[0_14px_24px_rgba(122,10,74,0.16)]"
@@ -4513,7 +4922,7 @@ function App({ forceVisitor = false }) {
           {/* Header search + language selector */}
           {(isVisitor || pathHasAdmin || isSaisisseurRoute) && (
             <div className="flex items-center gap-2 shrink-0 min-w-0" style={{zIndex: 200}}>
-              {isVisitor && (
+              {isVisitor && enableVisitorHeaderSearch && (
                 <div
                   className="relative w-[150px] md:w-[210px]"
                   onFocus={() => setShowVisitorHeaderSearch(true)}
@@ -4580,6 +4989,55 @@ function App({ forceVisitor = false }) {
               <div className="relative shrink-0">
                 <LangSelector t={t} i18n={i18n} />
               </div>
+
+              {sidebarIdentity && (
+                <div className="relative shrink-0" ref={headerProfileMenuRef}>
+                  <button
+                    type="button"
+                    onClick={() => setShowHeaderProfileMenu((prev) => !prev)}
+                    className="h-9 w-9 bg-[#fffaf2] hover:bg-[#f6ebdb] text-[#6E001F] font-semibold rounded-md border border-[#B84C83] flex items-center justify-center"
+                    title="Compte utilisateur"
+                  >
+                    <span className="text-[11px] font-bold tracking-wide">{sidebarIdentity.initials}</span>
+                  </button>
+                  {showHeaderProfileMenu && (
+                    <div className={`absolute ${i18n.language === 'ar' ? 'left-0' : 'right-0'} mt-1 w-64 bg-[#fffaf2] border border-[#B84C83] rounded-md shadow-lg p-3`} style={{ zIndex: 9999 }}>
+                      <div className="text-xs text-[#8A5A72]">Bonjour,</div>
+                      <div className="text-sm font-bold text-[#6E001F] truncate">{sidebarIdentity.displayName}</div>
+                      <div className="text-xs text-[#8A5A72] truncate mt-0.5">{sidebarIdentity.email || sidebarIdentity.roleLabel}</div>
+                      <div className="mt-2 inline-flex items-center rounded-full border border-[#e4bfd0] bg-[#fff6fa] px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-[#7A0A4A]">
+                        {sidebarIdentity.roleLabel}
+                      </div>
+                      <div className="mt-3 pt-2 border-t border-[#ead0db] flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const auth = resolveCurrentAuthStorage();
+                            setSettingsForm({ firstName: auth.firstName || '', email: auth.email || '', newPassword: '', confirmPassword: '' });
+                            setSettingsError('');
+                            setShowHeaderProfileMenu(false);
+                            setShowSettings(true);
+                          }}
+                          className="flex-1 px-2 py-1.5 rounded-md border border-[#d8b6c8] bg-white text-[#7A0A4A] text-xs font-semibold hover:bg-[#f7eaf1]"
+                        >
+                          Parametres
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setShowHeaderProfileMenu(false);
+                            handleLogout();
+                          }}
+                          className="flex-1 px-2 py-1.5 rounded-md border border-[#e2b6b6] bg-[#fff1f1] text-[#8b1d3f] text-xs font-semibold hover:bg-[#ffe3e3]"
+                        >
+                          Deconnexion
+                        </button>
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+
             </div>
           )}
         </div>
@@ -4659,7 +5117,7 @@ function App({ forceVisitor = false }) {
           </div>
         </div>
 
-        {formStep !== 4 && activeMenu !== 'Admin' && !isInfoMenu && (
+        {formStep !== 4 && activeMenu !== 'Admin' && activeMenu !== 'Saisisseur' && !isInfoMenu && (
           <div className={`px-3 md:px-4 bg-[#f4f5f7] border-b border-[var(--color-border)] max-w-[1200px] w-full mx-auto ${activeMenu === 'Themes' && formStep === 3 ? 'pt-4 pb-3 space-y-2' : 'pt-5 pb-4 space-y-3'}`}>
             {activeMenu === 'Themes' && formStep === 3 && selectedTheme && (
               <div className="flex items-center gap-2">
@@ -5426,9 +5884,9 @@ function App({ forceVisitor = false }) {
                       const t = themes.find(x => x.id === openActionMenu);
                       if (!t) return;
                       const newVis = !t.is_visible;
-                      if (confirm(`Rendre ce thème ${newVis ? 'Public' : 'Privé'} ainsi que tous ses sous-thèmes ?`)) {
-                        toggleThemePublication(openActionMenu, newVis);
-                      }
+                      showConfirm(`Rendre ce thème ${newVis ? 'Public' : 'Privé'} ainsi que tous ses sous-thèmes ?`, async () => {
+                        await toggleThemePublication(openActionMenu, newVis);
+                      });
                       setOpenActionMenu(null);
                     }} className="w-full text-left px-4 py-2 hover:bg-gray-100 flex items-center gap-2">
                       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg"><path d="M12 5v14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/><path d="M5 12h14" stroke="#0F172A" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/></svg>
@@ -5442,35 +5900,41 @@ function App({ forceVisitor = false }) {
 
           {/* ÉTAPES 1 & 2 (Identiques à votre code initial) */}
           {activeMenu === 'Themes' && formStep === 1 && (
-             <div className="bg-white border-2 border-black p-12 rounded-lg shadow-xl max-w-4xl mx-auto space-y-8">
-               <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Titre du thème*</label>
-                 <input type="text" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none" 
+             <div className="max-w-5xl mx-auto rounded-3xl border border-[#d9bfd0] bg-[#fffaf3] shadow-[0_22px_48px_rgba(94,7,56,0.14)] overflow-hidden">
+               <div className="px-8 py-6 border-b border-[#ecd7e3] bg-gradient-to-r from-[#7A0A4A] to-[#B03372]">
+                 <h3 className="text-2xl md:text-3xl font-extrabold text-white tracking-wide">Créer un thème</h3>
+                 <p className="mt-1 text-sm text-[#f6dfe9]">Renseignez les informations de base, puis continuez vers la configuration des sous-thèmes.</p>
+               </div>
+
+               <div className="p-8 space-y-6">
+               <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-center gap-3 md:gap-5">
+                 <label className="text-[15px] md:text-base font-bold text-[#5a2436]">Titre du thème*</label>
+                 <input type="text" className="w-full rounded-xl border border-[#d7bfd0] bg-white px-4 py-2.5 text-base outline-none focus:border-[#B03372] focus:ring-2 focus:ring-[#f2d5e5]" 
                    value={themeData.titre || ''}
                    onChange={e => setThemeData({...themeData, titre: e.target.value})} />
                </div>
 
-               <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Titre du thème (AR)</label>
-                 <input type="text" dir="rtl" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
+               <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-center gap-3 md:gap-5">
+                 <label className="text-[15px] md:text-base font-bold text-[#5a2436]">Titre du thème (AR)</label>
+                 <input type="text" dir="rtl" className="w-full rounded-xl border border-[#d7bfd0] bg-white px-4 py-2.5 text-base outline-none focus:border-[#B03372] focus:ring-2 focus:ring-[#f2d5e5]"
                    value={themeData.titre_ar || ''}
                    onChange={e => setThemeData({...themeData, titre_ar: e.target.value})} />
                </div>
 
-               <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Theme title (EN)</label>
-                 <input type="text" className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
+               <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-center gap-3 md:gap-5">
+                 <label className="text-[15px] md:text-base font-bold text-[#5a2436]">Theme title (EN)</label>
+                 <input type="text" className="w-full rounded-xl border border-[#d7bfd0] bg-white px-4 py-2.5 text-base outline-none focus:border-[#B03372] focus:ring-2 focus:ring-[#f2d5e5]"
                    value={themeData.titre_en || ''}
                    onChange={e => setThemeData({...themeData, titre_en: e.target.value})} />
                </div>
 
-               <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Image du thème (optionnelle)</label>
+               <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-start gap-3 md:gap-5">
+                 <label className="text-[15px] md:text-base font-bold text-[#5a2436] pt-2">Image du thème (optionnelle)</label>
                  <div className="flex-1 space-y-2">
                    <input
                      type="file"
                      accept="image/*"
-                     className="w-full border-2 border-blue-300 rounded-md p-2 text-sm bg-white"
+                     className="w-full rounded-xl border border-[#d7bfd0] bg-white px-4 py-2.5 text-sm outline-none"
                      onChange={async (e) => {
                        const f = e.target.files && e.target.files[0] ? e.target.files[0] : null;
                        if (!f) {
@@ -5496,18 +5960,18 @@ function App({ forceVisitor = false }) {
                        }
                      }}
                    />
-                   <div className="text-xs text-gray-600">
+                   <div className="text-xs text-[#7a5c6e]">
                      Conseil: prefere une image PNG transparente. Les fonds clairs sont estompes automatiquement sur les tickets visiteurs.
                    </div>
                    {themeImagePreview && (
                      <div className="flex items-center gap-3">
-                       <div className="w-12 h-12 border border-gray-300 rounded-sm bg-[#7A0A4A] flex items-center justify-center overflow-hidden">
+                       <div className="w-12 h-12 border border-[#d8bfd0] rounded-lg bg-[#7A0A4A] flex items-center justify-center overflow-hidden">
                          <img src={themeImagePreview} alt="Aperأ§u" className="w-10 h-10 object-contain" />
                        </div>
                        <button
                          type="button"
                          onClick={() => { setThemeImageFile(null); setThemeImagePreview(''); }}
-                         className="bg-gray-200 hover:bg-gray-300 px-3 py-1 rounded-sm text-sm font-semibold"
+                         className="rounded-lg border border-[#dcc7d4] bg-white px-3 py-1.5 text-sm font-semibold text-[#6a4b5d] hover:bg-[#faf5f8]"
                        >
                          Retirer
                        </button>
@@ -5516,8 +5980,8 @@ function App({ forceVisitor = false }) {
                  </div>
                </div>
                
-               <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Utiliser des catégories ?</label>
+               <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-center gap-3 md:gap-5">
+                 <label className="text-[15px] md:text-base font-bold text-[#5a2436]">Utiliser des catégories ?</label>
                  <input 
                    type="checkbox" 
                    checked={useCategories}
@@ -5525,23 +5989,23 @@ function App({ forceVisitor = false }) {
                      setUseCategories(e.target.checked);
                      if (!e.target.checked) setCategoryNames([{ nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }]);
                    }}
-                   className="w-6 h-6 cursor-pointer"
+                   className="h-5 w-5 cursor-pointer accent-[#7A0A4A]"
                  />
                </div>
                
                {useCategories && (
-                 <div className="border-2 border-blue-300 rounded-lg p-4 space-y-3 bg-blue-50">
+                 <div className="rounded-2xl border border-[#d8bfd0] bg-[#fff7fb] p-4 space-y-3">
                    <div className="flex justify-between items-center">
-                     <label className="text-lg font-bold">Configuration des catégories</label>
+                     <label className="text-base font-bold text-[#5a2436]">Configuration des catégories</label>
                      <button 
                        onClick={() => setCategoryNames([...categoryNames, { nom: '', nom_ar: '', nom_en: '', nbSousThemes: 1 }])}
-                       className="bg-green-500 text-white px-3 py-1 rounded-md font-bold hover:bg-green-600"
+                       className="rounded-lg border border-[#a8cfb0] bg-[#e8f6ea] px-3 py-1.5 text-sm font-semibold text-[#2d6a3c] hover:bg-[#daf0de]"
                      >
                        + Ajouter une catégorie
                      </button>
                    </div>
                    {categoryNames.map((cat, idx) => (
-                     <div key={idx} className="border-2 border-gray-300 rounded-lg p-3 space-y-2 bg-white">
+                     <div key={idx} className="rounded-xl border border-[#e1d1dc] p-3 space-y-2 bg-white">
                        <div className="flex gap-2 items-center">
                          <span className="font-bold text-lg w-8">{idx + 1}.</span>
                          <div className="flex-1 flex gap-3">
@@ -5553,7 +6017,7 @@ function App({ forceVisitor = false }) {
                                newCats[idx].nom = e.target.value;
                                setCategoryNames(newCats);
                              }}
-                             className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
+                             className="flex-1 border border-[#d7bfd0] rounded-lg p-2 outline-none focus:border-[#B03372]"
                              placeholder={`Nom de la catégorie ${idx + 1}`}
                            />
                            <input 
@@ -5565,7 +6029,7 @@ function App({ forceVisitor = false }) {
                                newCats[idx].nom_ar = e.target.value;
                                setCategoryNames(newCats);
                              }}
-                             className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
+                             className="flex-1 border border-[#d7bfd0] rounded-lg p-2 outline-none focus:border-[#B03372]"
                              placeholder={`الاسم العربي للفئة ${idx + 1}`}
                            />
                            <input 
@@ -5576,7 +6040,7 @@ function App({ forceVisitor = false }) {
                                newCats[idx].nom_en = e.target.value;
                                setCategoryNames(newCats);
                              }}
-                             className="flex-1 border-2 border-blue-300 rounded-md p-2 outline-none"
+                             className="flex-1 border border-[#d7bfd0] rounded-lg p-2 outline-none focus:border-[#B03372]"
                              placeholder={`English category name ${idx + 1}`}
                            />
                            <div className="flex items-center gap-2">
@@ -5590,14 +6054,14 @@ function App({ forceVisitor = false }) {
                                  newCats[idx].nbSousThemes = parseInt(e.target.value) || 1;
                                  setCategoryNames(newCats);
                                }}
-                               className="w-20 border-2 border-blue-300 rounded-md p-2 outline-none text-center"
+                               className="w-20 border border-[#d7bfd0] rounded-lg p-2 outline-none text-center focus:border-[#B03372]"
                              />
                            </div>
                          </div>
                          {categoryNames.length > 1 && (
                            <button 
                              onClick={() => setCategoryNames(categoryNames.filter((_, i) => i !== idx))}
-                             className="bg-red-500 text-white px-3 py-2 rounded-md font-bold hover:bg-red-600"
+                             className="rounded-lg border border-[#e3b8c8] bg-[#fff1f6] px-3 py-2 font-bold text-[#9a1f49] hover:bg-[#ffe3ed]"
                            >
                              ✕
                            </button>
@@ -5609,24 +6073,25 @@ function App({ forceVisitor = false }) {
                )}
                
                {!useCategories && (
-                 <div className="flex items-center gap-6">
-                   <label className="text-xl w-64 font-bold">Nombre des Sous-thèmes*</label>
-                   <input type="number" min="1" className="w-32 border-2 border-blue-300 rounded-md p-2 text-lg outline-none"
+                 <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-center gap-3 md:gap-5">
+                   <label className="text-[15px] md:text-base font-bold text-[#5a2436]">Nombre des Sous-thèmes*</label>
+                   <input type="number" min="1" className="w-36 rounded-xl border border-[#d7bfd0] bg-white px-4 py-2.5 text-base outline-none focus:border-[#B03372]"
                      value={themeData.nbSousThemes} onChange={e => setThemeData({...themeData, nbSousThemes: parseInt(e.target.value)})} />
                  </div>
                )}
                
-               <div className="flex items-center gap-6">
-                 <label className="text-xl w-64 font-bold">Statut de publication</label>
-                 <select className="flex-1 border-2 border-blue-300 rounded-md p-2 text-lg bg-white outline-none" 
+               <div className="grid grid-cols-1 md:grid-cols-[260px_1fr] items-center gap-3 md:gap-5">
+                 <label className="text-[15px] md:text-base font-bold text-[#5a2436]">Statut de publication</label>
+                 <select className="w-full rounded-xl border border-[#d7bfd0] bg-white px-4 py-2.5 text-base outline-none focus:border-[#B03372]" 
                    onChange={e => setThemeData({...themeData, statut: e.target.value})}>
                    <option value="Public">Public 🌍</option>
                    <option value="Privé">Privé 🔒</option>
                  </select>
                </div>
-               <div className="flex justify-end gap-4 mt-10">
-                 <button onClick={() => { setFormStep(0); setThemeImageFile(null); setThemeImagePreview(''); setRows([]); }} className="bg-[#f28a8a] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Annuler</button>
-                 <button onClick={goToTable} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Suivant →</button>
+               <div className="flex justify-end gap-3 mt-8 pt-5 border-t border-[#ecd7e3]">
+                 <button onClick={() => { setFormStep(0); setThemeImageFile(null); setThemeImagePreview(''); setRows([]); }} className="rounded-xl border border-[#d9c6d1] bg-white px-5 py-2.5 font-semibold text-[#6a4a5d] hover:bg-[#faf6f8]">Annuler</button>
+                 <button onClick={goToTable} className="rounded-xl border border-[#8c1f60] bg-[#7A0A4A] px-5 py-2.5 font-semibold text-white hover:bg-[#5E0738] shadow-sm">Suivant →</button>
+               </div>
                </div>
              </div>
           )}
@@ -5715,9 +6180,9 @@ function App({ forceVisitor = false }) {
                    </table>
                  </div>
                )}
-               <div className="p-4 flex justify-between bg-gray-50 rounded-lg border-2 border-black">
-                 <button onClick={() => setFormStep(1)} className="bg-[#ffb366] text-white px-8 py-2 rounded-lg border-2 border-black font-bold shadow-md">⬅ Précédent</button>
-                 <button onClick={handleFinalSubmit} className="bg-[#ffb366] text-white px-10 py-2 rounded-lg border-2 border-black font-bold shadow-md">Enregistrer →</button>
+               <div className="flex justify-between pt-4">
+                 <button onClick={() => setFormStep(1)} className="rounded-xl border border-[#d9c6d1] bg-white px-5 py-2.5 font-semibold text-[#6a4a5d] hover:bg-[#faf6f8]">⬅ Précédent</button>
+                 <button onClick={handleFinalSubmit} className="rounded-xl border border-[#8c1f60] bg-[#7A0A4A] px-5 py-2.5 font-semibold text-white hover:bg-[#5E0738] shadow-sm">Enregistrer →</button>
                </div>
              </div>
           )}
@@ -5739,8 +6204,9 @@ function App({ forceVisitor = false }) {
                         onChange={async (e) => {
                           const val = e.target.value;
                           const newVis = val === 'Public';
-                          if (!confirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`)) return;
-                          await toggleCategoriePublication(selectedCategorie.id, newVis);
+                          showConfirm(`Changer la visibilité de la catégorie "${selectedCategorie.nom}" et de tous ses sous-thèmes ?`, async () => {
+                            await toggleCategoriePublication(selectedCategorie.id, newVis);
+                          });
                         }}
                         className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
                       >
@@ -5760,8 +6226,9 @@ function App({ forceVisitor = false }) {
                         onChange={async (e) => {
                           const val = e.target.value;
                           const newVis = val === 'Public';
-                          if (!confirm('Changer la visibilité du thème et de tous ses sous-thèmes ?')) return;
-                          await toggleThemePublication(selectedTheme.id, newVis);
+                          showConfirm('Changer la visibilité du thème et de tous ses sous-thèmes ?', async () => {
+                            await toggleThemePublication(selectedTheme.id, newVis);
+                          });
                         }}
                         className="border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none font-bold"
                       >
@@ -6061,8 +6528,9 @@ function App({ forceVisitor = false }) {
                         onChange={async (e) => {
                           const val = e.target.value;
                           const newVis = val === 'Public';
-                          if (!confirm('Changer le statut du sous-thème ?')) return;
-                          await toggleSubThemePublication(selectedSubTheme.id, newVis);
+                          showConfirm('Changer le statut du sous-thème ?', async () => {
+                            await toggleSubThemePublication(selectedSubTheme.id, newVis);
+                          });
                         }}
                         className="flex-1 border-2 border-blue-300 rounded-md p-2 text-sm bg-white outline-none"
                       >
@@ -6280,7 +6748,7 @@ function App({ forceVisitor = false }) {
                         <span className="mx-2">•</span>
                         <span>{t('hierarchy_count', { count: (visitorVerticalMatrix.hierarchyCols || []).length })}</span>
                       </div>
-                      <table className="w-full border-collapse text-sm">
+                      <table className="w-full border-collapse text-base">
                         <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
                           {(() => {
                             const headerRows = visitorVerticalMatrix.headerRows || [];
@@ -6290,16 +6758,16 @@ function App({ forceVisitor = false }) {
                               <>
                                 <tr>
                                   {rowCols.map(col => (
-                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-center uppercase tracking-wide font-bold text-sm">{translateDataValue(col)}</th>
+                                    <th key={`rowcol-${col}`} rowSpan={headerRows.length} className="p-4 border-r border-[#7b1e5a] min-w-[150px] text-center uppercase tracking-wide font-bold text-base">{translateDataValue(col)}</th>
                                   ))}
                                   {(headerRows[0].cells || []).map(cell => (
-                                    <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#7b1e5a] text-center font-bold text-sm">{cell.label}</th>
+                                    <th key={cell.key} colSpan={cell.colSpan} className="p-4 border-r border-[#7b1e5a] text-center font-bold text-base">{cell.label}</th>
                                   ))}
                                 </tr>
                                 {headerRows.slice(1).map((row, ridx) => (
                                   <tr key={`hrow-${ridx + 1}`}>
                                     {(row.cells || []).map(cell => (
-                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#7b1e5a] text-center font-semibold text-xs bg-[#8a2f67]">{cell.label}</th>
+                                      <th key={cell.key} colSpan={cell.colSpan} className="p-2 border-r border-[#7b1e5a] text-center font-semibold text-sm bg-[#8a2f67]">{cell.label}</th>
                                     ))}
                                   </tr>
                                 ))}
@@ -6331,7 +6799,7 @@ function App({ forceVisitor = false }) {
 
                             const rowCount = displayedRows.length;
                             const spans = {};
-                            const isPeriodCol = (colName) => /(annee|année|period|période|year)/i.test(String(colName || '').toLowerCase());
+                            const isPeriodCol = (colName) => isPeriodColumnIdentifier(colName);
                             rowCols.forEach((col, colIndex) => {
                               spans[col] = new Array(rowCount).fill(0);
                               let i = 0;
@@ -6362,7 +6830,7 @@ function App({ forceVisitor = false }) {
                                 {rowCols.map(col => {
                                   const span = spans[col][i] || 0;
                                   if (span === 0) return null;
-                                  const isYearCol = /(annee|année|period|période|year)/i.test(String(col).toLowerCase());
+                                  const isYearCol = isPeriodColumnIdentifier(col);
                                   const isProvinceCol = /(province|prefecture|préfecture|region|région|wilaya|عمالة|إقليم|جهة)/i.test(String(col).toLowerCase());
                                   return (
                                     <td
@@ -6375,7 +6843,7 @@ function App({ forceVisitor = false }) {
                                   );
                                 })}
                                 {leaves.map((leaf, idx) => (
-                                  <td key={`${row.key}-${leaf.key}`} className={`p-4 border-r border-[#DCC897] text-right text-[#4A062E] text-sm tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f7f7f7] font-semibold' : ''}`}>
+                                  <td key={`${row.key}-${leaf.key}`} className={`p-4 border-r border-[#DCC897] text-center align-middle text-[#4A062E] text-base tabular-nums ${idx === leaves.length - 1 ? 'bg-[#f7f7f7] font-semibold' : ''}`}>
                                     {formatValue(row?.cells?.[leaf.key])}
                                   </td>
                                 ))}
@@ -6398,14 +6866,14 @@ function App({ forceVisitor = false }) {
                           </>
                         )}
                       </div>
-                      <table className="w-full border-collapse text-sm">
+                      <table className="w-full border-collapse text-base">
                       <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
                         <tr>
                           {(visitorMatrix.displayGroupCols || []).map(col => (
-                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-center uppercase tracking-wide font-bold text-sm">{translateDataValue(col)}</th>
+                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-center uppercase tracking-wide font-bold text-base">{translateDataValue(col)}</th>
                           ))}
                           {visitorMatrix.periods.map((period, idx) => (
-                            <th key={period} className={`p-4 border-r border-[#7b1e5a] min-w-[110px] text-center font-bold text-sm ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
+                            <th key={period} className={`p-4 border-r border-[#7b1e5a] min-w-[110px] text-center font-bold text-base ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
                           ))}
                         </tr>
                       </thead>
@@ -6478,7 +6946,7 @@ function App({ forceVisitor = false }) {
                                 );
                               })}
                               {visitorMatrix.periods.map(period => (
-                                  <td key={`${row.key}-${period}`} className={`p-4 border-r border-[#DCC897] text-right text-[#4A062E] text-sm tabular-nums ${period === latestPeriod ? 'bg-[#f7f7f7] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
+                                  <td key={`${row.key}-${period}`} className={`p-4 border-r border-[#DCC897] text-center align-middle text-[#4A062E] text-base tabular-nums ${period === latestPeriod ? 'bg-[#f7f7f7] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
                               ))}
                             </tr>
                           ));
@@ -6487,12 +6955,12 @@ function App({ forceVisitor = false }) {
                     </table>
                     </>
                   ) : (
-                    <table className="w-full border-collapse text-sm">
+                    <table className="w-full border-collapse text-base">
                       <thead className={`sticky top-0 z-10 ${isVisitor ? 'bg-gradient-to-r from-[#7A0A4A] to-[#B03372] border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]' : 'bg-gradient-to-r from-[#7A0A4A] to-[#B03372] border-[#5E0738] shadow-[inset_0_-1px_0_0_rgba(11,94,131,0.55)]'} text-white border-b font-bold`}>
                         <tr>
                           {visibleColumnsForRender.map(col => (
-                            <th key={col} className={`p-4 border-r ${isVisitor ? 'border-[#7b1e5a]' : 'border-[#5E0738]'} min-w-[160px] text-left uppercase tracking-wide font-bold text-xs`}>
-                              <div className="uppercase text-[11px] tracking-wide font-bold text-white">{translateDataValue(col)}</div>
+                            <th key={col} className={`p-4 border-r ${isVisitor ? 'border-[#7b1e5a]' : 'border-[#5E0738]'} min-w-[160px] text-center uppercase tracking-wide font-bold text-sm`}>
+                              <div className="uppercase text-sm tracking-wide font-bold text-white text-center">{getLocalizedColumnLabel(col, activeDataLanguage) || translateDataValue(col)}</div>
                             </th>
                           ))}
                         </tr>
@@ -6501,14 +6969,37 @@ function App({ forceVisitor = false }) {
                         {(() => {
                           const displayedRows = showAll ? filteredData : filteredData.slice(0, isVisitor ? 8 : 3);
                           const rowCount = displayedRows.length;
+                          const isValueColumn = (colName) => /(valeur|value|%|taux|montant|effectif|القيمة)/i.test(String(colName || '').toLowerCase());
                           const spans = {};
-                          visibleColumnsForRender.forEach(col => {
+                          visibleColumnsForRender.forEach((col, colIndex) => {
+                            const valueColumn = isValueColumn(col);
                             spans[col] = new Array(rowCount).fill(0);
                             let i = 0;
                             while (i < rowCount) {
-                              const val = String((displayedRows[i] && displayedRows[i][col]) ?? '');
+                              if (valueColumn) {
+                                spans[col][i] = 1;
+                                i += 1;
+                                continue;
+                              }
+                              const curVal = String((displayedRows[i] && displayedRows[i][col]) ?? '');
                               let j = i + 1;
-                              while (j < rowCount && String((displayedRows[j] && displayedRows[j][col]) ?? '') === val) j++;
+                              while (j < rowCount) {
+                                const sameVal = String((displayedRows[j] && displayedRows[j][col]) ?? '') === curVal;
+                                if (!sameVal) break;
+                                let samePrefix = true;
+                                for (let p = 0; p < colIndex; p++) {
+                                  const prevCol = visibleColumnsForRender[p];
+                                  if (isValueColumn(prevCol)) continue;
+                                  const leftAtI = String((displayedRows[i] && displayedRows[i][prevCol]) ?? '');
+                                  const leftAtJ = String((displayedRows[j] && displayedRows[j][prevCol]) ?? '');
+                                  if (leftAtI !== leftAtJ) {
+                                    samePrefix = false;
+                                    break;
+                                  }
+                                }
+                                if (!samePrefix) break;
+                                j += 1;
+                              }
                               spans[col][i] = j - i;
                               i = j;
                             }
@@ -6519,12 +7010,12 @@ function App({ forceVisitor = false }) {
                               {visibleColumnsForRender.map((col) => {
                                 const span = spans[col][i] || 0;
                                 if (span === 0) return null;
-                                const isNumericCol = /(valeur|value|%|taux|montant|effectif)/i.test(String(col).toLowerCase());
+                                const isNumericCol = isValueColumn(col);
                                 const isMergedCell = span > 1;
                                 const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
                                 return (
-                                  <td key={col} rowSpan={span} className={`border-r ${isVisitor ? 'border-[#D6BE8C]' : 'border-[#D8C49A]'} p-3 text-xs ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'} ${isNumericCol ? (isVisitor ? 'tabular-nums text-[#4A062E] font-medium' : 'tabular-nums text-[#5E0738] font-medium') : (isVisitor ? 'text-[#3F2A1F]' : 'text-[#3F2A1F]')}`}>
-                                    <span className={`${isMergedCell ? mergedSizeClass : ''} ${isNumericCol ? 'text-right inline-block w-full' : 'font-semibold'}`}>{isNumericCol ? row[col] : translateDataValue(row[col])}</span>
+                                  <td key={col} rowSpan={span} className={`border-r ${isVisitor ? 'border-[#D6BE8C]' : 'border-[#D8C49A]'} p-3 text-base ${isMergedCell ? 'text-center align-middle' : 'text-center align-middle'} ${isNumericCol ? (isVisitor ? 'tabular-nums text-[#4A062E] font-medium' : 'tabular-nums text-[#5E0738] font-medium') : (isVisitor ? 'text-[#3F2A1F]' : 'text-[#3F2A1F]')}`}>
+                                    <span className={`${isMergedCell ? mergedSizeClass : 'text-[1.02rem]'} ${isNumericCol ? 'inline-block w-full text-center' : 'font-semibold'}`}>{isNumericCol ? row[col] : translateDataValue(row[col])}</span>
                                   </td>
                                 );
                               })}
@@ -6565,10 +7056,19 @@ function App({ forceVisitor = false }) {
 
                     return chartsToRender.map((chart) => {
                       const baseChartData = getFilteredChartData(chart);
-                    // Resolve stored column names → current-language keys (rows use localized keys in AR mode)
-                    const chartXKey = getLocalizedColumnLabel(chart.x);
-                    const chartYKey = chart.y ? getLocalizedColumnLabel(chart.y) : '';
-                    const chartGroupByKey = chart.group_by ? getLocalizedColumnLabel(chart.group_by) : '';
+                    // Resolve stored column names against real row keys for current data language.
+                    const inferChartDataKey = (rows, columnName) => {
+                      if (!columnName) return '';
+                      const localized = getLocalizedColumnLabel(columnName);
+                      const hasLocalized = (rows || []).some((r) => r && r[localized] !== undefined);
+                      if (hasLocalized) return localized;
+                      const hasRaw = (rows || []).some((r) => r && r[columnName] !== undefined);
+                      if (hasRaw) return columnName;
+                      return localized || columnName;
+                    };
+                    const chartXKey = inferChartDataKey(baseChartData, chart.x);
+                    const chartYKey = chart.y ? inferChartDataKey(baseChartData, chart.y) : '';
+                    const chartGroupByKey = chart.group_by ? inferChartDataKey(baseChartData, chart.group_by) : '';
                     const chartXAxisLabel = translateDataValue(chart.x_label || chart.x);
                     const chartYAxisLabel = translateDataValue(chart.y_label || (selectedSubTheme?.type_unite || ''));
                     const chartTitle = activeDataLanguage === 'ar'
@@ -6581,21 +7081,48 @@ function App({ forceVisitor = false }) {
                       : activeDataLanguage === 'en'
                         ? (chart.mesure_en || chart.mesure)
                         : chart.mesure;
-                    // Apply per-chart visitor-only filters (do not affect table)
+                    // Apply per-chart visible filters (visitor and saisisseur UI)
                     const visitorFiltersList = chart.visible_filters || [];
                     const visitorValues = chartVisitorFilters[chart.id] || {};
+                    const canUseChartVisibleFilters = isVisitor || isSaisisseur || userRole === 'ADMIN';
                     let chartData = baseChartData;
-                    if (visitorFiltersList && visitorFiltersList.length > 0) {
+                    if (canUseChartVisibleFilters && visitorFiltersList && visitorFiltersList.length > 0) {
                       const norm = visitorFiltersList.map(item => (typeof item === 'string' ? { column: item, default: '' } : item || {}));
+                      const buildValueCandidates = (columnName, value) => {
+                        const candidates = new Set();
+                        const push = (v) => {
+                          if (v === null || v === undefined || v === '') return;
+                          const raw = String(v);
+                          const normalized = normalizeDataToken(raw);
+                          if (normalized) candidates.add(normalized);
+                        };
+
+                        push(value);
+                        push(getCanonicalValueCode(columnName, value));
+                        push(getLocalizedValueLabel(columnName, value, 'fr'));
+                        push(getLocalizedValueLabel(columnName, value, 'ar'));
+                        push(getLocalizedValueLabel(columnName, value, 'en'));
+                        return candidates;
+                      };
+
                       norm.forEach(vf => {
                         const col = vf.column;
                         const colKey = getLocalizedColumnLabel(col);
-                        const val = visitorValues[col] !== undefined ? visitorValues[col] : (vf.default || '');
-                        const localizedVal = isArabicDataView ? getLocalizedValueLabel(col, val) : val;
+                        const fallbackDefault = vf.default ? getLocalizedValueLabel(col, vf.default) : '';
+                        const val = visitorValues[colKey] !== undefined ? visitorValues[colKey] : fallbackDefault;
+                        const localizedVal = getLocalizedValueLabel(col, val);
                         if (col && (val || localizedVal)) {
+                          const selectedCandidates = new Set([
+                            ...buildValueCandidates(col, val),
+                            ...buildValueCandidates(col, localizedVal),
+                          ]);
                           chartData = chartData.filter(row => {
-                            const rowVal = String(row[colKey] ?? row[col] ?? '');
-                            return rowVal === String(val) || rowVal === String(localizedVal);
+                            const rowRaw = row[colKey] ?? row[col] ?? '';
+                            const rowCandidates = buildValueCandidates(col, rowRaw);
+                            for (const candidate of rowCandidates) {
+                              if (selectedCandidates.has(candidate)) return true;
+                            }
+                            return false;
                           });
                         }
                       });
@@ -6670,17 +7197,19 @@ function App({ forceVisitor = false }) {
                           </div>
                         )}
                         
-                        {/* Visitor-visible filters controls (only shown when configured) */}
-                        {visitorFiltersList && visitorFiltersList.length > 0 && (
+                        {/* Visible-filters controls (shown for visitor, saisisseur, and admin) */}
+                        {canUseChartVisibleFilters && visitorFiltersList && visitorFiltersList.length > 0 && (
                           <div className="mb-4 p-3 bg-[#fff8ef] border border-[#e5cf9d] rounded-xl inline-block max-w-full">
                             <div className="text-[10px] font-bold uppercase tracking-wide text-[#7A0A4A] mb-2">
-                              {isArabicDataView ? 'مرشحات المخطط' : 'Filtres du graphe'}
+                              {activeDataLanguage === 'ar' ? 'مرشحات المخطط' : activeDataLanguage === 'en' ? 'Chart filters' : 'Filtres du graphe'}
                             </div>
                             <div className="flex flex-wrap items-center gap-2">
                             {(visitorFiltersList || []).map((vf, idx) => {
                               const col = (typeof vf === 'string') ? vf : (vf && vf.column) || '';
-                              const colLabel = isArabicDataView ? getLocalizedColumnLabel(col) : col;
-                              const currentVal = (chartVisitorFilters[chart.id] || {})[col] || (vf && vf.default) || '';
+                              const colKey = getLocalizedColumnLabel(col);
+                              const colLabel = getLocalizedColumnLabel(col);
+                              const fallbackDefault = (vf && vf.default) ? getLocalizedValueLabel(col, vf.default) : '';
+                              const currentVal = (chartVisitorFilters[chart.id] || {})[colKey] || fallbackDefault || '';
                               return (
                                 <div key={`${chart.id}-vf-${idx}`} className="flex items-center gap-1.5">
                                   <label className="font-semibold text-xs text-[#4d1734] shrink-0">{colLabel || 'Colonne'}</label>
@@ -6690,12 +7219,12 @@ function App({ forceVisitor = false }) {
                                     onChange={e => {
                                       const newMap = { ...(chartVisitorFilters || {}) };
                                       newMap[chart.id] = { ...(newMap[chart.id] || {}) };
-                                      newMap[chart.id][col] = e.target.value;
+                                      newMap[chart.id][colKey] = e.target.value;
                                       setChartVisitorFilters(newMap);
                                     }}
                                   >
-                                    <option value="">{isArabicDataView ? '-- الكل --' : '-- Tous --'}</option>
-                                    {col && getUniqueValuesForColumn(col).map(v => <option key={v} value={v}>{isArabicDataView ? translateDataValue(v) : v}</option>)}
+                                    <option value="">{t('all_option')}</option>
+                                    {col && getUniqueValuesForColumn(col).map(v => <option key={v} value={getLocalizedValueLabel(col, v)}>{getLocalizedValueLabel(col, v)}</option>)}
                                   </select>
                                 </div>
                               );
@@ -6715,10 +7244,10 @@ function App({ forceVisitor = false }) {
                                 (() => {
                                   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91', '#6B7280', '#10B981'];
                                   return (
-                                    <BarChart data={multiSeries.seriesData}>
+                                    <BarChart data={multiSeries.seriesData} margin={chartMargin}>
                                       <CartesianGrid strokeDasharray="3 3" />
                                       <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
-                                      <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
+                                      <YAxis {...chartYAxisProps} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                       <Tooltip content={<CustomTooltip />} />
                                       <Legend />
                                       {multiSeries.groupValues.map((g, idx) => (
@@ -6728,10 +7257,10 @@ function App({ forceVisitor = false }) {
                                   );
                                 })()
                               ) : (
-                                <BarChart data={chartData} barCategoryGap="18%" barGap={6}>
+                                <BarChart data={chartData} barCategoryGap="18%" barGap={6} margin={chartMargin}>
                                   <CartesianGrid strokeDasharray="3 3" />
                                   <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
-                                  <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
+                                  <YAxis {...chartYAxisProps} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
                                   <Bar dataKey={chartYKey} fill="#7A0A4A" />
                                 </BarChart>
@@ -6741,10 +7270,10 @@ function App({ forceVisitor = false }) {
                                 (() => {
                                   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91', '#6B7280', '#10B981'];
                                   return (
-                                    <LineChart data={multiSeries.seriesData}>
+                                    <LineChart data={multiSeries.seriesData} margin={chartMargin}>
                                       <CartesianGrid strokeDasharray="3 3" />
                                       <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
-                                      <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
+                                      <YAxis {...chartYAxisProps} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                       <Tooltip content={<CustomTooltip />} />
                                       <Legend />
                                       {multiSeries.groupValues.map((g, idx) => (
@@ -6754,10 +7283,10 @@ function App({ forceVisitor = false }) {
                                   );
                                 })()
                               ) : (
-                                <LineChart data={chartData}>
+                                <LineChart data={chartData} margin={chartMargin}>
                                   <CartesianGrid strokeDasharray="3 3" />
                                   <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
-                                  <YAxis label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
+                                  <YAxis {...chartYAxisProps} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
                                   <Line type="monotone" dataKey={chartYKey} stroke="#7A0A4A" strokeWidth={3} />
                                 </LineChart>
@@ -6767,10 +7296,10 @@ function App({ forceVisitor = false }) {
                                 (() => {
                                   const COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#B19CD9', '#FF6F91', '#6B7280', '#10B981'];
                                   return (
-                                    <ScatterChart>
+                                    <ScatterChart margin={chartMargin}>
                                       <CartesianGrid strokeDasharray="3 3" />
                                       <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
-                                      <YAxis dataKey={chartYKey} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
+                                      <YAxis {...chartYAxisProps} dataKey={chartYKey} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                       <Tooltip content={<CustomTooltip />} />
                                       <Legend />
                                       {multiSeries.groupValues.map((g, idx) => (
@@ -6780,10 +7309,10 @@ function App({ forceVisitor = false }) {
                                   );
                                 })()
                               ) : (
-                                <ScatterChart>
+                                <ScatterChart margin={chartMargin}>
                                   <CartesianGrid strokeDasharray="3 3" />
                                   <XAxis dataKey={chartXKey} label={{ value: chartXAxisLabel, position: 'insideBottom', offset: -5 }} />
-                                  <YAxis dataKey={chartYKey} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
+                                  <YAxis {...chartYAxisProps} dataKey={chartYKey} label={{ value: chartYAxisLabel, angle: -90, position: 'insideLeft' }} />
                                   <Tooltip content={<CustomTooltip />} />
                                   <Scatter data={chartData} fill="#7A0A4A" />
                                 </ScatterChart>
@@ -6872,99 +7401,176 @@ function App({ forceVisitor = false }) {
         />
       </Suspense>
       {showEditTable && (
-        <div className="fixed inset-0 bg-transparent flex items-center justify-center z-50 p-4">
-          <div className="bg-white border-4 border-black p-6 rounded-3xl w-full max-w-4xl max-h-[80vh] overflow-auto shadow-[8px_8px_0px_0px_rgba(0,0,0,1)]">
-            <h2 className="text-xl font-black mb-4 text-center">Édition du tableau</h2>
+        <div className="fixed inset-0 bg-black/25 backdrop-blur-[1px] flex items-center justify-center z-50 p-4">
+          <div className="w-full max-w-5xl max-h-[86vh] overflow-hidden rounded-3xl border border-[#d8b6c8] bg-[#fffaf3] shadow-[0_26px_60px_rgba(94,7,56,0.24)]">
+            <div className="px-6 py-4 border-b border-[#e8cfdb] bg-gradient-to-r from-[#7A0A4A] to-[#B03372]">
+              <h2 className="text-xl md:text-2xl font-extrabold text-white tracking-wide">Modifier le tableau</h2>
+              <p className="text-xs md:text-sm text-[#f7ddea] mt-1">Mettez a jour les colonnes et lignes, puis enregistrez.</p>
+              <div className="mt-3 inline-flex items-center gap-2 rounded-full border border-[#e8b8d1] bg-[#fff4fb] px-3 py-1 text-xs font-semibold text-[#6E001F]">
+                <span>Colonnes: {(editTableColumns || []).length}</span>
+                <span className="text-[#b77c9e]">•</span>
+                <span>Lignes: {(editTableRows || []).length}</span>
+              </div>
+            </div>
 
-            <div className="mb-4 flex gap-4 items-center">
-              <button onClick={() => openImportDialog('replace')} disabled={isCurrentImportBusy} className={`bg-[#B89C5A] text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isCurrentImportBusy ? 'opacity-60 cursor-not-allowed' : ''}`}>
-                {isReplacing ? 'Remplacement...' : 'Remplacer par un fichier'}
+            <div className="p-6 overflow-y-auto max-h-[calc(86vh-110px)]">
+            <div className="mb-5 rounded-2xl border border-[#e6cfe0] bg-white p-4 shadow-sm">
+              <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2.5">
+              <button onClick={() => openImportDialog('replace')} disabled={isCurrentImportBusy} className={`px-4 py-2.5 rounded-xl font-semibold border transition ${isCurrentImportBusy ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-[1px]'} bg-[#fff4e7] text-[#6a3043] border-[#e2c08f]`}>
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M21 12a9 9 0 1 1-3.1-6.8" />
+                    <path d="M21 3v6h-6" />
+                  </svg>
+                  {isReplacing ? 'Remplacement...' : 'Remplacer par un fichier'}
+                </span>
               </button>
-              <button onClick={() => openImportDialog('smart-replace')} disabled={isCurrentImportBusy} className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isSmartImporting ? 'bg-gray-300' : 'bg-[#ffcf80]'} ${isCurrentImportBusy && !isSmartImporting ? 'opacity-60 cursor-not-allowed' : ''}`}>
-                {isSmartImporting ? 'Import IA...' : 'Importer avec IA'}
+              <button onClick={() => openImportDialog('smart-replace')} disabled={isCurrentImportBusy} className={`px-4 py-2.5 rounded-xl font-semibold border transition ${isCurrentImportBusy && !isSmartImporting ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-[1px]'} ${isSmartImporting ? 'bg-gray-200 text-[#5a5060] border-gray-300' : 'bg-[#fff1cc] text-[#6a3043] border-[#e5cf8a]'}`}>
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="m12 3 1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9L12 3Z" />
+                    <path d="m19.5 3.5.8 2.2 2.2.8-2.2.8-.8 2.2-.8-2.2-2.2-.8 2.2-.8.8-2.2Z" />
+                  </svg>
+                  {isSmartImporting ? 'Import IA...' : 'Importer avec IA'}
+                </span>
               </button>
-              <button onClick={() => openImportDialog('append')} disabled={isCurrentImportBusy} className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isAppending ? 'bg-gray-300' : 'bg-[#a8d5a2]'} ${isCurrentImportBusy && !isAppending ? 'opacity-60 cursor-not-allowed' : ''}`}>
-                {isAppending ? 'Ajout...' : 'Ajouter au tableau'}
+              <button onClick={() => openImportDialog('append')} disabled={isCurrentImportBusy} className={`px-4 py-2.5 rounded-xl font-semibold border transition ${isCurrentImportBusy && !isAppending ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-[1px]'} ${isAppending ? 'bg-gray-200 text-[#5a5060] border-gray-300' : 'bg-[#e7f6de] text-[#2d5b39] border-[#b6d2a7]'}`}>
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.9" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M12 5v14" />
+                    <path d="M5 12h14" />
+                  </svg>
+                  {isAppending ? 'Ajout...' : 'Ajouter au tableau'}
+                </span>
               </button>
-              <button onClick={() => openImportDialog('append-smart')} disabled={isCurrentImportBusy} className={`text-black px-4 py-2 border-2 border-black rounded-xl font-bold shadow-md ${isAppendingAI ? 'bg-gray-300' : 'bg-[#8fc4ff]'} ${isCurrentImportBusy && !isAppendingAI ? 'opacity-60 cursor-not-allowed' : ''}`}>
-                {isAppendingAI ? 'Ajout IA...' : 'Ajouter avec IA'}
+              <button onClick={() => openImportDialog('append-smart')} disabled={isCurrentImportBusy} className={`px-4 py-2.5 rounded-xl font-semibold border transition ${isCurrentImportBusy && !isAppendingAI ? 'opacity-60 cursor-not-allowed' : 'hover:-translate-y-[1px]'} ${isAppendingAI ? 'bg-gray-200 text-[#5a5060] border-gray-300' : 'bg-[#e2f0ff] text-[#274f7d] border-[#b7d0ed]'}`}>
+                <span className="inline-flex items-center gap-2">
+                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <path d="M13 2 4 14h6l-1 8 9-12h-6l1-8Z" />
+                  </svg>
+                  {isAppendingAI ? 'Ajout IA...' : 'Ajouter avec IA'}
+                </span>
               </button>
-              <div className="text-sm italic text-gray-600">Chaque action ouvre maintenant une verification unique: fichier principal obligatoire, version arabe optionnelle, puis controle de coherence avant sauvegarde. Si le sous-theme est deja bilingue, le fichier arabe devient obligatoire.</div>
+              </div>
+              <div className="mt-3 rounded-xl border border-[#ead6e1] bg-[#fff7fb] px-3 py-2 text-xs text-[#6b4b5d]">
+                Import: fichier principal obligatoire. Versions AR/EN selon disponibilite du sous-theme.
+              </div>
             </div>
 
             {importDialog.open && (
               <div className="mb-5 rounded-2xl border-2 border-[#d6b978] bg-[#fff8ee] p-5 shadow-sm">
-                <div className="flex flex-col gap-2 md:flex-row md:items-start md:justify-between">
+                <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                   <div>
-                    <h3 className="text-lg font-black text-[#5a2436]">{getImportModeMeta(importDialog.mode).title}</h3>
-                    <p className="text-sm text-[#6b4b3b]">{getImportModeMeta(importDialog.mode).description}</p>
-                    {selectedSubTheme?.data_is_bilingual && (
-                      <p className="mt-2 text-sm font-semibold text-[#8b1538]">Ce sous-theme est deja bilingue: le fichier arabe correspondant est obligatoire.</p>
-                    )}
+                    <h3 className="text-xl font-extrabold text-[#5a2436]">{getImportModeMeta(importDialog.mode).title}</h3>
+                    <p className="text-sm text-[#6b4b3b]">Import rapide avec controle de coherence.</p>
                   </div>
-                  <button onClick={closeImportDialog} className="self-start rounded-lg border border-[#d0b17b] bg-white px-3 py-1.5 text-sm font-semibold text-[#5a2436] hover:bg-[#f8ecd8]">Fermer</button>
+                  <button onClick={closeImportDialog} className="self-start rounded-xl border border-[#d0b17b] bg-white px-4 py-2 text-sm font-semibold text-[#5a2436] hover:bg-[#f8ecd8]">Fermer</button>
                 </div>
 
-                <div className="mt-4 grid gap-4 md:grid-cols-3">
-                  <div>
-                    <label className="block text-sm font-bold text-[#5a2436] mb-1">Fichier principal</label>
-                    <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, file: e.target.files?.[0] || null }))} />
-                    <div className="mt-1 text-xs text-gray-600">Obligatoire. C'est le fichier FR ou le fichier principal de travail.</div>
-                    {importDialog.file && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.file.name}</div>}
+                {selectedSubTheme?.data_is_bilingual && (
+                  <div className="mt-3 rounded-xl border border-[#f0b7cc] bg-[#fff1f7] px-3 py-2 text-sm font-semibold text-[#8b1538]">
+                    Sous-theme bilingue: le fichier arabe est obligatoire.
                   </div>
-                  <div>
-                    <label className="block text-sm font-bold text-[#5a2436] mb-1">Version arabe du meme tableau</label>
-                    <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileAr: e.target.files?.[0] || null }))} />
-                    <div className="mt-1 text-xs text-gray-600">Optionnelle pour un sous-theme monolingue. Obligatoire si le sous-theme est deja bilingue.</div>
-                    {importDialog.fileAr && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileAr.name}</div>}
+                )}
+
+                <div className="mt-4 grid gap-3 md:grid-cols-3">
+                  <div className="rounded-xl border border-[#e6d4b1] bg-white p-3">
+                    <label className="block text-sm font-bold text-[#5a2436] mb-2">Fichier principal <span className="text-[#8b1538]">*</span></label>
+                    <input ref={importMainInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => setImportDialog((prev) => ({ ...prev, file: e.target.files?.[0] || null }))} />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => importMainInputRef.current?.click()}
+                        disabled={isCurrentImportBusy}
+                        className="shrink-0 rounded-lg border border-[#d6b978] bg-[#fff8ee] px-3 py-2 text-xs font-semibold text-[#5a2436] hover:bg-[#f8ecd8] disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        Choisir un fichier
+                      </button>
+                      <div className="min-w-0 flex-1 rounded-lg border border-[#eadcc2] bg-[#fffdf8] px-3 py-2 text-xs text-[#6b4b3b] truncate">
+                        {importDialog.file?.name || 'Aucun fichier selectionne'}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-[#6b4b3b]">Obligatoire (fichier principal).</div>
                   </div>
-                  <div>
-                    <label className="block text-sm font-bold text-[#5a2436] mb-1">Version anglaise du meme tableau</label>
-                    <input type="file" accept=".xlsx,.xls" className="block w-full rounded-lg border border-[#d6b978] bg-white px-3 py-2 text-sm" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileEn: e.target.files?.[0] || null }))} />
-                    <div className="mt-1 text-xs text-gray-600">Optionnelle si EN absent. Obligatoire si le sous-theme contient deja une version EN.</div>
-                    {importDialog.fileEn && <div className="mt-1 text-xs font-medium text-[#5a2436]">Selectionne: {importDialog.fileEn.name}</div>}
+                  <div className="rounded-xl border border-[#e6d4b1] bg-white p-3">
+                    <label className="block text-sm font-bold text-[#5a2436] mb-2">Version arabe</label>
+                    <input ref={importArInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileAr: e.target.files?.[0] || null }))} />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => importArInputRef.current?.click()}
+                        disabled={isCurrentImportBusy}
+                        className="shrink-0 rounded-lg border border-[#d6b978] bg-[#fff8ee] px-3 py-2 text-xs font-semibold text-[#5a2436] hover:bg-[#f8ecd8] disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        Choisir un fichier
+                      </button>
+                      <div className="min-w-0 flex-1 rounded-lg border border-[#eadcc2] bg-[#fffdf8] px-3 py-2 text-xs text-[#6b4b3b] truncate">
+                        {importDialog.fileAr?.name || 'Aucun fichier selectionne'}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-[#6b4b3b]">Optionnelle sauf sous-theme bilingue.</div>
+                  </div>
+                  <div className="rounded-xl border border-[#e6d4b1] bg-white p-3">
+                    <label className="block text-sm font-bold text-[#5a2436] mb-2">Version anglaise</label>
+                    <input ref={importEnInputRef} type="file" accept=".xlsx,.xls" className="hidden" onChange={(e) => setImportDialog((prev) => ({ ...prev, fileEn: e.target.files?.[0] || null }))} />
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => importEnInputRef.current?.click()}
+                        disabled={isCurrentImportBusy}
+                        className="shrink-0 rounded-lg border border-[#d6b978] bg-[#fff8ee] px-3 py-2 text-xs font-semibold text-[#5a2436] hover:bg-[#f8ecd8] disabled:opacity-60 disabled:cursor-not-allowed"
+                      >
+                        Choisir un fichier
+                      </button>
+                      <div className="min-w-0 flex-1 rounded-lg border border-[#eadcc2] bg-[#fffdf8] px-3 py-2 text-xs text-[#6b4b3b] truncate">
+                        {importDialog.fileEn?.name || 'Aucun fichier selectionne'}
+                      </div>
+                    </div>
+                    <div className="mt-2 text-xs text-[#6b4b3b]">Optionnelle sauf si EN deja active.</div>
                   </div>
                 </div>
 
-                <div className="mt-4 rounded-xl border border-[#ecd29f] bg-white px-4 py-3 text-sm text-[#6b4b3b]">
-                  <div>Mode: <span className="font-semibold text-[#5a2436]">{getImportModeMeta(importDialog.mode).title}</span></div>
-                  <div className="mt-1">Verification bilingue: <span className="font-semibold text-[#5a2436]">{importDialog.fileAr ? 'activee' : 'desactivee'}</span></div>
-                  <div className="mt-1">Verification anglaise: <span className="font-semibold text-[#5a2436]">{importDialog.fileEn ? 'activee' : 'desactivee'}</span></div>
+                <div className="mt-4 rounded-xl border border-[#ecd29f] bg-white px-4 py-3">
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="rounded-full border border-[#d8bfd0] bg-[#fff7fb] px-2.5 py-1 text-[#5a2436]">Mode: <strong>{getImportModeMeta(importDialog.mode).title}</strong></span>
+                    <span className="rounded-full border border-[#d8bfd0] bg-[#fff7fb] px-2.5 py-1 text-[#5a2436]">AR: <strong>{importDialog.fileAr ? 'active' : 'off'}</strong></span>
+                    <span className="rounded-full border border-[#d8bfd0] bg-[#fff7fb] px-2.5 py-1 text-[#5a2436]">EN: <strong>{importDialog.fileEn ? 'active' : 'off'}</strong></span>
+                  </div>
                 </div>
 
-                <div className="mt-4 flex gap-3">
+                <div className="mt-4 flex flex-wrap gap-3">
                   <button onClick={handleConfirmImportDialog} disabled={isCurrentImportBusy || !importDialog.file} className="rounded-xl border-2 border-black bg-[#7A0A4A] px-4 py-2 font-bold text-white disabled:cursor-not-allowed disabled:bg-gray-300">Verifier et importer</button>
                   <button onClick={closeImportDialog} disabled={isCurrentImportBusy} className="rounded-xl border-2 border-black bg-white px-4 py-2 font-bold text-[#5a2436] disabled:cursor-not-allowed disabled:opacity-60">Annuler</button>
                 </div>
               </div>
             )}
 
-            <div className="overflow-auto">
+            <div className="overflow-auto rounded-2xl border border-[#dfc6d4] bg-white shadow-sm">
               <table className="w-full border-collapse">
                 <thead>
-                  <tr>
+                  <tr className="bg-[#fff3f8]">
                     {(editTableColumns || []).map((col, ci) => (
-                      <th key={`${col}-${ci}`} className="p-2 border border-gray-300 text-xs">
+                      <th key={`${col}-${ci}`} className="p-2 border border-[#e4d3dd] text-xs">
                         <input
-                          className="w-full p-1 text-xs font-semibold border border-gray-200 rounded"
+                          className="w-full p-1.5 text-xs font-semibold border border-[#d8c1cf] rounded-md outline-none focus:border-[#B03372]"
                           value={col}
                           onChange={(e) => handleEditColumnNameChange(ci, e.target.value)}
                         />
                       </th>
                     ))}
-                    <th className="p-2 border border-gray-300 text-xs">Actions</th>
+                    <th className="p-2 border border-[#e4d3dd] text-xs text-[#6a3043]">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {editTableRows.map((row, ri) => (
-                    <tr key={ri} className="hover:bg-gray-50">
+                    <tr key={ri} className="hover:bg-[#fff8fb]">
                       {(editTableColumns || []).map((col, ci) => (
-                        <td key={`${col}-${ci}`} className="p-1 border">
-                          <input className="w-full p-1 text-xs" value={row[col] ?? ''} onChange={e => { const r = [...editTableRows]; r[ri] = {...r[ri], [col]: e.target.value}; setEditTableRows(r); }} />
+                        <td key={`${col}-${ci}`} className="p-1 border border-[#efe1e9]">
+                          <input className="w-full p-1.5 text-xs rounded-md border border-transparent outline-none focus:border-[#cfa9bf]" value={row[col] ?? ''} onChange={e => { const r = [...editTableRows]; r[ri] = {...r[ri], [col]: e.target.value}; setEditTableRows(r); }} />
                         </td>
                       ))}
-                      <td className="p-1 border text-center">
-                        <button onClick={() => { const r = [...editTableRows]; r.splice(ri, 1); setEditTableRows(r); }} className="bg-red-400 text-white px-2 py-1 rounded">Suppr</button>
+                      <td className="p-1 border border-[#efe1e9] text-center">
+                        <button onClick={() => { const r = [...editTableRows]; r.splice(ri, 1); setEditTableRows(r); }} className="px-3 py-1 rounded-lg border border-[#e4b8c7] bg-[#fff1f6] text-[#9a1f49] text-xs font-semibold hover:bg-[#ffe3ed]">Suppr</button>
                       </td>
                     </tr>
                   ))}
@@ -6972,11 +7578,12 @@ function App({ forceVisitor = false }) {
               </table>
             </div>
 
-            <div className="flex gap-4 mt-4">
-              <button onClick={() => setEditTableRows(prev => [...prev, Object.fromEntries((editTableColumns || []).map(c => [c, '']))])} className="bg-green-400 text-white px-4 py-2 rounded">Ajouter ligne</button>
+            <div className="sticky bottom-0 -mx-6 mt-5 px-6 py-4 border-t border-[#ead6e1] bg-[#fffaf3]/95 backdrop-blur-sm flex flex-wrap gap-3">
+              <button onClick={() => setEditTableRows(prev => [...prev, Object.fromEntries((editTableColumns || []).map(c => [c, '']))])} className="px-4 py-2 rounded-xl border border-[#a8cfb0] bg-[#e8f6ea] text-[#2d6a3c] font-semibold hover:bg-[#daf0de]">Ajouter ligne</button>
               <div className="flex-1" />
-              <button onClick={() => setShowEditTable(false)} className="bg-gray-200 px-4 py-2 rounded">Annuler</button>
-              <button onClick={saveEditedTable} className="bg-[#ffb366] px-4 py-2 rounded">Enregistrer</button>
+              <button onClick={() => setShowEditTable(false)} className="px-4 py-2 rounded-xl border border-[#d9c6d1] bg-white text-[#6a4a5d] font-semibold hover:bg-[#faf6f8]">Annuler</button>
+              <button onClick={saveEditedTable} className="px-5 py-2 rounded-xl border border-[#8c1f60] bg-[#7A0A4A] text-white font-semibold hover:bg-[#5E0738] shadow-sm">Enregistrer</button>
+            </div>
             </div>
           </div>
         </div>
@@ -7138,9 +7745,12 @@ function App({ forceVisitor = false }) {
 
             <div className="space-y-4">
               {(() => {
+                const configRows = getTableRows(configSubTheme) || [];
                 const availableColumns = (configSubTheme.columns && configSubTheme.columns.length)
                   ? localizeConfiguredColumns(configSubTheme.columns, 'fr')
-                  : localizeConfiguredColumns(Object.keys((configSubTheme.data && configSubTheme.data[0]) || {}), 'fr');
+                  : (configSubTheme.columns_order && configSubTheme.columns_order.length)
+                    ? localizeConfiguredColumns(configSubTheme.columns_order, 'fr')
+                    : localizeConfiguredColumns(Object.keys(configRows[0] || {}), 'fr');
 
                 const moveInList = (setter, index, direction) => {
                   setter((prev) => {
@@ -7167,16 +7777,16 @@ function App({ forceVisitor = false }) {
                       <button type="button" className="px-2 py-1 border rounded text-xs" onClick={() => moveInList(setModalVisitorCols, idx, 1)}>↓</button>
                       <button type="button" className="px-2 py-1 border rounded text-xs text-red-700" onClick={() => {
                         setModalVisitorCols((prev) => prev.filter((_, i) => i !== idx));
-                        setModalVisitorFilters((prev) => prev.filter((f) => f !== col));
-                        setModalVisitorHierarchy((prev) => prev.filter((h) => h !== col));
+                        setModalVisitorFilters((prev) => prev.filter((f) => normalizeDataToken(f) !== normalizeDataToken(col)));
+                        setModalVisitorHierarchy((prev) => prev.filter((h) => normalizeDataToken(h) !== normalizeDataToken(col)));
                         setModalVisitorDefaultFilters((prev) => { const cp = { ...(prev || {}) }; delete cp[col]; return cp; });
                       }}>Retirer</button>
                     </div>
                   ))}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {availableColumns.filter((c) => !modalVisitorCols.includes(c)).map((c) => (
-                    <button type="button" key={`add-col-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorCols((prev) => [...prev, c])}>+ {c}</button>
+                  {availableColumns.filter((c) => !containsConfiguredColumn(modalVisitorCols, c)).map((c) => (
+                    <button type="button" key={`add-col-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorCols((prev) => appendUniqueConfiguredColumn(prev, c))}>+ {c}</button>
                   ))}
                 </div>
                 <div className="text-sm italic text-gray-600">Choisissez les colonnes puis ordonnez-les avec ↑/↓.</div>
@@ -7199,8 +7809,8 @@ function App({ forceVisitor = false }) {
                   ))}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {modalVisitorCols.filter((c) => !modalVisitorFilters.includes(c)).map((c) => (
-                    <button type="button" key={`add-filter-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorFilters((prev) => [...prev, c])}>+ {c}</button>
+                  {modalVisitorCols.filter((c) => !containsConfiguredColumn(modalVisitorFilters, c)).map((c) => (
+                    <button type="button" key={`add-filter-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorFilters((prev) => appendUniqueConfiguredColumn(prev, c))}>+ {c}</button>
                   ))}
                 </div>
                 <div className="text-sm italic text-gray-600">Sélectionnez seulement les colonnes utiles pour filtrer.</div>
@@ -7220,8 +7830,8 @@ function App({ forceVisitor = false }) {
                   ))}
                 </div>
                 <div className="mt-2 flex flex-wrap gap-2">
-                  {modalVisitorCols.filter((c) => !modalVisitorHierarchy.includes(c)).map((c) => (
-                    <button type="button" key={`add-hierarchy-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorHierarchy((prev) => [...prev, c])}>+ {c}</button>
+                  {modalVisitorCols.filter((c) => !containsConfiguredColumn(modalVisitorHierarchy, c)).map((c) => (
+                    <button type="button" key={`add-hierarchy-${c}`} className="px-2 py-1 border rounded text-xs bg-[#f8f0f4]" onClick={() => setModalVisitorHierarchy((prev) => appendUniqueConfiguredColumn(prev, c))}>+ {c}</button>
                   ))}
                 </div>
                 <div className="text-sm italic text-gray-600">Ordre hiérarchique pour l'en-tête vertical/multi-niveaux.</div>
@@ -7245,7 +7855,11 @@ function App({ forceVisitor = false }) {
                 <div className="space-y-2 max-h-56 overflow-y-auto p-2 border-2 border-black rounded">
                   {modalVisitorFilters.length === 0 && <div className="text-sm text-gray-500">Sélectionnez d'abord les filtres disponibles</div>}
                   {modalVisitorFilters.map((f) => {
-                    const opts = Array.from(new Set((configSubTheme.data || []).map((r) => r && r[f]).filter((v) => v !== null && v !== undefined)));
+                    const rowsForDefaults = getTableRows(configSubTheme) || [];
+                    const sourceColumns = Array.from(new Set(rowsForDefaults.flatMap((r) => Object.keys(r || {}))));
+                    const sourceLookup = buildSourceColumnLookup(sourceColumns);
+                    const sourceCol = resolveSourceColumn(f, sourceLookup) || f;
+                    const opts = Array.from(new Set(rowsForDefaults.map((r) => r && r[sourceCol]).filter((v) => v !== null && v !== undefined)));
                     return (
                       <div key={`default-${f}`} className="text-sm">
                         <label className="block font-semibold mb-1">{f}</label>
@@ -7274,9 +7888,9 @@ function App({ forceVisitor = false }) {
                 try {
                   const parsedDefaults = canonicalizeVisitorDefaults(modalVisitorDefaultFilters);
 
-                  const parsedCols = normalizeConfiguredColumns(modalVisitorCols);
-                  const parsedFilters = normalizeConfiguredColumns(modalVisitorFilters);
-                  const parsedHierarchy = normalizeConfiguredColumns(modalVisitorHierarchy);
+                  const parsedCols = dedupeConfiguredColumns(modalVisitorCols);
+                  const parsedFilters = dedupeConfiguredColumns(modalVisitorFilters);
+                  const parsedHierarchy = dedupeConfiguredColumns(modalVisitorHierarchy);
 
                   const payload = {
                     visitor_visible_columns: parsedCols,
@@ -7681,16 +8295,33 @@ function App({ forceVisitor = false }) {
           <div className="w-full max-w-lg rounded-2xl border border-[#B03372] bg-[#fffaf2] shadow-[0_18px_42px_rgba(94,7,56,0.34)] overflow-hidden">
             <div className="bg-gradient-to-r from-[#7A0A4A] to-[#B03372] px-6 py-4 border-b border-[#8c1f60]">
               <h2 className="text-xl md:text-2xl font-bold text-white">Informations du compte</h2>
-              <p className="text-xs md:text-sm text-[#fbe3ef] mt-1">Mettre a jour votre email et votre mot de passe.</p>
+              <p className="text-xs md:text-sm text-[#fbe3ef] mt-1">Mettre a jour votre profil, email et mot de passe.</p>
             </div>
             
             <div className="p-6 space-y-4">
+              <div>
+                <label className="block text-sm font-semibold text-[#6E001F] mb-1.5">Nom affiche</label>
+                <input
+                  type="text"
+                  value={settingsForm.firstName}
+                  onChange={(e) => {
+                    setSettingsForm({...settingsForm, firstName: e.target.value});
+                    if (settingsError) setSettingsError('');
+                  }}
+                  placeholder="Ex: Salma Jabiri"
+                  className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
+                />
+              </div>
+
               <div>
                 <label className="block text-sm font-semibold text-[#6E001F] mb-1.5">Email</label>
                 <input
                   type="email"
                   value={settingsForm.email}
-                  onChange={(e) => setSettingsForm({...settingsForm, email: e.target.value})}
+                  onChange={(e) => {
+                    setSettingsForm({...settingsForm, email: e.target.value});
+                    if (settingsError) setSettingsError('');
+                  }}
                   className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
                 />
               </div>
@@ -7700,10 +8331,25 @@ function App({ forceVisitor = false }) {
                 <input
                   type="password"
                   value={settingsForm.newPassword}
-                  onChange={(e) => setSettingsForm({...settingsForm, newPassword: e.target.value})}
+                  onChange={(e) => {
+                    setSettingsForm({...settingsForm, newPassword: e.target.value});
+                    if (settingsError) setSettingsError('');
+                  }}
                   placeholder="Laisser vide si inchangé"
                   className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none placeholder:text-[#9C7087] focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
                 />
+                {settingsHasNewPassword && (
+                  <div className="mt-2 rounded-lg border border-[#efc4d5] bg-[#fff1f7] p-2.5">
+                    <div className="mb-1 text-xs font-semibold text-[#8f245e]">Securite du mot de passe</div>
+                    <div className="space-y-1">
+                      {settingsPasswordChecks.map((rule) => (
+                        <div key={rule.id} className={`text-xs ${rule.valid ? 'text-green-700' : 'text-red-700'}`}>
+                          {rule.valid ? '✔' : '✖'} {rule.label}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
@@ -7711,23 +8357,43 @@ function App({ forceVisitor = false }) {
                 <input
                   type="password"
                   value={settingsForm.confirmPassword}
-                  onChange={(e) => setSettingsForm({...settingsForm, confirmPassword: e.target.value})}
+                  onChange={(e) => {
+                    setSettingsForm({...settingsForm, confirmPassword: e.target.value});
+                    if (settingsError) setSettingsError('');
+                  }}
                   placeholder="Confirmer le nouveau mot de passe"
                   className="w-full h-11 px-3 rounded-lg border border-[#CCB47F] bg-white text-[#4A062E] outline-none placeholder:text-[#9C7087] focus:border-[#B03372] focus:ring-2 focus:ring-[#f0c6dd]"
                 />
+                {settingsHasNewPassword && settingsForm.confirmPassword && !settingsPasswordsMatch && (
+                  <p className="mt-1 text-xs text-red-700">Les mots de passe ne correspondent pas.</p>
+                )}
               </div>
+
+              {settingsError && (
+                <div className="rounded-lg border border-red-300 bg-red-50 px-3 py-2 text-sm text-red-700">
+                  {settingsError}
+                </div>
+              )}
             </div>
 
             <div className="px-6 pb-6 pt-2 flex flex-col sm:flex-row gap-3">
               <button
-                onClick={() => setShowSettings(false)}
+                onClick={() => {
+                  setShowSettings(false);
+                  setSettingsError('');
+                }}
                 className="flex-1 h-11 rounded-lg border border-[#CCB47F] bg-white text-[#6E001F] font-semibold hover:bg-[#f7ead2] transition-colors"
               >
                 Annuler
               </button>
               <button
                 onClick={updateAccount}
-                className="flex-1 h-11 rounded-lg border border-[#B03372] bg-[#7A0A4A] text-white font-semibold hover:bg-[#5E0738] transition-colors"
+                disabled={!settingsCanSubmit}
+                className={`flex-1 h-11 rounded-lg border font-semibold transition-colors ${
+                  settingsCanSubmit
+                    ? 'border-[#B03372] bg-[#7A0A4A] text-white hover:bg-[#5E0738]'
+                    : 'border-gray-300 bg-gray-200 text-gray-500 cursor-not-allowed'
+                }`}
               >
                 Enregistrer les modifications
               </button>
@@ -7752,9 +8418,18 @@ function App({ forceVisitor = false }) {
 
       {/* Toast */}
       {toast && (
-        <div className="fixed right-6 top-6 z-60">
-          <div className={`px-4 py-2 rounded shadow-lg text-white ${toast.type === 'success' ? 'bg-green-600' : toast.type === 'error' ? 'bg-red-600' : toast.type === 'warning' ? 'bg-yellow-500 text-black' : 'bg-gray-800'}`}>
-            {toast.message}
+        <div className="fixed right-5 top-5 z-[12010] w-[min(92vw,360px)]">
+          <div className="relative overflow-hidden rounded-2xl border border-[#e7d9e2] bg-white/95 shadow-[0_16px_40px_rgba(15,23,42,0.18)] backdrop-blur-sm">
+            <div className={`absolute inset-y-0 left-0 w-1.5 ${getToastUi(toast.type).bar}`} />
+            <div className="flex items-start gap-3 px-4 py-3.5">
+              <div className={`mt-0.5 flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-sm font-bold ${getToastUi(toast.type).iconWrap}`}>
+                {getToastUi(toast.type).icon}
+              </div>
+              <div className="min-w-0">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">{getToastUi(toast.type).label}</p>
+                <p className="text-sm font-medium text-slate-700 break-words">{toast.message}</p>
+              </div>
+            </div>
           </div>
         </div>
       )}

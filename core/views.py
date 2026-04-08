@@ -9,12 +9,12 @@ import importlib
 import unicodedata
 import pandas as pd
 import string
-import random
+import secrets
 from collections import defaultdict
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
-from django.db import connection
+from django.db import connection, transaction
 from django.conf import settings
 from rest_framework.views import APIView
 from rest_framework import viewsets, status
@@ -2858,9 +2858,26 @@ class ThemeViewSet(viewsets.ModelViewSet):
 
 
 def generate_password(length=8):
-    """Génère un mot de passe aléatoire"""
-    characters = string.ascii_letters + string.digits + "!@#$%^&*"
-    return ''.join(random.choice(characters) for _ in range(length))
+    """Génère un mot de passe robuste avec complexité minimale."""
+    if length < 12:
+        length = 12
+
+    lower = string.ascii_lowercase
+    upper = string.ascii_uppercase
+    digits = string.digits
+    specials = '!@#$%^&*()-_=+[]{}'
+    all_chars = lower + upper + digits + specials
+
+    required = [
+        secrets.choice(lower),
+        secrets.choice(upper),
+        secrets.choice(digits),
+        secrets.choice(specials),
+    ]
+    remaining = [secrets.choice(all_chars) for _ in range(length - len(required))]
+    chars = required + remaining
+    secrets.SystemRandom().shuffle(chars)
+    return ''.join(chars)
 
 
 class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
@@ -3173,6 +3190,9 @@ class UserRequestViewSet(viewsets.ModelViewSet):
     def create_user_with_email(self, request):
         """Crée un nouvel utilisateur et envoie son mot de passe par email"""
         try:
+            if getattr(request.user, 'role', None) != 'ADMIN' and not getattr(request.user, 'is_superuser', False):
+                return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
+
             email = request.data.get('email')
             name = request.data.get('name')
             role = request.data.get('role')
@@ -3209,15 +3229,6 @@ class UserRequestViewSet(viewsets.ModelViewSet):
                 username = f"{original_username}{counter}"
                 counter += 1
             
-            # Créer l'utilisateur
-            new_user = CustomUser.objects.create_user(
-                username=username,
-                email=email,
-                password=temp_password,
-                role=role,
-                first_name=name
-            )
-            
             # Envoyer l'email avec les identifiants
             subject = "Bienvenue sur la plateforme HCP"
             message = f"""
@@ -3235,42 +3246,41 @@ Veuillez vous connecter et modifier votre mot de passe à la première connexion
 Cordialement,
 L'équipe HCP
             """
-            
-            try:
+
+            # Si l'email ne part pas, on rollback la création pour éviter un compte sans mot de passe communiqué.
+            with transaction.atomic():
+                new_user = CustomUser.objects.create_user(
+                    username=username,
+                    email=email,
+                    password=temp_password,
+                    role=role,
+                    first_name=name
+                )
+
                 send_mail(
                     subject,
                     message,
-                    'noreply@hcp.ma',
+                    getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@hcp.ma'),
                     [email],
                     fail_silently=False,
                 )
-            except Exception as e:
-                logger.warning(f"Impossible d'envoyer l'email: {str(e)}")
             
             serializer = UserSerializer(new_user)
             return Response(
                 {
                     'message': 'Utilisateur créé avec succès',
                     'user': serializer.data,
-                    'password': temp_password
+                    'email_sent': True
                 },
                 status=status.HTTP_201_CREATED
             )
         except Exception as e:
             logger.exception('Erreur création utilisateur')
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
-            
-            serializer = UserSerializer(new_user)
-            return Response(
-                {
-                    'message': 'Utilisateur créé avec succès',
-                    'user': serializer.data,
-                    'password': temp_password
-                },
-                status=status.HTTP_201_CREATED
-            )
-        except Exception as e:
-            logger.exception('Erreur création utilisateur')
+            if 'send' in str(e).lower() or 'smtp' in str(e).lower() or 'email' in str(e).lower():
+                return Response(
+                    {'error': f"Impossible d'envoyer l'email d'identifiants: {str(e)}"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['post'])
@@ -3363,7 +3373,7 @@ L'équipe HCP
                     send_mail(
                         subject,
                         message,
-                        'noreply@hcp.ma',
+                        getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@hcp.ma'),
                         [user_request.requester_email],
                         fail_silently=False,
                     )
@@ -3395,6 +3405,7 @@ L'équipe HCP
             
             # Générer un nouveau mot de passe
             new_password = generate_password()
+            old_password_hash = user.password
             user.set_password(new_password)
             user.save()
             
@@ -3417,12 +3428,17 @@ L'équipe HCP
                 send_mail(
                     subject,
                     message,
-                    'noreply@hcp.ma',
+                    getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@hcp.ma'),
                     [user_request.requester_email],
                     fail_silently=False,
                 )
             except Exception as e:
-                logger.warning(f"Impossible d'envoyer l'email: {str(e)}")
+                user.password = old_password_hash
+                user.save(update_fields=['password'])
+                return Response(
+                    {'error': f"Réinitialisation annulée: impossible d'envoyer l'email ({str(e)})"},
+                    status=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                )
             
             return Response(
                 {'message': 'Mot de passe réinitialisé et email envoyé'},

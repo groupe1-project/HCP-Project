@@ -23,6 +23,40 @@ import {
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';
 const ADMIN_SEEN_SUBMISSIONS_KEY = 'admin_seen_submission_markers';
+const getAuthStorageItem = (key) => {
+  try { return sessionStorage.getItem(key) || ''; } catch { return ''; }
+};
+
+const normalizeVisitorFieldKey = (value) => String(value ?? '')
+  .normalize('NFD')
+  .replace(/[\u0300-\u036f]/g, '')
+  .replace(/[\s_-]+/g, '')
+  .toLowerCase()
+  .trim();
+
+const hasVisitorField = (list, candidate) => {
+  const candidateKey = normalizeVisitorFieldKey(candidate);
+  if (!candidateKey) return false;
+  return (Array.isArray(list) ? list : []).some((item) => normalizeVisitorFieldKey(item) === candidateKey);
+};
+
+const appendUniqueVisitorField = (list, candidate) => {
+  if (!candidate || hasVisitorField(list, candidate)) return Array.isArray(list) ? list : [];
+  return [...(Array.isArray(list) ? list : []), candidate];
+};
+
+const dedupeVisitorFields = (list) => {
+  const source = Array.isArray(list) ? list : [];
+  const used = new Set();
+  const cleaned = [];
+  source.forEach((item) => {
+    const key = normalizeVisitorFieldKey(item);
+    if (!key || used.has(key)) return;
+    used.add(key);
+    cleaned.push(item);
+  });
+  return cleaned;
+};
 
 function DraggableChip({ id, children, onRemove }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -57,7 +91,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [showRequestsModal, setShowRequestsModal] = useState(false);
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [userRole, _setUserRole] = useState(localStorage.getItem('user_role') || '');
+  const [userRole, _setUserRole] = useState(getAuthStorageItem('user_role') || '');
   const [errorMessage, setErrorMessage] = useState('');
   
   // États pour la gestion des thèmes
@@ -138,9 +172,126 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [selectedMyAssignment, setSelectedMyAssignment] = useState(null);
   const [myProgression, setMyProgression] = useState(0);
   const [myComment, setMyComment] = useState('');
+  const [saisisseurSeenReviewMarkers, setSaisisseurSeenReviewMarkers] = useState({});
+  const [showSaisisseurNotifMenu, setShowSaisisseurNotifMenu] = useState(false);
+  const [renderSaisisseurNotifMenu, setRenderSaisisseurNotifMenu] = useState(false);
+  const saisisseurNotifMenuRef = React.useRef(null);
+  const closeNotifMenuTimeoutRef = React.useRef(null);
+  const currentUserId = String(getAuthStorageItem('user_id_admin') || getAuthStorageItem('user_id') || '');
+  const [popup, setPopup] = useState({
+    open: false,
+    kind: 'alert',
+    tone: 'info',
+    title: 'Notification',
+    message: '',
+    confirmLabel: 'OK',
+    cancelLabel: 'Annuler',
+  });
+  const [toast, setToast] = useState(null);
+  const popupResolverRef = React.useRef(null);
+  const toastTimeoutRef = React.useRef(null);
+
+  const inferTone = (message = '') => {
+    const text = String(message || '').toLowerCase();
+    if (text.includes('erreur') || text.includes('impossible') || text.includes('invalide')) return 'error';
+    if (text.includes('succ') || text.includes('ajout') || text.includes('supprim') || text.includes('enregistr') || text.includes('archiv') || text.includes('réactiv') || text.includes('reactiv')) return 'success';
+    if (text.includes('attention') || text.includes('veuillez')) return 'warning';
+    return 'info';
+  };
+
+  const getToneUi = (tone = 'info') => {
+    if (tone === 'success') {
+      return {
+        title: 'Succès',
+        icon: '✓',
+        header: 'from-emerald-700 to-emerald-500',
+        border: 'border-emerald-300',
+        iconBg: 'bg-emerald-100 text-emerald-700',
+      };
+    }
+    if (tone === 'error') {
+      return {
+        title: 'Erreur',
+        icon: '!',
+        header: 'from-rose-700 to-rose-500',
+        border: 'border-rose-300',
+        iconBg: 'bg-rose-100 text-rose-700',
+      };
+    }
+    if (tone === 'warning') {
+      return {
+        title: 'Attention',
+        icon: '!',
+        header: 'from-amber-700 to-amber-500',
+        border: 'border-amber-300',
+        iconBg: 'bg-amber-100 text-amber-700',
+      };
+    }
+    return {
+      title: 'Information',
+      icon: 'i',
+      header: 'from-[#7A0A4A] to-[#B03372]',
+      border: 'border-[#B03372]',
+      iconBg: 'bg-[#f4e3ed] text-[#7A0A4A]',
+    };
+  };
+
+  const showToast = (message, type = 'info') => {
+    setToast({ message: String(message || ''), type });
+    if (toastTimeoutRef.current) window.clearTimeout(toastTimeoutRef.current);
+    toastTimeoutRef.current = window.setTimeout(() => {
+      setToast(null);
+      toastTimeoutRef.current = null;
+    }, 3200);
+  };
+
+  const alert = (message, title = 'Information') => {
+    const tone = inferTone(message);
+    const ui = getToneUi(tone);
+    setPopup({
+      open: true,
+      kind: 'alert',
+      tone,
+      title: title === 'Information' ? ui.title : title,
+      message: String(message || ''),
+      confirmLabel: 'OK',
+      cancelLabel: 'Annuler',
+    });
+  };
+
+  const askConfirmation = (message, options = {}) => {
+    return new Promise((resolve) => {
+      popupResolverRef.current = resolve;
+      setPopup({
+        open: true,
+        kind: 'confirm',
+        tone: options.tone || 'warning',
+        title: options.title || 'Confirmation',
+        message: String(message || ''),
+        confirmLabel: options.confirmLabel || 'Confirmer',
+        cancelLabel: options.cancelLabel || 'Annuler',
+      });
+    });
+  };
+
+  const closePopup = () => {
+    if (popup.kind === 'confirm' && popupResolverRef.current) {
+      popupResolverRef.current(false);
+      popupResolverRef.current = null;
+    }
+    setPopup((prev) => ({ ...prev, open: false }));
+  };
+
+  const confirmPopup = () => {
+    if (popup.kind === 'confirm' && popupResolverRef.current) {
+      popupResolverRef.current(true);
+      popupResolverRef.current = null;
+    }
+    setPopup((prev) => ({ ...prev, open: false }));
+  };
 
   const getAdminAuthConfig = () => {
-    const adminToken = localStorage.getItem('auth_token_admin');
+    const adminToken = getAuthStorageItem('auth_token_admin');
     return adminToken ? { headers: { Authorization: `Token ${adminToken}` } } : {};
   };
   
@@ -149,8 +300,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     // Configure axios with the token relevant to the current page context.
     try {
       const token = isSaisisseur
-        ? (localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token'))
-        : localStorage.getItem('auth_token_admin');
+        ? (getAuthStorageItem('auth_token_saisisseur') || getAuthStorageItem('auth_token'))
+        : getAuthStorageItem('auth_token_admin');
       if (token) axios.defaults.headers.common['Authorization'] = `Token ${token}`;
     } catch {
       // Ignore localStorage access errors.
@@ -177,12 +328,137 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur, notificationBootstrapDone, seenSubmissionMarkers]);
 
+  useEffect(() => {
+    if (!isSaisisseur) return undefined;
+    const intervalId = window.setInterval(() => {
+      fetchMyAssignments();
+    }, 20000);
+    return () => window.clearInterval(intervalId);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSaisisseur, selectedMyAssignment?.id]);
+
+  useEffect(() => {
+    if (!isSaisisseur || !showSaisisseurNotifMenu) return undefined;
+    const handler = (event) => {
+      if (saisisseurNotifMenuRef.current && !saisisseurNotifMenuRef.current.contains(event.target)) {
+        setShowSaisisseurNotifMenu(false);
+      }
+    };
+    document.addEventListener('mousedown', handler);
+    return () => document.removeEventListener('mousedown', handler);
+  }, [isSaisisseur, showSaisisseurNotifMenu]);
+
+  useEffect(() => {
+    if (showSaisisseurNotifMenu) {
+      setRenderSaisisseurNotifMenu(true);
+      if (closeNotifMenuTimeoutRef.current) {
+        window.clearTimeout(closeNotifMenuTimeoutRef.current);
+        closeNotifMenuTimeoutRef.current = null;
+      }
+      return;
+    }
+
+    if (!renderSaisisseurNotifMenu) return;
+    closeNotifMenuTimeoutRef.current = window.setTimeout(() => {
+      setRenderSaisisseurNotifMenu(false);
+      closeNotifMenuTimeoutRef.current = null;
+    }, 180);
+
+    return () => {
+      if (closeNotifMenuTimeoutRef.current) {
+        window.clearTimeout(closeNotifMenuTimeoutRef.current);
+        closeNotifMenuTimeoutRef.current = null;
+      }
+    };
+  }, [showSaisisseurNotifMenu, renderSaisisseurNotifMenu]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimeoutRef.current) {
+        window.clearTimeout(toastTimeoutRef.current);
+      }
+      if (popupResolverRef.current) {
+        popupResolverRef.current(false);
+        popupResolverRef.current = null;
+      }
+    };
+  }, []);
+
   const parseAssignmentNotes = (rawNotes) => {
     try {
       return rawNotes ? JSON.parse(rawNotes) : {};
     } catch {
       return { _raw: rawNotes || '' };
     }
+  };
+
+  const getSaisisseurSeenMarkerStorageKey = () => {
+    const userId = getAuthStorageItem('user_id_saisisseur') || getAuthStorageItem('user_id') || 'unknown';
+    return `saisisseur_seen_review_markers_${userId}`;
+  };
+
+  const persistSaisisseurSeenReviewMarkers = (nextMarkers) => {
+    setSaisisseurSeenReviewMarkers(nextMarkers);
+    try {
+      localStorage.setItem(getSaisisseurSeenMarkerStorageKey(), JSON.stringify(nextMarkers));
+    } catch {
+      // Ignore localStorage failures.
+    }
+  };
+
+  useEffect(() => {
+    if (!isSaisisseur) return;
+    try {
+      const raw = localStorage.getItem(getSaisisseurSeenMarkerStorageKey());
+      const parsed = raw ? JSON.parse(raw) : {};
+      setSaisisseurSeenReviewMarkers(parsed && typeof parsed === 'object' ? parsed : {});
+    } catch {
+      setSaisisseurSeenReviewMarkers({});
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isSaisisseur]);
+
+  const getAssignmentAdminReviewNotification = (assignment) => {
+    const backendReview = assignment?.admin_review_notification;
+    if (backendReview && typeof backendReview === 'object') {
+      return {
+        decision: String(backendReview.decision || ''),
+        message: String(backendReview.message || ''),
+        at: String(backendReview.at || assignment?.date_modification || assignment?.date_completion || assignment?.date_assignation || ''),
+      };
+    }
+
+    const notesObj = parseAssignmentNotes(assignment?.notes);
+    const localReview = notesObj?.admin_last_review;
+    if (localReview && typeof localReview === 'object') {
+      return {
+        decision: String(localReview.decision || ''),
+        message: String(localReview.message || ''),
+        at: String(localReview.at || assignment?.date_modification || assignment?.date_completion || assignment?.date_assignation || ''),
+      };
+    }
+
+    return null;
+  };
+
+  const getSaisisseurReviewMarker = (assignment, review) => {
+    const stamp = String(review?.at || assignment?.date_modification || assignment?.date_completion || assignment?.date_assignation || '');
+    const decision = String(review?.decision || '');
+    const msg = String(review?.message || '');
+    return `${assignment?.id || 'na'}:${stamp}:${decision}:${msg}`;
+  };
+
+  const formatNotificationTime = (isoLike) => {
+    const raw = String(isoLike || '').trim();
+    if (!raw) return 'Date inconnue';
+    const dt = new Date(raw);
+    if (Number.isNaN(dt.getTime())) return 'Date inconnue';
+
+    const now = new Date();
+    const sameDay = dt.toDateString() === now.toDateString();
+    const hhmm = dt.toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+    if (sameDay) return `Aujourd'hui ${hhmm}`;
+    return dt.toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
   };
 
   const normalizeSubmissionNotes = (rawNotes) => {
@@ -482,7 +758,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const saveMyDraft = async () => {
     if (!selectedMyAssignment) return;
     try {
-      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurToken = getAuthStorageItem('auth_token_saisisseur') || getAuthStorageItem('auth_token');
       const saisisseurRequestConfig = saisisseurToken
         ? { headers: { Authorization: `Token ${saisisseurToken}` } }
         : {};
@@ -520,7 +796,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const submitMyAssignment = async () => {
     if (!selectedMyAssignment) return;
     try {
-      const saisisseurToken = localStorage.getItem('auth_token_saisisseur') || localStorage.getItem('auth_token');
+      const saisisseurToken = getAuthStorageItem('auth_token_saisisseur') || getAuthStorageItem('auth_token');
       const saisisseurRequestConfig = saisisseurToken
         ? { headers: { Authorization: `Token ${saisisseurToken}` } }
         : {};
@@ -583,14 +859,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
         if (found) {
           setConfigSubTheme(found);
-          setModalVisitorCols(found.visitor_visible_columns || []);
+          setModalVisitorCols(dedupeVisitorFields(found.visitor_visible_columns || []));
           const rawFilters = found.visitor_filters || found.filtres_disponibles || [];
           const normalizeFilters = (arr) => {
             if (!Array.isArray(arr)) return [];
             return arr.map(item => (typeof item === 'string' ? item : (item && item.column) ? item.column : String(item)));
           };
-          setModalVisitorFilters(normalizeFilters(rawFilters));
-          setModalVisitorHierarchy(Array.isArray(found.visitor_pivot_columns) ? found.visitor_pivot_columns : []);
+          setModalVisitorFilters(dedupeVisitorFields(normalizeFilters(rawFilters)));
+          setModalVisitorHierarchy(dedupeVisitorFields(Array.isArray(found.visitor_pivot_columns) ? found.visitor_pivot_columns : []));
           setModalVisitorDefaultFilters(found.visitor_default_filters || {});
           setConfigModalOpen(true);
           setActiveTab('themes');
@@ -613,12 +889,111 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     const notesObj = parseAssignmentNotes(selectedMyAssignment?.notes);
     const history = Array.isArray(notesObj.workflow_history) ? notesObj.workflow_history.slice().reverse() : [];
     const lastReview = notesObj.admin_last_review || null;
+    const saisisseurTopNotifications = myAssignments
+      .map((assignment) => {
+        const review = getAssignmentAdminReviewNotification(assignment);
+        if (!review || !review.decision) return null;
+        const isReject = review.decision === 'reject';
+        return {
+          assignment,
+          review,
+          isReject,
+          marker: getSaisisseurReviewMarker(assignment, review),
+          atTs: Date.parse(review.at || '') || 0,
+        };
+      })
+      .filter(Boolean)
+      .sort((a, b) => {
+        if (a.isReject !== b.isReject) return a.isReject ? -1 : 1;
+        return b.atTs - a.atTs;
+      });
+    const unreadTopNotifications = saisisseurTopNotifications.filter((item) => saisisseurSeenReviewMarkers[String(item.assignment.id)] !== item.marker);
+    const markNotificationAsRead = (item) => {
+      const next = { ...saisisseurSeenReviewMarkers, [String(item.assignment.id)]: item.marker };
+      persistSaisisseurSeenReviewMarkers(next);
+    };
+    const markAllNotificationsAsRead = () => {
+      const next = { ...saisisseurSeenReviewMarkers };
+      saisisseurTopNotifications.forEach((item) => {
+        next[String(item.assignment.id)] = item.marker;
+      });
+      persistSaisisseurSeenReviewMarkers(next);
+    };
 
     return (
       <div className="min-h-screen bg-[#f8f2f5] p-6">
         <div className="max-w-6xl mx-auto space-y-6">
-          <div className="bg-[#7A0A4A] text-white py-4 px-6 font-bold text-2xl rounded-2xl shadow-[0_10px_24px_rgba(122,10,74,0.28)]">
-            Espace Saisisseur
+          <div className="bg-[#7A0A4A] text-white py-4 px-6 font-bold text-2xl rounded-2xl shadow-[0_10px_24px_rgba(122,10,74,0.28)] flex items-center justify-between gap-3">
+            <span>Espace Saisisseur</span>
+            <div className="relative" ref={saisisseurNotifMenuRef}>
+              <button
+                type="button"
+                onClick={() => setShowSaisisseurNotifMenu((prev) => !prev)}
+                className="relative h-10 w-10 rounded-full border border-[#e8bfd1] bg-white/10 hover:bg-white/20 flex items-center justify-center"
+                title="Notifications admin"
+              >
+                <span className="text-xl">🔔</span>
+                {unreadTopNotifications.length > 0 && (
+                  <span className="absolute -top-1 -right-1 min-w-[18px] h-[18px] px-1 rounded-full bg-[#ff4f7b] text-white text-[10px] leading-[18px] text-center font-bold">
+                    {unreadTopNotifications.length > 9 ? '9+' : unreadTopNotifications.length}
+                  </span>
+                )}
+              </button>
+
+              {renderSaisisseurNotifMenu && (
+                <div className={`absolute right-0 mt-2 w-[360px] max-w-[86vw] rounded-2xl border border-[#e7bfd1] bg-white shadow-[0_16px_40px_rgba(122,10,74,0.22)] p-3 z-40 origin-top-right transform transition-all duration-200 ${showSaisisseurNotifMenu ? 'opacity-100 scale-100 translate-y-0' : 'opacity-0 scale-95 -translate-y-1 pointer-events-none'}`}>
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="text-sm font-bold text-[#6E001F]">Notifications admin</div>
+                    {unreadTopNotifications.length > 0 && (
+                      <button
+                        type="button"
+                        onClick={markAllNotificationsAsRead}
+                        className="text-[11px] px-2 py-1 rounded-md border border-[#d8b6c8] bg-[#fff6fa] text-[#7A0A4A] font-semibold hover:bg-[#fcecf4]"
+                      >
+                        Tout lire
+                      </button>
+                    )}
+                  </div>
+
+                  <div className="max-h-[330px] overflow-y-auto space-y-2 pr-1">
+                    {saisisseurTopNotifications.length === 0 ? (
+                      <div className="text-sm text-[#8f5f74] p-3 rounded-lg bg-[#fcf4f8] border border-[#efdce6]">Aucune notification pour le moment.</div>
+                    ) : (
+                      saisisseurTopNotifications.map((item) => {
+                        const isUnread = saisisseurSeenReviewMarkers[String(item.assignment.id)] !== item.marker;
+                        const isReject = item.review.decision === 'reject';
+                        return (
+                          <button
+                            key={`notif-${item.assignment.id}-${item.marker}`}
+                            type="button"
+                            onClick={() => {
+                              openMyAssignment(item.assignment);
+                              markNotificationAsRead(item);
+                              setShowSaisisseurNotifMenu(false);
+                            }}
+                            className={`w-full text-left rounded-xl border p-3 transition ${
+                              isReject
+                                ? 'border-[#efb6b6] bg-[#fff4f4] hover:bg-[#ffecec] shadow-[0_0_0_1px_rgba(226,99,99,0.18)]'
+                                : 'border-[#b8e6c8] bg-[#f1fcf5] hover:bg-[#e8f9ef]'
+                            } ${isUnread ? 'ring-2 ring-[#e7bfd1]' : ''}`}
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs font-bold text-[#6E001F]">{isReject ? 'Correction demandee' : 'Validation admin'}</span>
+                              {isUnread && <span className="text-[10px] px-2 py-0.5 rounded-full bg-[#7A0A4A] text-white">Nouveau</span>}
+                            </div>
+                            <div className="mt-1 text-sm font-semibold text-[#4d1734]">
+                              {item.assignment.theme_titre || 'Theme'}{item.assignment.sous_theme_nom ? ` > ${item.assignment.sous_theme_nom}` : ''}
+                            </div>
+                            <div className="mt-1 text-xs text-[#6f4a5e] line-clamp-2">{item.review.message || 'Sans commentaire'}</div>
+                            <div className="mt-1.5 text-[11px] text-[#8f5f74]">{formatNotificationTime(item.review.at)}</div>
+                          </button>
+                        );
+                      })
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
@@ -742,9 +1117,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       const adminConfig = getAdminAuthConfig();
       // Charger les utilisateurs
       const usersResponse = await axios.get(`${API_BASE}/users/`, adminConfig);
-      const filteredUsers = usersResponse.data.filter(user => 
-        user.role === 'SAISISSEUR'
-      );
+      const allUsers = Array.isArray(usersResponse.data) ? usersResponse.data : [];
       
       // Charger les assignations
       const assignmentsResponse = await axios.get(`${API_BASE}/user-theme-assignments/`, adminConfig);
@@ -770,7 +1143,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       }
       
       // Fusionner: ajouter toutes les assignations aux utilisateurs
-      const usersWithAssignments = filteredUsers.map(user => {
+      const usersWithAssignments = allUsers.map(user => {
         const userAssignments = nextAssignments.filter(a => a.user === user.id);
         return {
           ...user,
@@ -1360,14 +1733,17 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     try {
       setLoading(true);
       // Créer l'utilisateur
-      await axios.post(`${API_BASE}/user-requests/create_user_with_email/`, {
+      const response = await axios.post(`${API_BASE}/user-requests/create_user_with_email/`, {
         name: newSaisisseur.name,
         email: newSaisisseur.email,
         role: newSaisisseur.role
       });
 
-      // Afficher un message de succès
-      alert('Saisisseur ajouté avec succès! Un email a été envoyé avec les identifiants.');
+      if (response?.data?.email_sent) {
+        alert('Utilisateur ajouté avec succès. Un email avec les identifiants a été envoyé.');
+      } else {
+        alert('Utilisateur ajouté, mais l\'email n\'a pas pu être envoyé.');
+      }
       
       // Réinitialiser le formulaire
       setNewSaisisseur({ name: '', email: '', role: 'SAISISSEUR' });
@@ -1406,7 +1782,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       alert('Mot de passe réinitialisé et email envoyé!');
     } catch (error) {
       console.error('Erreur lors de la réinitialisation du mot de passe:', error);
-      alert('Erreur lors de la réinitialisation du mot de passe');
+      alert(error.response?.data?.error || 'Erreur lors de la réinitialisation du mot de passe');
     }
   };
 
@@ -1436,6 +1812,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       subThemeIds: userAssignments.filter(a => a.sous_theme).map(a => a.sous_theme)
     };
   };
+
+  const assignableSaisisseurs = saisisseurs.filter((user) => user.role === 'SAISISSEUR');
 
   // Fonction pour filtrer les thèmes disponibles
   // Filtre par utilisateur sélectionné uniquement (pas globalement).
@@ -1552,19 +1930,19 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleResetPasswordUser = async (userId) => {
-    if (!confirm('Réinitialiser le mot de passe de ce saisisseur?')) return;
+    if (!(await askConfirmation('Réinitialiser le mot de passe de ce saisisseur ?'))) return;
     
     try {
       await axios.post(`${API_BASE}/users/${userId}/reset_password/`);
       alert('Mot de passe réinitialisé avec succès! Un email a été envoyé.');
     } catch (error) {
       console.error('Erreur lors de la réinitialisation:', error);
-      alert('Erreur lors de la réinitialisation du mot de passe');
+      alert(error.response?.data?.error || 'Erreur lors de la réinitialisation du mot de passe');
     }
   };
 
   const handleDeleteSaisisseur = async (userId) => {
-    if (!confirm('Êtes-vous sûr de vouloir supprimer ce saisisseur? Cette action est irréversible.')) return;
+    if (!(await askConfirmation('Êtes-vous sûr de vouloir supprimer ce saisisseur ? Cette action est irréversible.', { title: 'Suppression utilisateur', confirmLabel: 'Supprimer' }))) return;
     
     try {
       await axios.delete(`${API_BASE}/users/${userId}/`);
@@ -1578,7 +1956,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleArchiveSaisisseur = async (userId) => {
-    if (!confirm('Archiver ce saisisseur? Il ne pourra plus se connecter.')) return;
+    if (!(await askConfirmation('Archiver ce saisisseur ? Il ne pourra plus se connecter.', { title: 'Archivage utilisateur', confirmLabel: 'Archiver' }))) return;
     
     try {
       await axios.post(`${API_BASE}/users/${userId}/archive/`);
@@ -1592,7 +1970,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleUnarchiveSaisisseur = async (userId) => {
-    if (!confirm('Réactiver ce saisisseur? Il pourra se reconnecter.')) return;
+    if (!(await askConfirmation('Réactiver ce saisisseur ? Il pourra se reconnecter.', { title: 'Réactivation utilisateur', confirmLabel: 'Réactiver' }))) return;
 
     try {
       await axios.post(`${API_BASE}/users/${userId}/unarchive/`);
@@ -1620,7 +1998,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleArchiveAssignment = async (assignmentId) => {
-    if (!confirm('Archiver cette tâche ? Le compte utilisateur restera actif.')) return;
+    if (!(await askConfirmation('Archiver cette tâche ? Le compte utilisateur restera actif.', { title: 'Archivage tâche', confirmLabel: 'Archiver' }))) return;
 
     try {
       await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/archive/`);
@@ -1634,7 +2012,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleUnarchiveAssignment = async (assignmentId) => {
-    if (!confirm('Désarchiver cette tâche ?')) return;
+    if (!(await askConfirmation('Désarchiver cette tâche ?', { title: 'Désarchivage tâche', confirmLabel: 'Désarchiver' }))) return;
 
     try {
       await axios.post(`${API_BASE}/user-theme-assignments/${assignmentId}/unarchive/`);
@@ -1648,7 +2026,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   };
 
   const handleDeleteAssignment = async (assignmentId) => {
-    if (!confirm('Supprimer cette assignation ? Cette action est irréversible.')) return;
+    if (!(await askConfirmation('Supprimer cette assignation ? Cette action est irréversible.', { title: 'Suppression assignation', confirmLabel: 'Supprimer' }))) return;
     try {
       await axios.delete(`${API_BASE}/user-theme-assignments/${assignmentId}/`);
       alert('Assignation supprimée');
@@ -2037,7 +2415,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 className="w-full px-3 py-2 border border-[#d8b6c8] rounded-lg outline-none font-semibold bg-white text-[#4d1734] focus:border-[#B03372]"
               >
                 <option value="">-- Sélectionner --</option>
-                {saisisseurs.map(s => (
+                {assignableSaisisseurs.map(s => (
                   <option key={s.id} value={s.id}>
                     {s.first_name || s.username} ({getRoleLabel(s.role)})
                   </option>
@@ -2153,19 +2531,25 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 {saisisseurs.length === 0 ? (
                   <tr>
                     <td colSpan="4" className="px-6 py-8 text-center text-gray-500">
-                      Aucun saisisseur trouvé. Cliquez sur "Ajouter un Saisisseur" pour en créer.
+                      Aucun utilisateur trouvé. Cliquez sur "Ajouter" pour en créer.
                     </td>
                   </tr>
                 ) : (
                   saisisseurs.map((saisisseur) => {
                     const isArchived = saisisseur.is_active === false;
+                    const isCurrentUser = Boolean(currentUserId) && String(saisisseur.id) === currentUserId;
                     return (
                       <tr
                         key={saisisseur.id}
-                        className={`border-b border-[#efdce6] transition ${isArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fcf4f8]'}`}
+                        className={`border-b border-[#efdce6] transition ${isArchived ? 'bg-[#f6f1f4] text-gray-400' : 'hover:bg-[#fcf4f8]'} ${isCurrentUser ? 'ring-1 ring-inset ring-[#d39ab8] bg-[#fff6fa]' : ''}`}
                       >
                         <td className={`px-6 py-3 font-medium ${isArchived ? 'line-through' : ''}`}>
-                          {saisisseur.first_name || saisisseur.username}
+                          <div className="flex items-center gap-2">
+                            <span>{saisisseur.first_name || saisisseur.username}</span>
+                            {isCurrentUser && (
+                              <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-[#7A0A4A] text-white">Vous</span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-6 py-3 text-[#6b2949]">{saisisseur.email}</td>
                         <td className="px-6 py-3">
@@ -2232,31 +2616,34 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                               </button>
                               {isArchived ? (
                                 <button
+                                  disabled={isCurrentUser}
                                   onClick={() => {
                                     handleUnarchiveSaisisseur(saisisseur.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
+                                  className={`w-full text-left px-4 py-2 flex items-center gap-2 text-sm border-t border-[#B03372] ${isCurrentUser ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#5E0738]'}`}
                                 >
                                   ↩️ Désarchiver
                                 </button>
                               ) : (
                                 <button
+                                  disabled={isCurrentUser}
                                   onClick={() => {
                                     handleArchiveSaisisseur(saisisseur.id);
                                     setOpenMenuId(null);
                                   }}
-                                  className="w-full text-left px-4 py-2 hover:bg-[#5E0738] flex items-center gap-2 text-sm border-t border-[#B03372]"
+                                  className={`w-full text-left px-4 py-2 flex items-center gap-2 text-sm border-t border-[#B03372] ${isCurrentUser ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#5E0738]'}`}
                                 >
                                   📦 Archiver
                                 </button>
                               )}
                               <button
+                                disabled={isCurrentUser}
                                 onClick={() => {
                                   handleDeleteSaisisseur(saisisseur.id);
                                   setOpenMenuId(null);
                                 }}
-                                className="w-full text-left px-4 py-2 hover:bg-[#5E0738] text-white/90 flex items-center gap-2 text-sm border-t border-[#B03372] rounded-b-lg"
+                                className={`w-full text-left px-4 py-2 text-white/90 flex items-center gap-2 text-sm border-t border-[#B03372] rounded-b-lg ${isCurrentUser ? 'opacity-50 cursor-not-allowed' : 'hover:bg-[#5E0738]'}`}
                               >
                                 🗑️ Supprimer
                               </button>
@@ -2758,6 +3145,46 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             >
               Envoyer
             </button>
+          </div>
+        </div>
+      )}
+
+      {popup.open && (
+        <div className="fixed inset-0 bg-black/55 flex items-center justify-center z-[12000] p-4">
+          <div className={`w-full max-w-md rounded-2xl border ${getToneUi(popup.tone).border} bg-[#fffaf2] shadow-[0_18px_42px_rgba(94,7,56,0.34)] overflow-hidden`}>
+            <div className={`bg-gradient-to-r ${getToneUi(popup.tone).header} px-5 py-3 border-b border-white/30`}>
+              <h3 className="text-white font-bold text-lg">{popup.title}</h3>
+            </div>
+            <div className="p-5 text-[#4d1734] whitespace-pre-line leading-relaxed flex items-start gap-3">
+              <span className={`w-8 h-8 rounded-full flex items-center justify-center text-sm font-black ${getToneUi(popup.tone).iconBg}`}>{getToneUi(popup.tone).icon}</span>
+              <span className="flex-1">{popup.message}</span>
+            </div>
+            <div className="px-5 pb-5 pt-1 flex gap-3 justify-end">
+              {popup.kind === 'confirm' && (
+                <button
+                  onClick={closePopup}
+                  className="px-4 py-2 rounded-lg border border-[#d8b6c8] bg-white text-[#7A0A4A] font-semibold hover:bg-[#f7eaf1]"
+                >
+                  {popup.cancelLabel}
+                </button>
+              )}
+              <button
+                onClick={confirmPopup}
+                className="px-4 py-2 rounded-lg border border-[#B03372] bg-[#7A0A4A] text-white font-semibold hover:bg-[#5E0738]"
+              >
+                {popup.confirmLabel}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {toast && (
+        <div className={`fixed bottom-6 right-6 z-[13000] max-w-[90vw] rounded-xl border ${getToneUi(toast.type).border} bg-white shadow-[0_16px_32px_rgba(122,10,74,0.22)] overflow-hidden`}>
+          <div className={`h-1.5 bg-gradient-to-r ${getToneUi(toast.type).header}`} />
+          <div className="px-4 py-3 text-sm font-medium text-[#4d1734] flex items-center gap-2">
+            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black ${getToneUi(toast.type).iconBg}`}>{getToneUi(toast.type).icon}</span>
+            <span>{toast.message}</span>
           </div>
         </div>
       )}
@@ -3637,13 +4064,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <div className="mt-2 text-xs text-gray-600">Ajouter une colonne:</div>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {(configSubTheme.columns && configSubTheme.columns.length ? configSubTheme.columns : Object.keys((configSubTheme.data && configSubTheme.data[0]) || {}))
-                    .filter(c => !modalVisitorCols.includes(c))
+                    .filter(c => !hasVisitorField(modalVisitorCols, c))
                     .map(c => (
                       <button
                         key={`add-col-${c}`}
                         type="button"
                         className="px-2 py-1 text-xs rounded border border-[#d8b6c8] bg-white hover:bg-[#f8edf3]"
-                        onClick={() => setModalVisitorCols(prev => [...prev, c])}
+                        onClick={() => setModalVisitorCols(prev => appendUniqueVisitorField(prev, c))}
                       >
                         {c}
                       </button>
@@ -3690,13 +4117,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <div className="mt-2 text-xs text-gray-600">Ajouter un filtre:</div>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {modalVisitorCols
-                    .filter(c => !modalVisitorFilters.includes(c))
+                    .filter(c => !hasVisitorField(modalVisitorFilters, c))
                     .map(c => (
                       <button
                         key={`add-filter-${c}`}
                         type="button"
                         className="px-2 py-1 text-xs rounded border border-[#d8b6c8] bg-white hover:bg-[#f8edf3]"
-                        onClick={() => setModalVisitorFilters(prev => [...prev, c])}
+                        onClick={() => setModalVisitorFilters(prev => appendUniqueVisitorField(prev, c))}
                       >
                         {c}
                       </button>
@@ -3732,13 +4159,13 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 <div className="mt-2 text-xs text-gray-600">Ajouter à la hiérarchie:</div>
                 <div className="mt-1 flex flex-wrap gap-2">
                   {modalVisitorCols
-                    .filter(c => !modalVisitorHierarchy.includes(c))
+                    .filter(c => !hasVisitorField(modalVisitorHierarchy, c))
                     .map(c => (
                       <button
                         key={`add-hierarchy-${c}`}
                         type="button"
                         className="px-2 py-1 text-xs rounded border border-[#d8b6c8] bg-white hover:bg-[#f8edf3]"
-                        onClick={() => setModalVisitorHierarchy(prev => [...prev, c])}
+                        onClick={() => setModalVisitorHierarchy(prev => appendUniqueVisitorField(prev, c))}
                       >
                         {c}
                       </button>
@@ -3790,9 +4217,9 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
               <button className="px-4 py-2 bg-[#f4e3ed] text-[#7A0A4A] border border-[#d8b6c8] rounded font-bold" onClick={() => {
                 // reset modal to original values
-                setModalVisitorCols(configSubTheme.visitor_visible_columns || []);
-                setModalVisitorFilters(configSubTheme.visitor_filters || configSubTheme.filtres_disponibles || []);
-                setModalVisitorHierarchy(configSubTheme.visitor_pivot_columns || []);
+                setModalVisitorCols(dedupeVisitorFields(configSubTheme.visitor_visible_columns || []));
+                setModalVisitorFilters(dedupeVisitorFields(configSubTheme.visitor_filters || configSubTheme.filtres_disponibles || []));
+                setModalVisitorHierarchy(dedupeVisitorFields(configSubTheme.visitor_pivot_columns || []));
                 setModalVisitorDefaultFilters(configSubTheme.visitor_default_filters || {});
               }}>Recharger</button>
 

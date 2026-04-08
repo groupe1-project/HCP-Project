@@ -12,6 +12,7 @@ from django.contrib.auth.password_validation import validate_password
 from django.utils.crypto import get_random_string
 from django.core.exceptions import ValidationError
 from django.core.cache import cache
+from django.core.mail import send_mail
 from .models import CustomUser
 from .throttles import LoginRateThrottle, PasswordResetRateThrottle
 from .security_audit import audit_security_event
@@ -57,6 +58,7 @@ def login(request):
         'token': token.key,
         'user_id': user_auth.id,
         'username': user_auth.username,
+        'first_name': user_auth.first_name,
         'email': user_auth.email,
         'role': user_auth.role,
     }, status=status.HTTP_200_OK)
@@ -108,6 +110,7 @@ def me(request):
         {
             'user_id': user.id,
             'username': user.username,
+            'first_name': user.first_name,
             'email': user.email,
             'role': getattr(user, 'role', ''),
             'is_active': user.is_active,
@@ -145,7 +148,25 @@ def request_reset(request):
     cache.set(cache_key, reset_code, 900)  # 900 secondes = 15 minutes
     audit_security_event('auth.password_reset.request.created', request, email=email, user_id=user.id)
     
-    response_payload = {'message': 'Code de réinitialisation généré'}
+    # Envoi du code par email (sans révéler l'existence du compte dans la réponse API).
+    try:
+        send_mail(
+            'Code de réinitialisation de mot de passe',
+            (
+                f"Bonjour {user.first_name or user.username},\n\n"
+                f"Votre code de réinitialisation est: {reset_code}\n"
+                "Ce code est valide pendant 15 minutes.\n\n"
+                "Si vous n'êtes pas à l'origine de cette demande, ignorez cet email.\n\n"
+                "Equipe HCP"
+            ),
+            getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@hcp.ma'),
+            [email],
+            fail_silently=False,
+        )
+    except Exception as exc:
+        logger.warning('Envoi email reset impossible: %s', exc)
+
+    response_payload = {'message': 'Si cet email existe, un code de réinitialisation a été envoyé.'}
 
     # Compatibilité locale: exposer le code uniquement si explicitement autorisé.
     # Ne jamais activer cette option en production.

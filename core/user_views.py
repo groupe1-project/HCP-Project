@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes, action
 from rest_framework.response import Response
 from rest_framework.permissions import IsAuthenticated
 from django.core.mail import send_mail
+from django.conf import settings
 from django.contrib.auth.password_validation import validate_password
 from django.core.exceptions import ValidationError
 from rest_framework.authtoken.models import Token
@@ -47,6 +48,9 @@ class UserViewSet(viewsets.ModelViewSet):
     def _is_admin(self, user):
         return bool(user and (user.is_superuser or getattr(user, 'role', None) == 'ADMIN'))
 
+    def _is_privileged_user(self, user):
+        return bool(user and (user.is_superuser or getattr(user, 'role', None) == 'ADMIN'))
+
     def get_queryset(self):
         if self._is_admin(self.request.user):
             return CustomUser.objects.all()
@@ -61,7 +65,7 @@ class UserViewSet(viewsets.ModelViewSet):
     
     def update(self, request, *args, **kwargs):
         """
-        Met à jour l'email et/ou le mot de passe de l'utilisateur.
+        Met à jour le profil (nom affiché), l'email et/ou le mot de passe.
         """
         user = self.get_object()
         
@@ -70,8 +74,12 @@ class UserViewSet(viewsets.ModelViewSet):
             audit_security_event('user.profile.update.denied', request, target_user_id=user.id)
             return Response({'error': 'Non autorisé'}, status=status.HTTP_403_FORBIDDEN)
         
+        first_name = request.data.get('first_name')
         email = request.data.get('email')
         password = request.data.get('password')
+
+        if first_name is not None:
+            user.first_name = str(first_name).strip()
         
         if email:
             user.email = email
@@ -103,6 +111,7 @@ class UserViewSet(viewsets.ModelViewSet):
         
         # Générer un nouveau mot de passe
         new_password = generate_password()
+        old_password_hash = user.password
         user.set_password(new_password)
         user.save()
         Token.objects.filter(user=user).delete()
@@ -128,11 +137,13 @@ L'équipe HCP
             send_mail(
                 subject,
                 message,
-                'noreply@hcp.ma',
+                getattr(settings, 'DEFAULT_FROM_EMAIL', 'noreply@hcp.ma'),
                 [user.email],
                 fail_silently=False,
             )
         except Exception as e:
+            user.password = old_password_hash
+            user.save(update_fields=['password'])
             audit_security_event('admin.user.reset_password.failed', request, target_user_id=user.id, reason='email_send_error')
             return Response({'error': f'Erreur lors de l\'envoi de l\'email: {str(e)}'}, 
                           status=status.HTTP_500_INTERNAL_SERVER_ERROR)
@@ -146,13 +157,22 @@ L'équipe HCP
     def archive(self, request, pk=None):
         """Archive un utilisateur (admin uniquement)"""
         # Allow Django superusers as well as users with role 'ADMIN'
-        if not (request.user.role == 'ADMIN' or request.user.is_superuser):
+        if not self._is_admin(request.user):
             audit_security_event('admin.user.archive.denied', request, target_user_id=pk)
             return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
         
         user = self.get_object()
+        if user.id == request.user.id:
+            audit_security_event('admin.user.archive.denied', request, target_user_id=user.id, reason='self_archive_blocked')
+            return Response({'error': 'Archivage de votre propre compte interdit.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if self._is_privileged_user(user):
+            audit_security_event('admin.user.archive.denied', request, target_user_id=user.id, reason='privileged_archive_blocked')
+            return Response({'error': 'Archivage d\'un compte administrateur interdit.'}, status=status.HTTP_400_BAD_REQUEST)
+
         user.is_active = False
         user.save()
+        Token.objects.filter(user=user).delete()
         audit_security_event('admin.user.archive.success', request, target_user_id=user.id)
         
         return Response({'message': 'Utilisateur archivé avec succès'}, status=status.HTTP_200_OK)
@@ -173,11 +193,24 @@ L'équipe HCP
         return Response({'message': 'Utilisateur réactivé avec succès'}, status=status.HTTP_200_OK)
     
     def destroy(self, request, *args, **kwargs):
-        """Supprime un utilisateur (admin uniquement)"""
+        """Supprime définitivement un utilisateur (admin uniquement)."""
         # Allow Django superusers as well as users with role 'ADMIN'
         if not (request.user.role == 'ADMIN' or request.user.is_superuser):
             audit_security_event('admin.user.delete.denied', request, target_user_id=kwargs.get('pk'))
             return Response({'error': 'Accès refusé'}, status=status.HTTP_403_FORBIDDEN)
-        audit_security_event('admin.user.delete.requested', request, target_user_id=kwargs.get('pk'))
-        
-        return super().destroy(request, *args, **kwargs)
+        target = self.get_object()
+
+        if target.id == request.user.id:
+            audit_security_event('admin.user.delete.denied', request, target_user_id=target.id, reason='self_delete_blocked')
+            return Response({'error': 'Suppression de votre propre compte interdite.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        if self._is_privileged_user(target):
+            audit_security_event('admin.user.delete.denied', request, target_user_id=target.id, reason='privileged_delete_blocked')
+            return Response({'error': 'Suppression d\'un compte administrateur interdite. Utilisez l\'archivage si nécessaire.'}, status=status.HTTP_400_BAD_REQUEST)
+
+        # Hard delete for non-privileged accounts.
+        Token.objects.filter(user=target).delete()
+        target.delete()
+
+        audit_security_event('admin.user.delete.success', request, target_user_id=kwargs.get('pk'))
+        return Response(status=status.HTTP_204_NO_CONTENT)
