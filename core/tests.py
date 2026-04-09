@@ -88,7 +88,8 @@ class AdminAssistantFallbackTests(TestCase):
 		token = Token.objects.create(user=self.user)
 		self.client.credentials(HTTP_AUTHORIZATION=f'Token {token.key}')
 
-	def test_admin_assistant_falls_back_when_ai_is_unavailable(self):
+	@patch('core.views.AdminAssistantChatView._try_ai_rewrite', side_effect=RuntimeError('forced test fallback'))
+	def test_admin_assistant_falls_back_when_ai_is_unavailable(self, _mock_rewrite):
 		response = self.client.post(
 			'/api/admin-assistant/chat/',
 			{

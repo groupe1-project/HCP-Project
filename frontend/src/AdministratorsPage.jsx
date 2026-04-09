@@ -143,6 +143,9 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const [showAdminAssistant, setShowAdminAssistant] = useState(false);
   const [assistantInput, setAssistantInput] = useState('');
   const [assistantLoading, setAssistantLoading] = useState(false);
+  const [assistantActiveMessageId, setAssistantActiveMessageId] = useState(null);
+  const [assistantLastPrompt, setAssistantLastPrompt] = useState('');
+  const [assistantStopped, setAssistantStopped] = useState(false);
   const [assistantMessages, setAssistantMessages] = useState([
     {
       role: 'assistant',
@@ -151,6 +154,8 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       timestamp: new Date().toISOString(),
     },
   ]);
+  const assistantFeedRef = React.useRef(null);
+  const assistantAbortRef = React.useRef(null);
   const [seenSubmissionMarkers, setSeenSubmissionMarkers] = useState(() => {
     try {
       const raw = localStorage.getItem(ADMIN_SEEN_SUBMISSIONS_KEY);
@@ -336,6 +341,11 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     return () => window.clearInterval(intervalId);
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur, selectedMyAssignment?.id]);
+
+  useEffect(() => {
+    if (!assistantFeedRef.current) return;
+    assistantFeedRef.current.scrollTop = assistantFeedRef.current.scrollHeight;
+  }, [assistantMessages, assistantLoading]);
 
   useEffect(() => {
     if (!isSaisisseur || !showSaisisseurNotifMenu) return undefined;
@@ -1670,8 +1680,14 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     window.URL.revokeObjectURL(url);
   };
 
-  const sendAssistantMessage = async () => {
-    const text = assistantInput.trim();
+  const sendAssistantMessage = async (forcedText = null, options = {}) => {
+    const isDomEvent = Boolean(
+      forcedText
+      && typeof forcedText === 'object'
+      && (typeof forcedText.preventDefault === 'function' || 'nativeEvent' in forcedText)
+    );
+    const sourceText = isDomEvent ? assistantInput : (forcedText ?? assistantInput);
+    const text = String(sourceText ?? '').trim();
     if (!text || assistantLoading) return;
 
     const userMsg = {
@@ -1680,51 +1696,150 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       timestamp: new Date().toISOString(),
     };
     setAssistantMessages((prev) => [...prev, userMsg]);
-    setAssistantInput('');
+    if (!options?.isRegenerate) setAssistantInput('');
+    setAssistantLastPrompt(text);
+    setAssistantStopped(false);
+
+    const assistantId = `assistant-${Date.now()}`;
+    setAssistantActiveMessageId(assistantId);
+    setAssistantMessages((prev) => [
+      ...prev,
+      {
+        id: assistantId,
+        role: 'assistant',
+        text: '',
+        mode: 'ai',
+        timestamp: new Date().toISOString(),
+      },
+    ]);
 
     try {
       setAssistantLoading(true);
-      const response = await axios.post(
-        `${API_BASE}/admin-assistant/chat/`,
-        { message: text, use_ai: true },
-        getAdminAuthConfig()
-      );
-      // Si IA répond, afficher la réponse. Sinon, afficher le fallback (secours)
-      if (response?.data?.mode === 'ai') {
-        setAssistantMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            text: response?.data?.reply || 'Aucune réponse disponible.',
-            mode: 'ai',
-            timestamp: new Date().toISOString(),
-          },
-        ]);
-      } else if (response?.data?.mode === 'fallback') {
-        setAssistantMessages((prev) => [
-          ...prev,
-          {
-            role: 'assistant',
-            text: response?.data?.reply || 'Aucune réponse disponible.',
-            mode: 'fallback',
-            timestamp: new Date().toISOString(),
-          },
-        ]);
+      const abortController = new AbortController();
+      assistantAbortRef.current = abortController;
+
+      const adminToken = getAuthStorageItem('auth_token_admin');
+      const response = await fetch(`${API_BASE}/admin-assistant/chat/`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...(adminToken ? { Authorization: `Token ${adminToken}` } : {}),
+        },
+        body: JSON.stringify({ message: text, use_ai: true, stream: true }),
+        signal: abortController.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`HTTP ${response.status}`);
       }
+
+      if (!response.body) {
+        const data = await response.json();
+        const reply = String(data?.reply || 'Aucune réponse disponible.');
+        const mode = data?.mode === 'fallback' ? 'fallback' : 'ai';
+        setAssistantMessages((prev) => prev.map((msg) => msg.id === assistantId ? { ...msg, text: reply, mode } : msg));
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder('utf-8');
+      let buffer = '';
+      let gotDoneEvent = false;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || '';
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed) continue;
+
+          let evt = null;
+          try {
+            evt = JSON.parse(trimmed);
+          } catch {
+            continue;
+          }
+
+          if (evt.type === 'delta') {
+            const piece = String(evt.text || '');
+            const mode = evt.mode === 'fallback' ? 'fallback' : 'ai';
+            setAssistantMessages((prev) => prev.map((msg) => {
+              if (msg.id !== assistantId) return msg;
+              return { ...msg, text: `${msg.text || ''}${piece}`, mode };
+            }));
+          }
+
+          if (evt.type === 'done') {
+            gotDoneEvent = true;
+            const mode = evt.mode === 'fallback' ? 'fallback' : 'ai';
+            setAssistantMessages((prev) => prev.map((msg) => msg.id === assistantId ? { ...msg, mode } : msg));
+          }
+        }
+      }
+
+      if (buffer.trim()) {
+        try {
+          const evt = JSON.parse(buffer.trim());
+          if (evt.type === 'delta') {
+            const piece = String(evt.text || '');
+            const mode = evt.mode === 'fallback' ? 'fallback' : 'ai';
+            setAssistantMessages((prev) => prev.map((msg) => {
+              if (msg.id !== assistantId) return msg;
+              return { ...msg, text: `${msg.text || ''}${piece}`, mode };
+            }));
+          }
+          if (evt.type === 'done') {
+            gotDoneEvent = true;
+            const mode = evt.mode === 'fallback' ? 'fallback' : 'ai';
+            setAssistantMessages((prev) => prev.map((msg) => msg.id === assistantId ? { ...msg, mode } : msg));
+          }
+        } catch {
+          // ignore malformed trailing chunk
+        }
+      }
+
+      setAssistantMessages((prev) => prev.map((msg) => {
+        if (msg.id !== assistantId) return msg;
+        const finalText = String(msg.text || '').trim();
+        if (finalText) return { ...msg, text: finalText };
+        if (assistantStopped) return { ...msg, text: 'Generation arretee par utilisateur.', mode: 'fallback' };
+        if (!gotDoneEvent) return { ...msg, text: 'La generation a ete interrompue avant la fin. Reessayez ou utilisez Regenerer.', mode: 'fallback' };
+        return { ...msg, text: 'Aucune réponse disponible.' };
+      }));
     } catch (error) {
       console.error('Erreur assistant admin:', error);
-      setAssistantMessages((prev) => [
-        ...prev,
-        {
-          role: 'assistant',
-          text: "Je n'arrive pas à répondre pour le moment. Réessayez dans quelques instants.",
+      const isAbort = String(error?.name || '').toLowerCase() === 'aborterror';
+      setAssistantMessages((prev) => prev.map((msg) => {
+        if (msg.id !== assistantId) return msg;
+        return {
+          ...msg,
+          text: isAbort
+            ? 'Generation arretee. Cliquez sur Regenerer pour reprendre.'
+            : "Je n'arrive pas à répondre pour le moment. Réessayez dans quelques instants.",
           mode: 'fallback',
-          timestamp: new Date().toISOString(),
-        },
-      ]);
+        };
+      }));
     } finally {
+      assistantAbortRef.current = null;
       setAssistantLoading(false);
+      setAssistantActiveMessageId(null);
     }
+  };
+
+  const stopAssistantGeneration = () => {
+    if (!assistantAbortRef.current) return;
+    setAssistantStopped(true);
+    assistantAbortRef.current.abort();
+  };
+
+  const regenerateAssistantReply = () => {
+    if (!assistantLastPrompt || assistantLoading) return;
+    sendAssistantMessage(assistantLastPrompt, { isRegenerate: true });
   };
 
   const handleAddSaisisseur = async (e) => {
@@ -3105,11 +3220,16 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             <button onClick={() => setShowAdminAssistant(false)} className="text-white/80 hover:text-white text-lg leading-none">×</button>
           </div>
 
-          <div className="h-72 overflow-y-auto p-3 bg-[#fffdf8] space-y-2">
+          <div ref={assistantFeedRef} className="h-72 overflow-y-auto p-3 bg-[#fffdf8] space-y-2">
             {assistantMessages.map((msg, idx) => (
-              <div key={`assistant-msg-${idx}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+              <div key={msg.id || `assistant-msg-${idx}`} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
                 <div className={`max-w-[85%] rounded-xl px-3 py-2 text-sm ${msg.role === 'user' ? 'bg-[#7A0A4A] text-white' : 'bg-white border border-[#ead3df] text-[#4d1734]'}`}>
-                  <p className="whitespace-pre-line">{msg.text}</p>
+                  <p className="whitespace-pre-line">
+                    {msg.text}
+                    {assistantLoading && msg.id === assistantActiveMessageId && (
+                      <span className="ml-1 inline-block animate-pulse font-bold">|</span>
+                    )}
+                  </p>
                   {msg.role === 'assistant' && (
                     <span className={`mt-1 inline-block text-[10px] px-1.5 py-0.5 rounded-full ${msg.mode === 'ai' ? 'bg-[#e6f7ed] text-[#1a7f4b]' : 'bg-[#fef3c7] text-[#92400e]'}`}>
                       {msg.mode === 'ai' ? 'IA' : 'Secours'}
@@ -3119,11 +3239,30 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
               </div>
             ))}
             {assistantLoading && (
-              <div className="text-xs text-[#8c4f6a]">Assistant en cours de réponse...</div>
+              <div className="text-xs text-[#8c4f6a]">Assistant est en train d'ecrire...</div>
             )}
           </div>
 
-          <div className="border-t border-[#e5c9d7] p-3 bg-white flex gap-2">
+          <div className="border-t border-[#e5c9d7] p-3 bg-white space-y-2">
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={stopAssistantGeneration}
+                disabled={!assistantLoading}
+                className="px-2.5 py-1.5 rounded-lg border border-[#d8b6c8] bg-white text-[#7A0A4A] text-xs font-semibold disabled:opacity-40"
+              >
+                Stop génération
+              </button>
+              <button
+                type="button"
+                onClick={regenerateAssistantReply}
+                disabled={assistantLoading || !assistantLastPrompt}
+                className="px-2.5 py-1.5 rounded-lg border border-[#d8b6c8] bg-[#f8edf3] text-[#7A0A4A] text-xs font-semibold disabled:opacity-40"
+              >
+                Régénérer réponse
+              </button>
+            </div>
+            <div className="flex gap-2">
             <input
               type="text"
               value={assistantInput}
@@ -3145,6 +3284,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
             >
               Envoyer
             </button>
+            </div>
           </div>
         </div>
       )}

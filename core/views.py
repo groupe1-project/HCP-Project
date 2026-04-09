@@ -7,6 +7,8 @@ import os
 import time
 import importlib
 import unicodedata
+import urllib.error
+import urllib.request
 import pandas as pd
 import string
 import secrets
@@ -16,6 +18,7 @@ from django.core.mail import send_mail
 from django.template.loader import render_to_string
 from django.db import connection, transaction
 from django.conf import settings
+from django.http import StreamingHttpResponse
 from rest_framework.views import APIView
 from rest_framework import viewsets, status
 from rest_framework.exceptions import PermissionDenied
@@ -234,64 +237,130 @@ def _read_bool_env(name, default_value=False):
     return str(raw).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
 
 
+def _ollama_generate_text(prompt, purpose='generic'):
+    if not _read_bool_env('OLLAMA_ENABLED', False):
+        raise RuntimeError('Ollama desactive (OLLAMA_ENABLED=false)')
+
+    ollama_base_url = os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434').strip() or 'http://127.0.0.1:11434'
+    default_model = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b-instruct').strip() or 'qwen2.5:7b-instruct'
+    if purpose == 'admin_assistant_rewrite':
+        ollama_model = os.getenv('ASSISTANT_OLLAMA_MODEL', default_model).strip() or default_model
+        ollama_timeout = _read_int_env('ASSISTANT_OLLAMA_TIMEOUT_SECONDS', 70, min_value=3, max_value=180)
+        max_tokens = _read_int_env('ASSISTANT_OLLAMA_MAX_TOKENS', 220, min_value=80, max_value=800)
+    else:
+        ollama_model = default_model
+        ollama_timeout = _read_int_env('OLLAMA_TIMEOUT_SECONDS', 45, min_value=5, max_value=300)
+        max_tokens = _read_int_env('OLLAMA_MAX_TOKENS', 900, min_value=120, max_value=4000)
+
+    payload = {
+        'model': ollama_model,
+        'prompt': str(prompt or ''),
+        'stream': False,
+        'options': {
+            'temperature': 0.1,
+            'num_predict': max_tokens,
+        },
+    }
+    body = json.dumps(payload).encode('utf-8')
+    req = urllib.request.Request(
+        url=f"{ollama_base_url.rstrip('/')}/api/generate",
+        data=body,
+        headers={'Content-Type': 'application/json'},
+        method='POST',
+    )
+    with urllib.request.urlopen(req, timeout=ollama_timeout) as response:
+        raw = response.read().decode('utf-8', errors='replace')
+    parsed = json.loads(raw)
+    text = _clean_text(parsed.get('response', ''))
+    if not text:
+        raise RuntimeError('Reponse Ollama vide')
+    logger.info('IA utilisee: Ollama (%s) pour %s', ollama_model, purpose)
+    return text
+
+
 def _gemini_generate_text(prompt, purpose='generic'):
-    """Centralized Gemini call with runtime guards for production stability."""
+    """Centralized AI call with Gemini first, then optional Ollama fallback."""
     if not _read_bool_env('AI_FEATURES_ENABLED', True):
         raise RuntimeError('Fonctionnalites IA desactivees (AI_FEATURES_ENABLED=false)')
-    if not _read_bool_env('GEMINI_ENABLED', True):
-        raise RuntimeError('Gemini desactive (GEMINI_ENABLED=false)')
-
-    api_key = os.getenv('GEMINI_API_KEY', '').strip()
-    model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
-    if not api_key:
-        raise RuntimeError('GEMINI_API_KEY manquante')
-
     max_prompt_chars = _read_int_env('GEMINI_MAX_PROMPT_CHARS', 120000, min_value=2000, max_value=300000)
-    if len(str(prompt or '')) > max_prompt_chars:
-        raise RuntimeError(f'Prompt IA trop volumineux ({len(str(prompt or ""))} > {max_prompt_chars})')
+    prompt_text = str(prompt or '')
+    if len(prompt_text) > max_prompt_chars:
+        raise RuntimeError(f'Prompt IA trop volumineux ({len(prompt_text)} > {max_prompt_chars})')
 
-    timeout_seconds = _read_int_env('GEMINI_TIMEOUT_SECONDS', 20, min_value=5, max_value=180)
-    max_retries = _read_int_env('GEMINI_MAX_RETRIES', 2, min_value=0, max_value=5)
-    retry_backoff_seconds = _read_float_env('GEMINI_RETRY_BACKOFF_SECONDS', 0.75, min_value=0.0, max_value=10.0)
+    gemini_error = None
+    if _read_bool_env('GEMINI_ENABLED', True):
+        api_key = os.getenv('GEMINI_API_KEY', '').strip()
+        model_name = os.getenv('GEMINI_MODEL', 'gemini-1.5-flash').strip() or 'gemini-1.5-flash'
 
-    try:
-        genai = importlib.import_module('google.generativeai')
-    except Exception as exc:
-        raise RuntimeError('Le package google-generativeai n\'est pas installe') from exc
+        if api_key:
+            if purpose == 'admin_assistant_rewrite':
+                timeout_seconds = _read_int_env('ASSISTANT_GEMINI_TIMEOUT_SECONDS', 10, min_value=4, max_value=120)
+                max_retries = _read_int_env('ASSISTANT_GEMINI_MAX_RETRIES', 0, min_value=0, max_value=3)
+                retry_backoff_seconds = _read_float_env('ASSISTANT_GEMINI_RETRY_BACKOFF_SECONDS', 0.2, min_value=0.0, max_value=5.0)
+            else:
+                timeout_seconds = _read_int_env('GEMINI_TIMEOUT_SECONDS', 20, min_value=5, max_value=180)
+                max_retries = _read_int_env('GEMINI_MAX_RETRIES', 2, min_value=0, max_value=5)
+                retry_backoff_seconds = _read_float_env('GEMINI_RETRY_BACKOFF_SECONDS', 0.75, min_value=0.0, max_value=10.0)
 
-    genai.configure(api_key=api_key)
-    model = genai.GenerativeModel(model_name)
-
-    last_error = None
-    for attempt in range(max_retries + 1):
-        try:
             try:
-                response = model.generate_content(prompt, request_options={'timeout': timeout_seconds})
-            except TypeError:
-                # Backward compatibility with SDK variants lacking request_options.
-                response = model.generate_content(prompt)
+                genai = importlib.import_module('google.generativeai')
+                genai.configure(api_key=api_key)
+                model = genai.GenerativeModel(model_name)
 
-            text = _clean_text(getattr(response, 'text', '') or '')
-            if not text:
-                raise RuntimeError('Reponse IA vide')
-            return text
-        except Exception as exc:
-            last_error = exc
-            if attempt < max_retries:
-                logger.warning(
-                    'Echec appel Gemini (%s), tentative %s/%s: %s',
-                    purpose,
-                    attempt + 1,
-                    max_retries + 1,
-                    exc,
-                )
-                wait_seconds = retry_backoff_seconds * (attempt + 1)
-                if wait_seconds > 0:
-                    time.sleep(wait_seconds)
-                continue
-            break
+                last_error = None
+                for attempt in range(max_retries + 1):
+                    try:
+                        try:
+                            response = model.generate_content(prompt_text, request_options={'timeout': timeout_seconds})
+                        except TypeError:
+                            # Backward compatibility with SDK variants lacking request_options.
+                            response = model.generate_content(prompt_text)
 
-    raise RuntimeError(f'Echec appel Gemini ({purpose})') from last_error
+                        text = _clean_text(getattr(response, 'text', '') or '')
+                        if not text:
+                            raise RuntimeError('Reponse IA vide')
+                        return text
+                    except Exception as exc:
+                        last_error = exc
+                        if attempt < max_retries:
+                            logger.warning(
+                                'Echec appel Gemini (%s), tentative %s/%s: %s',
+                                purpose,
+                                attempt + 1,
+                                max_retries + 1,
+                                exc,
+                            )
+                            wait_seconds = retry_backoff_seconds * (attempt + 1)
+                            if wait_seconds > 0:
+                                time.sleep(wait_seconds)
+                            continue
+                        break
+
+                gemini_error = RuntimeError(f'Echec appel Gemini ({purpose})')
+                if last_error:
+                    gemini_error.__cause__ = last_error
+            except Exception as exc:
+                gemini_error = exc
+        else:
+            gemini_error = RuntimeError('GEMINI_API_KEY manquante')
+    else:
+        gemini_error = RuntimeError('Gemini desactive (GEMINI_ENABLED=false)')
+
+    ollama_error = None
+    if _read_bool_env('OLLAMA_ENABLED', False):
+        try:
+            return _ollama_generate_text(prompt_text, purpose=purpose)
+        except (urllib.error.URLError, urllib.error.HTTPError, TimeoutError, json.JSONDecodeError, RuntimeError) as exc:
+            ollama_error = exc
+            logger.warning('Echec fallback Ollama (%s): %s', purpose, exc)
+
+    if gemini_error and ollama_error:
+        raise RuntimeError(f'Echec IA Gemini + Ollama ({purpose})') from ollama_error
+    if gemini_error:
+        raise RuntimeError(f'Echec appel Gemini ({purpose})') from gemini_error
+    if ollama_error:
+        raise RuntimeError(f'Echec appel Ollama ({purpose})') from ollama_error
+    raise RuntimeError(f'Aucun moteur IA disponible ({purpose})')
 
 
 def _run_gemini_mapping(df, expected_columns):
@@ -3494,6 +3563,21 @@ class AdminAssistantChatView(APIView):
     def _empty_or_null_query(self, field_name):
         return Q(**{f'{field_name}__isnull': True}) | Q(**{field_name: ''})
 
+    def _is_application_related_question(self, message):
+        msg = _clean_text(message).lower()
+        app_keywords = [
+            'theme', 'thème', 'sous-theme', 'sous-thème', 'categorie', 'catégorie',
+            'utilisateur', 'saisisseur', 'admin', 'assignation', 'affectation',
+            'import', 'tableau', 'graphe', 'metadonne', 'métadonné', 'rapport',
+            'archive', 'publie', 'publi', 'visiteur', 'configuration', 'tache', 'tâche'
+        ]
+        return any(k in msg for k in app_keywords)
+
+    def _assistant_prefers_gemini_for_question(self, message):
+        if not _read_bool_env('ASSISTANT_GENERAL_USE_GEMINI', True):
+            return False
+        return not self._is_application_related_question(message)
+
     def _build_fallback_answer(self, message, theme_id=None):
         msg = _clean_text(message).lower()
         themes_qs = Theme.objects.all()
@@ -3597,6 +3681,12 @@ class AdminAssistantChatView(APIView):
                 f"- Sous-thèmes sans métadonnées: {missing_meta_count}"
             )
 
+        if not self._is_application_related_question(message):
+            return (
+                "Le mode secours est orienté application HCP, mais je peux quand même vous aider sur des questions générales. "
+                "Reformulez votre question en une phrase courte pour obtenir une réponse plus directe."
+            )
+
         return (
             "Je suis votre assistant admin. Voici quelques questions utiles que vous pouvez poser :\n"
             "\n"
@@ -3629,15 +3719,234 @@ class AdminAssistantChatView(APIView):
             "- Accéder à la configuration d’un sous-thème."
         )
 
-    def _try_ai_rewrite(self, user_message, fallback_text):
-        prompt = (
-            "Tu es un assistant admin d'une plateforme statistique. "
-            "Réécris la réponse de secours de manière claire et concise en français. "
-            "N'invente aucun chiffre.\n\n"
-            f"Question utilisateur: {user_message}\n"
-            f"Réponse de secours: {fallback_text}\n\n"
-            "Retourne uniquement la réponse finale."
+    def _build_context_answer(self, message, theme_id=None):
+        """High-precision answers from live DB for common admin questions."""
+        msg = _clean_text(message).lower()
+        msg_norm = re.sub(r'\s+', ' ', msg)
+        themes_qs = Theme.objects.all().order_by('titre')
+        subthemes_qs = SousTheme.objects.all().order_by('nom')
+        categories_qs = Categorie.objects.all().order_by('nom')
+        users_qs = CustomUser.objects.all().order_by('username')
+        if theme_id:
+            themes_qs = themes_qs.filter(id=theme_id)
+            subthemes_qs = subthemes_qs.filter(theme_id=theme_id)
+            categories_qs = categories_qs.filter(theme_id=theme_id)
+
+        ask_theme_names = any(k in msg for k in [
+            'nom des themes', 'noms des themes', 'liste des themes', 'themes qui existe', 'themes existants',
+            'nom des thèmes', 'noms des thèmes', 'liste des thèmes', 'thèmes qui existent', 'thèmes existants'
+        ])
+        ask_subtheme_names = any(k in msg for k in [
+            'nom des sous themes', 'noms des sous themes', 'liste des sous themes',
+            'nom des sous-thèmes', 'noms des sous-thèmes', 'liste des sous-thèmes'
+        ])
+        ask_category_names = any(k in msg for k in [
+            'nom des categories', 'noms des categories', 'liste des categories',
+            'nom des catégories', 'noms des catégories', 'liste des catégories'
+        ])
+        ask_user_counts = any(k in msg for k in [
+            'combien d\'utilisateurs', 'nombre d\'utilisateurs', 'combien de saisisseurs', 'nombre de saisisseurs'
+        ]) or bool(re.search(r'\b(combien|nombre)\b.*\butilisateur(s)?\b', msg_norm))
+        ask_user_list = any(k in msg for k in [
+            'liste des utilisateurs', 'noms des utilisateurs', 'qui sont les utilisateurs',
+            'liste des saisisseurs', 'liste des admins', 'liste des administrateurs',
+            'liste des utilisateur', 'donner moi la liste des utilisateur', 'donne moi la liste des utilisateur'
+        ]) or bool(re.search(r'\bliste\b.*\butilisateur(s)?\b', msg_norm)) or bool(re.search(r'\bnom(s)?\b.*\butilisateur(s)?\b', msg_norm))
+        ask_subthemes_for_theme = any(k in msg for k in [
+            'sous-themes du theme', 'sous themes du theme', 'sous-thèmes du thème', 'sous thèmes du thème',
+            'sous-themes de theme', 'sous thèmes de thème'
+        ])
+
+        if ask_theme_names:
+            names = list(themes_qs.values_list('titre', flat=True))
+            if not names:
+                return "Aucun thème n'est enregistré actuellement."
+            return "Voici les thèmes enregistrés :\n- " + "\n- ".join(names)
+
+        if ask_subtheme_names:
+            names = list(subthemes_qs.values_list('nom', flat=True)[:120])
+            if not names:
+                return "Aucun sous-thème n'est enregistré actuellement."
+            return "Voici les sous-thèmes enregistrés :\n- " + "\n- ".join(names)
+
+        if ask_subthemes_for_theme:
+            hint = None
+            patterns = [
+                r"sous[- ]?th[eè]mes? (?:du|de la|de l'|de) th[eè]me\s+([^\n\?\.;]+)",
+                r"th[eè]me\s+([^\n\?\.;]+)",
+            ]
+            for pattern in patterns:
+                match = re.search(pattern, msg)
+                if match and _clean_text(match.group(1)):
+                    hint = _clean_text(match.group(1))
+                    break
+
+            if hint:
+                theme = Theme.objects.filter(titre__icontains=hint).order_by('titre').first()
+                if theme:
+                    names = list(SousTheme.objects.filter(theme=theme).order_by('nom').values_list('nom', flat=True)[:150])
+                    if not names:
+                        return f"Le thème '{theme.titre}' n'a pas encore de sous-thème."
+                    return f"Sous-thèmes du thème '{theme.titre}' :\n- " + "\n- ".join(names)
+                return f"Aucun thème correspondant à '{hint}' n'a été trouvé."
+
+        if ask_user_counts:
+            total_users = CustomUser.objects.filter(is_active=True).count()
+            total_saisisseurs = CustomUser.objects.filter(role='SAISISSEUR', is_active=True).count()
+            total_admins = CustomUser.objects.filter(role='ADMIN', is_active=True).count()
+            return (
+                "Statistiques utilisateurs actuelles :\n"
+                f"- Utilisateurs actifs: {total_users}\n"
+                f"- Admins actifs: {total_admins}\n"
+                f"- Saisisseurs actifs: {total_saisisseurs}"
+            )
+
+        if ask_category_names:
+            entries = list(categories_qs.select_related('theme').values_list('nom', 'theme__titre')[:200])
+            if not entries:
+                return "Aucune catégorie n'est enregistrée actuellement."
+            grouped = defaultdict(list)
+            for category_name, theme_title in entries:
+                grouped[theme_title or 'Sans thème'].append(category_name)
+            lines = ["Voici les catégories par thème :"]
+            for theme_title in sorted(grouped.keys()):
+                lines.append(f"- {theme_title}: {', '.join(grouped[theme_title])}")
+            return "\n".join(lines)
+
+        if ask_user_list:
+            rows = list(users_qs.values('username', 'first_name', 'email', 'role', 'is_active')[:200])
+            if not rows:
+                return "Aucun utilisateur n'est enregistré actuellement."
+            lines = ["Voici les utilisateurs enregistrés :"]
+            for user in rows:
+                display_name = _clean_text(user.get('first_name')) or _clean_text(user.get('username')) or 'Utilisateur'
+                status_label = 'actif' if user.get('is_active') else 'archive'
+                lines.append(f"- {display_name} ({user.get('role')}, {status_label}) - {user.get('email')}")
+            return "\n".join(lines)
+
+        return None
+
+    def _iter_text_chunks(self, text):
+        value = str(text or '')
+        if not value:
+            return
+        granularity = os.getenv('ASSISTANT_STREAM_GRANULARITY', 'word').strip().lower()
+        if granularity == 'char':
+            for ch in value:
+                yield ch
+            return
+        # Default: word-by-word chunks while preserving spaces/new lines.
+        for part in re.findall(r'\S+\s*|\s+', value):
+            if part:
+                yield part
+
+    def _build_ai_prompt(self, user_message, fallback_text, is_app_related=True):
+        total_users = CustomUser.objects.filter(is_active=True).count()
+        total_saisisseurs = CustomUser.objects.filter(role='SAISISSEUR', is_active=True).count()
+        total_themes = Theme.objects.count()
+        total_subthemes = SousTheme.objects.count()
+        pending_assignments = UserThemeAssignment.objects.filter(statut='En attente').count()
+        in_progress_assignments = UserThemeAssignment.objects.filter(statut='En cours').count()
+        completed_assignments = UserThemeAssignment.objects.filter(statut='Complété').count()
+        theme_names = list(Theme.objects.order_by('titre').values_list('titre', flat=True)[:10])
+        subtheme_names = list(SousTheme.objects.order_by('nom').values_list('nom', flat=True)[:10])
+
+        if not is_app_related:
+            return (
+                "Tu es un assistant utile et concis. "
+                "Reponds en francais clair en 4 a 8 lignes maximum, sans blabla. "
+                "Si la demande est generale, donne une reponse directe et structuree.\n\n"
+                f"Question utilisateur: {user_message}\n"
+                "Retourne uniquement la reponse finale, sans JSON, sans markdown."
+            )
+
+        context_snapshot = (
+            f"Contexte actuel de l'application:\n"
+            f"- Utilisateurs actifs: {total_users}\n"
+            f"- Saisisseurs actifs: {total_saisisseurs}\n"
+            f"- Themes: {total_themes}\n"
+            f"- Sous-themes: {total_subthemes}\n"
+            f"- Taches en attente: {pending_assignments}\n"
+            f"- Taches en cours: {in_progress_assignments}\n"
+            f"- Taches completees: {completed_assignments}\n"
+            f"- Themes connus (echantillon): {', '.join(theme_names) if theme_names else 'Aucun'}\n"
+            f"- Sous-themes connus (echantillon): {', '.join(subtheme_names) if subtheme_names else 'Aucun'}\n"
         )
+
+        return (
+            "Tu es l'assistant intelligent Admin de la plateforme HCP. "
+            "Tu reponds a la fois aux questions sur l'application HCP ET aux questions generales. "
+            "Si la question est liee a HCP, privilegie une reponse actionnable (bouton/menu/action). "
+            "Si la question est generale, reponds clairement et naturellement sans forcer le contexte HCP. "
+            "N'invente aucun chiffre pour les parties HCP: utilise uniquement le contexte fourni.\n\n"
+            f"{context_snapshot}\n"
+            f"Question utilisateur: {user_message}\n"
+            f"Réponse de secours (si utile): {_clean_text(fallback_text)[:280]}\n\n"
+            "Format attendu: phrases courtes, listes numerotees quand pertinent, retours a la ligne lisibles. "
+            "Si la question porte sur les noms exacts des themes/sous-themes/utilisateurs, utilise strictement les noms du contexte sans en inventer. "
+            "Retourne uniquement la reponse finale, sans JSON, sans markdown."
+        )
+
+    def _stream_ollama_reply(self, prompt):
+        default_model = os.getenv('OLLAMA_MODEL', 'qwen2.5:7b-instruct').strip() or 'qwen2.5:7b-instruct'
+        ollama_model = os.getenv('ASSISTANT_OLLAMA_MODEL', default_model).strip() or default_model
+        ollama_timeout = _read_int_env('ASSISTANT_OLLAMA_TIMEOUT_SECONDS', 14, min_value=3, max_value=120)
+        max_tokens = _read_int_env('ASSISTANT_OLLAMA_MAX_TOKENS', 220, min_value=80, max_value=1200)
+        ollama_base_url = os.getenv('OLLAMA_BASE_URL', 'http://127.0.0.1:11434').strip() or 'http://127.0.0.1:11434'
+
+        payload = {
+            'model': ollama_model,
+            'prompt': str(prompt or ''),
+            'stream': True,
+            'options': {
+                'temperature': 0.1,
+                'num_predict': max_tokens,
+            },
+        }
+        body = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url=f"{ollama_base_url.rstrip('/')}/api/generate",
+            data=body,
+            headers={'Content-Type': 'application/json'},
+            method='POST',
+        )
+
+        with urllib.request.urlopen(req, timeout=ollama_timeout) as response:
+            for raw_line in response:
+                line = raw_line.decode('utf-8', errors='replace').strip()
+                if not line:
+                    continue
+                chunk = json.loads(line)
+                text_piece = str(chunk.get('response', ''))
+                if text_piece != '':
+                    yield text_piece
+                if chunk.get('done'):
+                    break
+
+    def _try_ai_rewrite(self, user_message, fallback_text):
+        is_app_related = self._is_application_related_question(user_message)
+        prompt = self._build_ai_prompt(user_message, fallback_text, is_app_related=is_app_related)
+        prefer_gemini = self._assistant_prefers_gemini_for_question(user_message)
+        allow_gemini_fallback = _read_bool_env('ASSISTANT_ALLOW_GEMINI_FALLBACK', False)
+        use_ollama = _read_bool_env('ASSISTANT_PREFER_OLLAMA', True) and _read_bool_env('OLLAMA_ENABLED', False)
+
+        if prefer_gemini:
+            try:
+                return _gemini_generate_text(prompt, purpose='admin_assistant_rewrite')
+            except Exception as gemini_error:
+                logger.warning('Assistant admin: echec Gemini (general): %s', gemini_error)
+                if use_ollama:
+                    return _ollama_generate_text(prompt, purpose='admin_assistant_rewrite')
+                raise
+
+        if use_ollama:
+            try:
+                return _ollama_generate_text(prompt, purpose='admin_assistant_rewrite')
+            except Exception as ollama_error:
+                logger.warning('Assistant admin: echec Ollama: %s', ollama_error)
+                if not allow_gemini_fallback:
+                    raise
+
         return _gemini_generate_text(prompt, purpose='admin_assistant_rewrite')
 
     def post(self, request):
@@ -3653,7 +3962,30 @@ class AdminAssistantChatView(APIView):
             theme_id = None
 
         use_ai = _is_truthy(request.data.get('use_ai', False))
+        stream = _is_truthy(request.data.get('stream', False))
         fallback_answer = self._build_fallback_answer(message, theme_id=theme_id)
+        context_answer = self._build_context_answer(message, theme_id=theme_id)
+
+        if context_answer:
+            if stream:
+                def _ctx_stream():
+                    for chunk in self._iter_text_chunks(context_answer):
+                        yield (json.dumps({'type': 'delta', 'text': chunk, 'mode': 'ai'}, ensure_ascii=False) + '\n').encode('utf-8')
+                    yield (json.dumps({'type': 'done', 'mode': 'ai', 'provider': 'context'}, ensure_ascii=False) + '\n').encode('utf-8')
+
+                response = StreamingHttpResponse(_ctx_stream(), content_type='application/x-ndjson; charset=utf-8')
+                response['Cache-Control'] = 'no-cache'
+                response['X-Accel-Buffering'] = 'no'
+                return response
+
+            return Response(
+                {
+                    'reply': context_answer,
+                    'mode': 'ai',
+                    'provider': 'context',
+                },
+                status=status.HTTP_200_OK,
+            )
 
         if not use_ai:
             return Response(
@@ -3663,6 +3995,58 @@ class AdminAssistantChatView(APIView):
                 },
                 status=status.HTTP_200_OK,
             )
+
+        if stream:
+            def _encode_event(payload):
+                return (json.dumps(payload, ensure_ascii=False) + '\n').encode('utf-8')
+
+            def _event_stream():
+                is_app_related = self._is_application_related_question(message)
+                prompt = self._build_ai_prompt(message, fallback_answer, is_app_related=is_app_related)
+                sent_any = False
+                allow_gemini_fallback = _read_bool_env('ASSISTANT_ALLOW_GEMINI_FALLBACK', False)
+                use_ollama = _read_bool_env('ASSISTANT_PREFER_OLLAMA', True) and _read_bool_env('OLLAMA_ENABLED', False)
+                prefer_gemini = self._assistant_prefers_gemini_for_question(message)
+
+                providers = []
+                if prefer_gemini:
+                    providers = ['gemini'] + (['ollama'] if use_ollama else [])
+                else:
+                    providers = (['ollama'] if use_ollama else []) + (['gemini'] if allow_gemini_fallback or not use_ollama else [])
+
+                for provider in providers:
+                    if provider == 'ollama':
+                        try:
+                            for piece in self._stream_ollama_reply(prompt):
+                                sent_any = True
+                                for chunk in self._iter_text_chunks(piece):
+                                    yield _encode_event({'type': 'delta', 'text': chunk, 'mode': 'ai'})
+                            yield _encode_event({'type': 'done', 'mode': 'ai', 'provider': 'ollama'})
+                            return
+                        except Exception as ollama_error:
+                            logger.warning('Assistant admin streaming: echec Ollama: %s', ollama_error)
+                            continue
+
+                    if provider == 'gemini':
+                        try:
+                            ai_reply = _gemini_generate_text(prompt, purpose='admin_assistant_rewrite')
+                            for chunk in self._iter_text_chunks(ai_reply):
+                                yield _encode_event({'type': 'delta', 'text': chunk, 'mode': 'ai'})
+                            yield _encode_event({'type': 'done', 'mode': 'ai', 'provider': 'gemini'})
+                            return
+                        except Exception as gemini_error:
+                            logger.warning('Assistant admin streaming: echec Gemini: %s', gemini_error)
+                            continue
+
+                reply = fallback_answer if not sent_any else ''
+                if reply:
+                    yield _encode_event({'type': 'delta', 'text': reply, 'mode': 'fallback'})
+                yield _encode_event({'type': 'done', 'mode': 'fallback', 'provider': 'fallback'})
+
+            response = StreamingHttpResponse(_event_stream(), content_type='application/x-ndjson; charset=utf-8')
+            response['Cache-Control'] = 'no-cache'
+            response['X-Accel-Buffering'] = 'no'
+            return response
 
         try:
             ai_reply = self._try_ai_rewrite(message, fallback_answer)
