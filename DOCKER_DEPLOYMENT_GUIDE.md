@@ -9,6 +9,21 @@ Ce guide permet de lancer toute l'application avec Docker pour une evaluation ra
 
 ## 2. Lancer l'application
 
+### Option recommandee (encadrant, 1 commande)
+
+Depuis la racine du projet:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\eval_start.ps1
+```
+
+Ce script:
+- build + demarre Docker Compose
+- cree/actualise les comptes de demonstration
+- affiche les URLs et identifiants de test
+
+### Option manuelle
+
 Depuis la racine du projet:
 
 ```bash
@@ -31,6 +46,15 @@ Tu dois voir:
 - Frontend: `http://localhost:8080`
 - Health API: `http://localhost:8080/health/`
 
+Comptes de demonstration (si `eval_start.ps1` utilise):
+- ADMIN: `admin@demo.local` / `Admin123!Demo`
+- SAISISSEUR: `saisisseur@demo.local` / `Saisi123!Demo`
+
+Pages:
+- Visiteur: `http://localhost:8080/`
+- Admin: `http://localhost:8080/admin/login`
+- Saisisseur: `http://localhost:8080/saisisseur/login`
+
 ## 5. Voir les logs (debug)
 
 ```bash
@@ -38,7 +62,21 @@ docker compose logs -f backend
 docker compose logs -f frontend
 ```
 
+Verification fonctionnelle rapide:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\eval_verify.ps1
+```
+
 ## 6. Arreter
+
+Option recommandee:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\eval_stop.ps1
+```
+
+Option manuelle:
 
 ```bash
 docker compose down
