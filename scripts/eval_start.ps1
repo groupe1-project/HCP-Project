@@ -15,6 +15,23 @@ docker info *> $null
 Write-Host "[3/5] Build + demarrage stack..." -ForegroundColor Cyan
 docker compose up --build -d
 
+Write-Host "[3.5/5] Attente backend pret..." -ForegroundColor Cyan
+$maxAttempts = 30
+$ready = $false
+for ($i = 1; $i -le $maxAttempts; $i++) {
+    try {
+        docker compose exec -T backend python manage.py check *> $null
+        $ready = $true
+        break
+    } catch {
+        Start-Sleep -Seconds 2
+    }
+}
+
+if (-not $ready) {
+    throw "Le backend n'est pas pret apres attente. Verifiez: docker compose logs -f backend"
+}
+
 Write-Host "[4/5] Provision comptes de demonstration..." -ForegroundColor Cyan
 $seedCode = @"
 from core.models import CustomUser
