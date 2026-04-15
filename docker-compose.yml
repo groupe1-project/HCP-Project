@@ -1,0 +1,56 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hcp_db
+    environment:
+      POSTGRES_DB: hcp_db
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d hcp_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 8
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: hcp_backend
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      DJANGO_DEBUG: "true"
+      DJANGO_SECRET_KEY: "docker-dev-secret-key-change-me"
+      DJANGO_ALLOWED_HOSTS: "localhost,127.0.0.1,backend"
+      POSTGRES_DB: "hcp_db"
+      POSTGRES_USER: "postgres"
+      POSTGRES_PASSWORD: "postgres"
+      POSTGRES_HOST: "db"
+      POSTGRES_PORT: "5432"
+      DJANGO_CORS_ALLOWED_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+      DJANGO_CSRF_TRUSTED_ORIGINS: "http://localhost:8080,http://127.0.0.1:8080"
+      DJANGO_AUTH_TOKEN_COOKIE_SECURE: "false"
+      DJANGO_SESSION_COOKIE_SAMESITE: "Lax"
+      DJANGO_CSRF_COOKIE_SAMESITE: "Lax"
+      DJANGO_CORS_ALLOW_CREDENTIALS: "true"
+      DJANGO_CSP_ENABLED: "false"
+      DJANGO_EMAIL_BACKEND: "django.core.mail.backends.console.EmailBackend"
+    expose:
+      - "8000"
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: hcp_frontend
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  pg_data:

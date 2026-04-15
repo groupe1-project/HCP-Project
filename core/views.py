@@ -9,6 +9,7 @@ import importlib
 import unicodedata
 import urllib.error
 import urllib.request
+from contextvars import ContextVar
 import pandas as pd
 import string
 import secrets
@@ -34,6 +35,8 @@ from .serializers import (
 )
 
 logger = logging.getLogger(__name__)
+AI_PROVIDER_LAST = ContextVar('AI_PROVIDER_LAST', default='none')
+AI_PROVIDER_ATTEMPTED = ContextVar('AI_PROVIDER_ATTEMPTED', default=False)
 
 ARABIC_CHAR_RE = re.compile(r'[\u0600-\u06FF]')
 
@@ -237,7 +240,106 @@ def _read_bool_env(name, default_value=False):
     return str(raw).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
 
 
+def _mark_ai_provider(provider):
+    AI_PROVIDER_ATTEMPTED.set(True)
+    AI_PROVIDER_LAST.set(str(provider or 'none').strip().lower() or 'none')
+
+
+def _reset_ai_provider_marker():
+    AI_PROVIDER_ATTEMPTED.set(False)
+    AI_PROVIDER_LAST.set('none')
+
+
+def _build_ai_provider_warning(use_ai=False):
+    if not use_ai:
+        return 'Moteur IA: non sollicite (pipeline local).'
+
+    provider = AI_PROVIDER_LAST.get()
+    attempted = bool(AI_PROVIDER_ATTEMPTED.get())
+    if provider == 'gemini':
+        return 'Moteur IA: reponse Gemini utilisee.'
+    if provider == 'ollama':
+        return 'Moteur IA: reponse Ollama utilisee.'
+    if not attempted:
+        return 'Moteur IA: non sollicite pour ce flux (pipeline local optimise).'
+    return 'Moteur IA: aucune reponse LLM exploitable (pipeline local applique).'
+
+
+def _append_ai_provider_warning(warnings, use_ai=False):
+    msg = _build_ai_provider_warning(use_ai=use_ai)
+    if isinstance(warnings, list) and msg not in warnings:
+        warnings.append(msg)
+    return warnings
+
+
+def _is_effectively_empty_cell(value):
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        pass
+    text = str(value or '').strip()
+    if not text:
+        return True
+    return text.lower() in {'nan', 'none', 'null', 'n/a', 'na', '-', '--'}
+
+
+def _build_import_ai_confidence(source_df, mapped_rows, expected_columns, mapping_mode='ai'):
+    source_count = int(len(source_df.index)) if source_df is not None else 0
+    mapped_rows = list(mapped_rows or [])
+    mapped_count = len(mapped_rows)
+    columns = [str(c) for c in (expected_columns or [])]
+
+    row_alignment = 1.0 if source_count <= 0 else min(1.0, mapped_count / float(max(1, source_count)))
+
+    total_cells = max(1, mapped_count * max(1, len(columns)))
+    empty_cells = 0
+    non_empty_columns = 0
+    for col in columns:
+        col_has_data = False
+        for row in mapped_rows:
+            value = row.get(col, '') if isinstance(row, dict) else ''
+            if _is_effectively_empty_cell(value):
+                empty_cells += 1
+            else:
+                col_has_data = True
+        if col_has_data:
+            non_empty_columns += 1
+
+    non_empty_ratio = 1.0 - (empty_cells / float(total_cells))
+    column_coverage = 1.0 if not columns else (non_empty_columns / float(len(columns)))
+
+    score = (0.45 * row_alignment) + (0.35 * non_empty_ratio) + (0.20 * column_coverage)
+    if mapping_mode in ('direct', 'schema_free'):
+        score = min(1.0, score + 0.04)
+    score = max(0.0, min(1.0, score))
+
+    return {
+        'score': round(score, 4),
+        'mapping_mode': mapping_mode,
+        'row_alignment': round(row_alignment, 4),
+        'non_empty_ratio': round(non_empty_ratio, 4),
+        'column_coverage': round(column_coverage, 4),
+        'source_rows': source_count,
+        'mapped_rows': mapped_count,
+        'target_columns': len(columns),
+    }
+
+
+def _evaluate_import_ai_gate(confidence_report):
+    threshold = _read_float_env('IMPORT_AI_CONFIDENCE_THRESHOLD', 0.62, min_value=0.0, max_value=1.0)
+    block_on_low = _read_bool_env('IMPORT_AI_BLOCK_ON_LOW_CONFIDENCE', True)
+    score = float((confidence_report or {}).get('score', 1.0))
+    low_confidence = score < threshold
+    return {
+        'threshold': round(threshold, 4),
+        'block_on_low_confidence': bool(block_on_low),
+        'low_confidence': bool(low_confidence),
+    }
+
+
 def _ollama_generate_text(prompt, purpose='generic'):
+    AI_PROVIDER_ATTEMPTED.set(True)
     if not _read_bool_env('OLLAMA_ENABLED', False):
         raise RuntimeError('Ollama desactive (OLLAMA_ENABLED=false)')
 
@@ -274,12 +376,14 @@ def _ollama_generate_text(prompt, purpose='generic'):
     text = _clean_text(parsed.get('response', ''))
     if not text:
         raise RuntimeError('Reponse Ollama vide')
+    _mark_ai_provider('ollama')
     logger.info('IA utilisee: Ollama (%s) pour %s', ollama_model, purpose)
     return text
 
 
 def _gemini_generate_text(prompt, purpose='generic'):
     """Centralized AI call with Gemini first, then optional Ollama fallback."""
+    AI_PROVIDER_ATTEMPTED.set(True)
     if not _read_bool_env('AI_FEATURES_ENABLED', True):
         raise RuntimeError('Fonctionnalites IA desactivees (AI_FEATURES_ENABLED=false)')
     max_prompt_chars = _read_int_env('GEMINI_MAX_PROMPT_CHARS', 120000, min_value=2000, max_value=300000)
@@ -319,6 +423,7 @@ def _gemini_generate_text(prompt, purpose='generic'):
                         text = _clean_text(getattr(response, 'text', '') or '')
                         if not text:
                             raise RuntimeError('Reponse IA vide')
+                        _mark_ai_provider('gemini')
                         return text
                     except Exception as exc:
                         last_error = exc
@@ -363,8 +468,51 @@ def _gemini_generate_text(prompt, purpose='generic'):
     raise RuntimeError(f'Aucun moteur IA disponible ({purpose})')
 
 
+def _build_mapping_heuristic_hints(df):
+    """Build lightweight semantic hints from source dataframe for AI mapping prompts."""
+    province_tokens = {
+        'azilal', 'beni mellal', 'beni_mellal', 'khenifra', 'khouribga', 'fquih ben salah', 'fquih_ben_salah',
+        'azilal', 'khouribga', 'khenifra'
+    }
+    hints = []
+    for col in [str(c) for c in df.columns]:
+        values = [_cell_to_text(v) for v in df[col].tolist() if _cell_to_text(v)]
+        sample = values[:80]
+        if not sample:
+            continue
+
+        numeric_count = sum(1 for v in sample if _parse_number(v) is not None)
+        numeric_ratio = numeric_count / float(max(1, len(sample)))
+        year_like = sum(1 for v in sample if re.fullmatch(r'(19|20)\d{2}', str(v).strip()))
+        year_ratio = year_like / float(max(1, len(sample)))
+
+        lowered = [str(v).strip().lower().replace('-', ' ').replace('_', ' ') for v in sample]
+        province_hits = sum(1 for v in lowered if v in province_tokens)
+        province_ratio = province_hits / float(max(1, len(lowered)))
+
+        semantic = None
+        if year_ratio >= 0.7:
+            semantic = 'year'
+        elif numeric_ratio >= 0.8:
+            semantic = 'value'
+        elif province_ratio >= 0.2:
+            semantic = 'province'
+
+        if semantic:
+            hints.append({
+                'column': col,
+                'semantic_hint': semantic,
+                'year_ratio': round(year_ratio, 3),
+                'numeric_ratio': round(numeric_ratio, 3),
+                'province_ratio': round(province_ratio, 3),
+                'sample_values': sample[:8],
+            })
+
+    return hints
+
+
 def _run_gemini_mapping(df, expected_columns):
-    """Ask Gemini to map heterogeneous table columns to expected schema."""
+    """Ask the configured LLM stack to map heterogeneous columns to expected schema."""
     # Optional HF login compatibility for workflows that depend on HF auth.
     hf_token = os.getenv('HF_TOKEN', '').strip()
     if hf_token:
@@ -376,18 +524,21 @@ def _run_gemini_mapping(df, expected_columns):
             pass
 
     sample_records = df.head(40).to_dict(orient='records')
+    semantic_hints = _build_mapping_heuristic_hints(df)
     prompt = (
         'Tu es un assistant de normalisation de tableaux statistiques. '\
         'Transforme les lignes source vers le schema cible. '\
         'Reponds STRICTEMENT en JSON valide, sans texte additionnel.\n\n'
         f'Colonnes cibles (ordre obligatoire): {expected_columns}\n'
         f'Colonnes source: {[str(c) for c in df.columns]}\n'
+        f'Indices heuristiques (prioritaires): {json.dumps(semantic_hints, ensure_ascii=False)}\n'
         f'Lignes source echantillon: {json.dumps(sample_records, ensure_ascii=False)}\n\n'
         'Format de sortie attendu:\n'
         '{"rows": [ {"COL1": "...", "COL2": "..."} ] }\n'
         'Regles:\n'
         '- Chaque objet de rows contient toutes les colonnes cibles.\n'
         '- Si une valeur est absente, mettre chaine vide.\n'
+        '- Respecter les indices heuristiques, surtout year/value/province quand ils sont presents.\n'
         '- Conserver le sens statistique le plus probable.\n'
         '- Ne pas inventer de colonnes hors schema cible.'
     )
@@ -655,10 +806,14 @@ def _parse_number(value):
 
 
 def _extract_year_from_df(df):
-    year_pattern = re.compile(r'(19|20)\d{2}')
+    period_pattern = re.compile(r'((?:19|20)\d{2})\s*[-/]\s*((?:19|20)\d{2})')
+    year_pattern = re.compile(r'(?:19|20)\d{2}')
     for _, row in df.head(8).iterrows():
         for val in row.tolist():
             txt = _cell_to_text(val)
+            period_match = period_pattern.search(txt)
+            if period_match:
+                return f"{period_match.group(1)}-{period_match.group(2)}"
             match = year_pattern.search(txt)
             if match:
                 return match.group(0)
@@ -674,6 +829,8 @@ def _normalize_cross_table_to_flat(df_raw):
     # pandas >= 3 removed DataFrame.applymap; map per-column for compatibility.
     work = work.apply(lambda col: col.map(_cell_to_text))
     year_value = _extract_year_from_df(work)
+    is_period_value = bool(re.fullmatch(r'(19|20)\d{2}-(19|20)\d{2}', str(year_value or '').strip()))
+    time_col_name = 'Periode' if is_period_value else 'Annee'
 
     # Find candidate metric columns: columns where many numeric values exist.
     numeric_ratio_by_col = {}
@@ -693,14 +850,67 @@ def _normalize_cross_table_to_flat(df_raw):
     if len(id_cols) == 0:
         return None
 
+    def _is_year_period_label(label):
+        token = _cell_to_text(label)
+        if not token:
+            return False
+        token = re.sub(r'\s+', '', token)
+        # Excel can provide numeric headers as float strings (e.g. "2016.0").
+        token = re.sub(r'\.(0+)$', '', token)
+        # Accept common year-period headers such as 2016, 2016-2017, 2016/2017.
+        return bool(re.fullmatch(r'(19|20)\d{2}([\-/](19|20)\d{2})?', token))
+
+    def _normalize_year_period_label(label):
+        token = _cell_to_text(label)
+        if not token:
+            return ''
+        token = re.sub(r'\s+', '', token)
+        token = re.sub(r'\.(0+)$', '', token)
+        # Normalize separators for consistency (2016/2017 -> 2016-2017).
+        token = token.replace('/', '-')
+        return token if _is_year_period_label(token) else _cell_to_text(label)
+
+    def _is_header_like_id_token(value):
+        norm = _normalize_name(value)
+        return norm in {
+            'milieu', 'niveau', 'niveau_etude', 'annee', 'année', 'year', 'periode', 'période',
+            'period', 'valeur', 'value', 'sexe', 'sex', 'province', 'region', 'région', 'dimension'
+        }
+
     # Detect first data row: enough numeric values across metric columns.
     row_start = None
     for ridx in range(len(work)):
-        nums = [_parse_number(work.iat[ridx, c]) for c in metric_cols]
+        metric_texts = [_cell_to_text(work.iat[ridx, c]) for c in metric_cols]
+        nums = [_parse_number(v) for v in metric_texts]
         numeric_count = sum(1 for n in nums if n is not None)
-        if numeric_count >= max(2, int(len(metric_cols) * 0.5)):
-            row_start = ridx
-            break
+        if numeric_count < max(2, int(len(metric_cols) * 0.5)):
+            continue
+
+        # Skip header rows where metric cells are years (e.g. 2016, 2017, 2018, 2019).
+        year_like_metric_count = sum(1 for txt in metric_texts if _is_year_period_label(txt))
+        if year_like_metric_count >= max(2, int(len(metric_cols) * 0.6)):
+            continue
+
+        id_values = [_cell_to_text(work.iat[ridx, c]) for c in id_cols]
+        id_non_empty = [v for v in id_values if v]
+        if not id_non_empty:
+            continue
+
+        # Skip structural/header rows like "Milieu" that are not actual modalities.
+        if all(_is_header_like_id_token(v) for v in id_non_empty):
+            continue
+
+        row_start = ridx
+        break
+
+    # Conservative fallback for uncommon structures.
+    if row_start is None:
+        for ridx in range(len(work)):
+            nums = [_parse_number(work.iat[ridx, c]) for c in metric_cols]
+            numeric_count = sum(1 for n in nums if n is not None)
+            if numeric_count >= max(2, int(len(metric_cols) * 0.5)):
+                row_start = ridx
+                break
     if row_start is None:
         return None
 
@@ -715,23 +925,65 @@ def _normalize_cross_table_to_flat(df_raw):
             label = f'Mesure_{c}'
         metric_names[c] = label
 
+    metric_labels = [metric_names.get(c, '') for c in metric_cols]
+    year_period_metric_count = sum(1 for lbl in metric_labels if _is_year_period_label(lbl))
+
     # Detect top-level metric dimension label (e.g. "Milieu" over Total/Rural/Urbain).
     metric_dimension_name = 'Niveau_Etude'
-    for ridx in [header_row - 1, header_row - 2, header_row - 3]:
-        if ridx < 0:
-            continue
-        vals = [_cell_to_text(work.iat[ridx, c]) for c in metric_cols]
-        non_empty = [v for v in vals if v]
-        if len(non_empty) == 1:
-            candidate = non_empty[0]
-            c_norm = _normalize_name(candidate)
-            is_year_like = bool(re.search(r'(19|20)\d{2}', candidate))
-            if c_norm not in ('total', 'totale', 'année', 'annee') and not is_year_like:
-                metric_dimension_name = candidate.strip().replace(' ', '_')
-                break
+    metrics_are_period_axis = bool(metric_cols) and year_period_metric_count >= max(1, int(len(metric_cols) * 0.7))
+    if metrics_are_period_axis:
+        # Period headers should map directly to Annee, not to a synthetic metric dimension.
+        metric_dimension_name = time_col_name
+        year_value = ''
+    else:
+        for ridx in [header_row - 1, header_row - 2, header_row - 3]:
+            if ridx < 0:
+                continue
+            vals = [_cell_to_text(work.iat[ridx, c]) for c in metric_cols]
+            non_empty = [v for v in vals if v]
+            if len(non_empty) == 1:
+                candidate = non_empty[0]
+                c_norm = _normalize_name(candidate)
+                is_year_like = bool(re.search(r'(19|20)\d{2}', candidate))
+                if c_norm not in ('total', 'totale', 'année', 'annee') and not is_year_like:
+                    metric_dimension_name = candidate.strip().replace(' ', '_')
+                    break
 
     # Heuristic names for id columns
-    id_name_1 = 'Province'
+    # First ID column: prefer explicit header label (e.g. "Groupes d'ages").
+    id_name_1 = 'Dimension'
+    first_id_col = id_cols[0]
+    first_id_header = ''
+    for ridx in [header_row, header_row - 1, header_row - 2, header_row - 3]:
+        if ridx < 0:
+            continue
+        candidate = _cell_to_text(work.iat[ridx, first_id_col])
+        if candidate:
+            first_id_header = candidate
+            break
+
+    header_used_for_id1 = False
+    if first_id_header:
+        header_semantic = _semantic_key_from_label(first_id_header)
+        year_like_header = bool(re.search(r'(19|20)\d{2}', first_id_header)) or header_semantic == 'year'
+        if not year_like_header:
+            if header_semantic:
+                id_name_1 = _semantic_label_for_key(header_semantic, 'fr')
+            else:
+                id_name_1 = re.sub(r'\s+', '_', first_id_header.strip())
+            header_used_for_id1 = True
+
+    if not header_used_for_id1:
+        first_col_values = [
+            _cell_to_text(v).strip()
+            for v in work.iloc[row_start:, first_id_col].tolist()
+            if _cell_to_text(v).strip()
+        ]
+        inferred_key, inferred_score = _infer_dimension_key_from_modalities(first_col_values)
+        if inferred_key and inferred_score >= 2:
+            id_name_1 = _semantic_label_for_key(inferred_key, 'fr')
+
+    id_name_1 = re.sub(r'\s+', '_', str(id_name_1 or '').strip()).strip('_') or 'Dimension'
     second_id_col = None
     id_name_2 = 'Sexe'
     if len(id_cols) >= 2:
@@ -751,7 +1003,7 @@ def _normalize_cross_table_to_flat(df_raw):
         elif has_year_like and not year_value:
             # If year is embedded by row values and not already extracted from header,
             # reuse this column directly as year.
-            id_name_2 = 'Annee'
+            id_name_2 = time_col_name
         elif has_informative_values:
             id_name_2 = 'Dimension'
         else:
@@ -778,13 +1030,21 @@ def _normalize_cross_table_to_flat(df_raw):
             if n is None:
                 continue
 
-            rec = {
-                id_name_1: current_ids.get(id_cols[0], ''),
-                'Annee': current_ids.get(second_id_col, '') if (second_id_col is not None and id_name_2 == 'Annee') else year_value,
-                metric_dimension_name: metric_names.get(c, f'Mesure_{c}'),
-                'Valeur': n,
-            }
-            if second_id_col is not None and id_name_2 != 'Annee':
+            metric_label = metric_names.get(c, f'Mesure_{c}')
+            if metric_dimension_name == time_col_name:
+                rec = {
+                    id_name_1: current_ids.get(id_cols[0], ''),
+                    time_col_name: _normalize_year_period_label(metric_label),
+                    'Valeur': n,
+                }
+            else:
+                rec = {
+                    id_name_1: current_ids.get(id_cols[0], ''),
+                    time_col_name: current_ids.get(second_id_col, '') if (second_id_col is not None and id_name_2 == time_col_name) else year_value,
+                    metric_dimension_name: metric_label,
+                    'Valeur': n,
+                }
+            if second_id_col is not None and id_name_2 != time_col_name:
                 rec[id_name_2] = current_ids.get(second_id_col, '')
             records.append(rec)
 
@@ -1066,13 +1326,8 @@ def _build_ai_column_profiles(df):
             'sample_values': unique_values,
         })
 
-    if not any(p['semantic_key'] == 'province' for p in profiles):
-        fallback_candidates = [
-            p for p in profiles
-            if not p['is_value'] and not p['is_year'] and not p['semantic_key'] and p['unique_ratio'] >= 0.45
-        ]
-        if fallback_candidates:
-            fallback_candidates[0]['semantic_key'] = 'province'
+    # Keep original identifier names when semantics are uncertain.
+    # Forcing a default like "province" causes wrong renames (e.g. age groups).
 
     return profiles
 
@@ -1102,7 +1357,125 @@ def _stabilize_ai_analytical_table(df):
         new_columns.append(target)
 
     work.columns = new_columns
+    if _read_bool_env('IMPORT_AI_HEADER_RENAME_ENABLED', False):
+        work = _refine_ai_headers(work, lang=lang)
     return work
+
+
+def _fallback_header_rename(df):
+    """Conservative deterministic rename for ambiguous dimension headers."""
+    if df is None or df.empty:
+        return df
+
+    work = df.copy()
+    value_col = _pick_value_column(work)
+    renamed = []
+    for col in [str(c or '').strip() for c in work.columns]:
+        target = col
+        norm = _normalize_column_name(col)
+        if norm in ('niveauetude', 'dimension', 'dimensiondim') and col != value_col:
+            values = [_cell_to_text(v) for v in work[col].tolist() if _cell_to_text(v)]
+            distinct = len(set(values))
+            if distinct >= 2:
+                target = 'Indicateur'
+        renamed.append(target)
+
+    work.columns = _make_unique_columns([re.sub(r'\s+', '_', str(c or '').strip()) or 'col' for c in renamed])
+    return work
+
+
+def _refine_ai_headers(df, lang='fr'):
+    """Ask the AI to suggest better header names after flattening, with strict safeguards."""
+    if df is None or df.empty:
+        return df
+
+    work = df.copy().fillna('')
+    columns = [str(c or '').strip() for c in work.columns]
+    if len(columns) < 2:
+        return work
+
+    profiles = _build_ai_column_profiles(work)
+    compact_profiles = []
+    for p in profiles:
+        compact_profiles.append({
+            'name': p.get('name'),
+            'semantic_key': p.get('semantic_key'),
+            'is_value': bool(p.get('is_value')),
+            'is_year': bool(p.get('is_year')),
+            'sample_values': list(p.get('sample_values') or [])[:5],
+        })
+
+    sample_rows = work.head(12).to_dict(orient='records')
+    min_conf = _read_float_env('IMPORT_AI_HEADER_RENAME_MIN_CONFIDENCE', 0.6, min_value=0.0, max_value=1.0)
+
+    # Fast mode by default: keep deterministic rename unless explicitly enabling LLM header rename.
+    if not _read_bool_env('IMPORT_AI_HEADER_RENAME_USE_LLM', False):
+        return _fallback_header_rename(work)
+
+    prompt = (
+        'Tu renommes des colonnes d\'un tableau statistique deja aplati. '
+        'Objectif: proposer des noms metier clairs, stables et concis. '
+        'Reponds STRICTEMENT en JSON valide sans texte additionnel.\n\n'
+        f'Langue cible: {lang}\n'
+        f'Colonnes actuelles (ordre obligatoire): {json.dumps(columns, ensure_ascii=False)}\n'
+        f'Profils de colonnes: {json.dumps(compact_profiles, ensure_ascii=False)}\n'
+        f'Echantillon de lignes: {json.dumps(sample_rows, ensure_ascii=False)}\n\n'
+        'Contraintes strictes:\n'
+        '- Garder exactement le meme nombre de colonnes.\n'
+        '- Ne jamais supprimer une colonne.\n'
+        '- Ne jamais echanger l\'ordre logique des colonnes.\n'
+        '- Preferer: Province/Region, Campagne ou Annee, Indicateur/Dimension, Valeur.\n'
+        '- Si incertain, garder le nom original.\n\n'
+        'Format de sortie exact:\n'
+        '{"rename_map": {"AncienNom": "NouveauNom"}, "confidence": {"AncienNom": 0.0}}\n'
+        '- confidence entre 0 et 1 pour chaque colonne modifiee.'
+    )
+
+    try:
+        engine = (os.getenv('IMPORT_AI_HEADER_RENAME_ENGINE', 'auto').strip().lower() or 'auto')
+        if engine == 'ollama':
+            try:
+                response_text = _ollama_generate_text(prompt, purpose='column_header_rename')
+            except Exception:
+                if _read_bool_env('IMPORT_AI_HEADER_RENAME_ALLOW_GEMINI_FALLBACK', True):
+                    response_text = _gemini_generate_text(prompt, purpose='column_header_rename')
+                else:
+                    raise
+        elif engine == 'gemini':
+            response_text = _gemini_generate_text(prompt, purpose='column_header_rename')
+        else:
+            # auto: keep current chain (Gemini first, Ollama fallback)
+            response_text = _gemini_generate_text(prompt, purpose='column_header_rename')
+        parsed = _extract_json_object(response_text)
+        if not isinstance(parsed, dict):
+            return _fallback_header_rename(work)
+
+        rename_map = parsed.get('rename_map') if isinstance(parsed.get('rename_map'), dict) else {}
+        conf_map = parsed.get('confidence') if isinstance(parsed.get('confidence'), dict) else {}
+
+        applied = []
+        for old in columns:
+            candidate = rename_map.get(old, old)
+            candidate = re.sub(r'\s+', '_', str(candidate or '').strip()).strip('_') or old
+
+            try:
+                conf = float(conf_map.get(old, 1.0 if candidate == old else 0.0))
+            except Exception:
+                conf = 0.0
+
+            # Never rename value columns with low confidence.
+            profile = next((p for p in profiles if str(p.get('name')) == old), None)
+            is_value = bool(profile.get('is_value')) if profile else False
+            if candidate != old and conf < min_conf:
+                candidate = old
+            if is_value and _normalize_column_name(candidate) not in ('valeur', 'value') and conf < 0.9:
+                candidate = old
+            applied.append(candidate)
+
+        work.columns = _make_unique_columns(applied)
+        return work
+    except Exception:
+        return _fallback_header_rename(work)
 
 
 def _normalize_wide_metrics_to_long(df, lang='fr'):
@@ -1261,14 +1634,29 @@ def _pick_value_column(df):
     if not cols:
         return None
 
-    explicit = {'valeur', 'value', 'montant', 'effectif', 'nombre', 'taux'}
+    explicit = {
+        'valeur', 'value', 'values', 'montant', 'effectif', 'nombre', 'taux', 'ratio', 'measure',
+        'القيمة', 'قيمة', 'القيم', 'المؤشر', 'النسبة', 'العدد'
+    }
     for c in cols:
-        if _normalize_column_name(c) in explicit:
+        norm = _normalize_column_name(c)
+        sem = _semantic_key_from_label(c)
+        if norm in explicit or sem == 'value':
             return c
+
+    def _is_year_like_series(series):
+        values = [_cell_to_text(v) for v in series.tolist() if _cell_to_text(v)]
+        if len(values) < 2:
+            return False
+        year_like_count = sum(1 for v in values if re.fullmatch(r'(19|20)\d{2}', str(v).strip()))
+        return (year_like_count / float(len(values))) >= 0.8
 
     best_col = None
     best_ratio = -1.0
     for c in cols:
+        if _semantic_key_from_label(c) == 'year' or _is_year_like_series(df[c]):
+            # Never treat year columns as value columns, even if numeric.
+            continue
         values = [_cell_to_text(v) for v in df[c].tolist() if _cell_to_text(v)]
         if not values:
             continue
@@ -2142,6 +2530,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            _reset_ai_provider_marker()
             if st.data_is_bilingual and not arabic_file:
                 return Response(
                     {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
@@ -2165,6 +2554,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 mapped_rows = df.to_dict(orient='records')
                 expected_columns = incoming_columns
                 mapped_df = df.copy()
+                mapping_mode = 'schema_free'
                 warnings.append('Mode schema libre: colonnes du fichier adoptees')
                 if overlap > 0:
                     warnings.append(f'Recouvrement schema precedent: {round(overlap * 100)}%')
@@ -2173,19 +2563,45 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     expected_columns = [str(c) for c in df.columns]
                     mapped_rows = df.to_dict(orient='records')
                     mapped_df = df.copy()
+                    mapping_mode = 'direct'
                     warnings.append('Schema cible vide: import classique applique')
                 else:
                     try:
                         mapped_rows = _run_gemini_mapping(df, expected_columns)
+                        mapping_mode = 'ai'
                         warnings.append('Mapping IA applique')
                     except Exception as ai_err:
                         logger.warning('Fallback mapping active: %s', ai_err)
                         mapped_rows = _fallback_map_rows(df, expected_columns)
+                        mapping_mode = 'fallback'
                         warnings.append('Mapping IA indisponible: fallback heuristique utilise')
                     mapped_df = pd.DataFrame(mapped_rows, columns=expected_columns)
 
+            ai_confidence = _build_import_ai_confidence(df, mapped_rows, expected_columns, mapping_mode=mapping_mode)
+            gate = _evaluate_import_ai_gate(ai_confidence)
+            if gate['low_confidence']:
+                warnings.append(
+                    f"Confiance IA faible ({round(ai_confidence['score'] * 100)}% < {round(gate['threshold'] * 100)}%)."
+                )
+                if gate['block_on_low_confidence']:
+                    return Response(
+                        {
+                            'error': 'Import bloque: confiance IA insuffisante.',
+                            'ai_confidence': ai_confidence,
+                            'import_policy': gate,
+                            'columns_order': expected_columns,
+                            'warnings': warnings,
+                            'preview_data': mapped_rows[:200],
+                        },
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+            _append_ai_provider_warning(warnings, use_ai=True)
+
             if arabic_file:
                 payload, report, warnings_ar, warnings_en = _maybe_build_bilingual_payload(mapped_df, arabic_file, english_file, use_ai=True)
+                _append_ai_provider_warning(warnings_ar, use_ai=True)
+                _append_ai_provider_warning(warnings_en, use_ai=True)
                 if payload is None:
                     return Response(
                         {
@@ -2210,6 +2626,8 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 'data': mapped_rows,
                 'columns_order': expected_columns,
                 'warnings': warnings,
+                'ai_confidence': ai_confidence,
+                'import_policy': gate,
             }
             if arabic_file:
                 response['validation_report'] = report
@@ -2233,6 +2651,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            _reset_ai_provider_marker()
             if st.data_is_bilingual and not arabic_file:
                 return Response(
                     {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
@@ -2256,6 +2675,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 mapped_rows = df.to_dict(orient='records')
                 expected_columns = incoming_columns
                 mapped_df = df.copy()
+                mapping_mode = 'schema_free'
                 warnings.append('Mode schema libre: colonnes du fichier adoptees')
                 if overlap > 0:
                     warnings.append(f'Recouvrement schema precedent: {round(overlap * 100)}%')
@@ -2264,22 +2684,36 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     expected_columns = [str(c) for c in df.columns]
                     mapped_rows = df.to_dict(orient='records')
                     mapped_df = df.copy()
+                    mapping_mode = 'direct'
                     warnings.append('Schema cible vide: import classique applique')
                 else:
                     try:
                         mapped_rows = _run_gemini_mapping(df, expected_columns)
+                        mapping_mode = 'ai'
                         warnings.append('Mapping IA applique')
                     except Exception as ai_err:
                         logger.warning('Fallback mapping preview active: %s', ai_err)
                         mapped_rows = _fallback_map_rows(df, expected_columns)
+                        mapping_mode = 'fallback'
                         warnings.append('Mapping IA indisponible: fallback heuristique utilise')
                     mapped_df = pd.DataFrame(mapped_rows, columns=expected_columns)
+
+            ai_confidence = _build_import_ai_confidence(df, mapped_rows, expected_columns, mapping_mode=mapping_mode)
+            gate = _evaluate_import_ai_gate(ai_confidence)
+            if gate['low_confidence']:
+                warnings.append(
+                    f"Confiance IA faible ({round(ai_confidence['score'] * 100)}% < {round(gate['threshold'] * 100)}%)."
+                )
+
+            _append_ai_provider_warning(warnings, use_ai=True)
 
             response = {
                 'message': 'Preview import intelligent reussi',
                 'data': mapped_rows,
                 'columns_order': expected_columns,
                 'warnings': warnings,
+                'ai_confidence': ai_confidence,
+                'import_policy': gate,
             }
 
             if arabic_file:
@@ -2297,6 +2731,9 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     except Exception:
                         pass
                     df_en, warnings_en = _normalize_import_dataframe(english_file, use_ai=True)
+
+                _append_ai_provider_warning(warnings_ar, use_ai=True)
+                _append_ai_provider_warning(warnings_en, use_ai=True)
 
                 payload, report = _build_bilingual_payload(mapped_df, df_ar, df_en=df_en)
                 if payload is None:
@@ -2317,12 +2754,94 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     tables_i18n['en'] = _align_df_rows_to_columns(df_en, expected_columns)
 
                 response['tables_i18n'] = tables_i18n
+                response['data_json_i18n_preview'] = {
+                    **payload,
+                    'validation_report': report,
+                }
                 response['validation_report'] = report
                 response['warnings'] = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
 
             return Response(response, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception('Erreur preview import intelligent')
+            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+
+    @action(detail=True, methods=['post'], url_path='import-preview')
+    def import_table_preview(self, request, pk=None):
+        """
+        Preview classic import using the same normalization/validation logic as admin
+        import, but without persisting. Intended for saisisseur draft workflow.
+        """
+        st = self.get_object()
+        excel_file = request.FILES.get('file')
+        arabic_file = request.FILES.get('file_ar')
+        english_file = request.FILES.get('file_en')
+        if not excel_file:
+            return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
+
+        try:
+            if st.data_is_bilingual and not arabic_file:
+                return Response(
+                    {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+            if _has_english_i18n_payload(st) and not english_file:
+                return Response(
+                    {'error': 'Ce sous-theme contient deja une version EN. Le fichier anglais correspondant est obligatoire pour le remplacer.'},
+                    status=status.HTTP_400_BAD_REQUEST,
+                )
+
+            df, warnings = _normalize_import_dataframe(excel_file, use_ai=False)
+            payload, report, warnings_ar, warnings_en = _maybe_build_bilingual_payload(df, arabic_file, english_file, use_ai=False)
+
+            preview_rows = df.to_dict(orient='records')
+            preview_columns = [str(c) for c in list(df.columns)]
+            response = {
+                'message': 'Preview import classique reussi',
+                'data': preview_rows,
+                'columns_order': preview_columns,
+                'warnings': warnings,
+            }
+
+            if arabic_file:
+                if payload is None:
+                    return Response(
+                        {'error': 'Validation i18n echouee.', 'validation_report': report, 'warnings': {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}},
+                        status=status.HTTP_400_BAD_REQUEST,
+                    )
+
+                try:
+                    arabic_file.seek(0)
+                except Exception:
+                    pass
+                df_ar, _ = _normalize_import_dataframe(arabic_file, use_ai=False)
+
+                df_en = None
+                if english_file:
+                    try:
+                        english_file.seek(0)
+                    except Exception:
+                        pass
+                    df_en, _ = _normalize_import_dataframe(english_file, use_ai=False)
+
+                tables_i18n = {
+                    'fr': preview_rows,
+                    'ar': _align_df_rows_to_columns(df_ar, preview_columns),
+                }
+                if df_en is not None:
+                    tables_i18n['en'] = _align_df_rows_to_columns(df_en, preview_columns)
+
+                response['tables_i18n'] = tables_i18n
+                response['data_json_i18n_preview'] = {
+                    **payload,
+                    'validation_report': report,
+                }
+                response['validation_report'] = report
+                response['warnings'] = {'fr': warnings, 'ar': warnings_ar, 'en': warnings_en}
+
+            return Response(response, status=status.HTTP_200_OK)
+        except Exception as e:
+            logger.exception('Erreur preview import classique')
             return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
 
     @action(detail=True, methods=['post'], url_path='append-smart-preview')
@@ -2339,6 +2858,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             return Response({'error': 'Aucun fichier fourni'}, status=status.HTTP_400_BAD_REQUEST)
 
         try:
+            _reset_ai_provider_marker()
             if st.data_is_bilingual and not arabic_file:
                 return Response(
                     {'error': 'Ce sous-theme est deja bilingue. Le fichier arabe est obligatoire pour tout ajout.'},
@@ -2370,6 +2890,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             if not existing_columns:
                 mapped_rows = df.to_dict(orient='records')
                 final_columns = incoming_columns
+                mapping_mode = 'direct'
                 warnings.append('Schema cible vide: colonnes du fichier adoptees')
             elif set(incoming_columns) == set(existing_columns):
                 mapped_rows = [
@@ -2377,16 +2898,19 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     for row in df.to_dict(orient='records')
                 ]
                 final_columns = existing_columns
+                mapping_mode = 'direct'
                 warnings.append('Colonnes compatibles: ajout direct ordonne')
             else:
                 try:
                     mapped_rows = _run_gemini_mapping(df, existing_columns)
                     final_columns = existing_columns
+                    mapping_mode = 'ai'
                     warnings.append('Mapping IA applique pour ajout')
                 except Exception as ai_err:
                     logger.warning('Fallback append mapping preview active: %s', ai_err)
                     mapped_rows = _fallback_map_rows(df, existing_columns)
                     final_columns = existing_columns
+                    mapping_mode = 'fallback'
                     warnings.append('Mapping IA indisponible: fallback heuristique utilise pour ajout')
 
                 warnings.append(
@@ -2395,6 +2919,14 @@ class SousThemeViewSet(viewsets.ModelViewSet):
 
             mapped_df = pd.DataFrame(mapped_rows, columns=final_columns)
             merged = existing_rows + mapped_rows
+            ai_confidence = _build_import_ai_confidence(df, mapped_rows, final_columns, mapping_mode=mapping_mode)
+            gate = _evaluate_import_ai_gate(ai_confidence)
+            if gate['low_confidence']:
+                warnings.append(
+                    f"Confiance IA faible ({round(ai_confidence['score'] * 100)}% < {round(gate['threshold'] * 100)}%)."
+                )
+
+            _append_ai_provider_warning(warnings, use_ai=True)
 
             response = {
                 'message': f'{len(mapped_rows)} ligne(s) pretes a ajouter. Total projete : {len(merged)} ligne(s).',
@@ -2402,6 +2934,8 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                 'columns_order': final_columns,
                 'warnings': warnings,
                 'append_rows': mapped_rows,
+                'ai_confidence': ai_confidence,
+                'import_policy': gate,
             }
 
             if arabic_file:
@@ -2419,6 +2953,9 @@ class SousThemeViewSet(viewsets.ModelViewSet):
                     except Exception:
                         pass
                     df_en, warnings_en = _normalize_import_dataframe(english_file, use_ai=True)
+
+                _append_ai_provider_warning(warnings_ar, use_ai=True)
+                _append_ai_provider_warning(warnings_en, use_ai=True)
 
                 payload, report = _build_bilingual_payload(mapped_df, df_ar, df_en=df_en)
                 if payload is None:
@@ -2466,6 +3003,7 @@ class SousThemeViewSet(viewsets.ModelViewSet):
 
         try:
             use_ai = str(request.data.get('use_ai', 'true')).strip().lower() in ('1', 'true', 'yes', 'oui', 'on')
+            _reset_ai_provider_marker()
 
             df_fr, warnings_fr = _normalize_import_dataframe(file_fr, use_ai=use_ai)
             file_ar.seek(0)
@@ -2476,6 +3014,10 @@ class SousThemeViewSet(viewsets.ModelViewSet):
             if file_en:
                 file_en.seek(0)
                 df_en, warnings_en = _normalize_import_dataframe(file_en, use_ai=use_ai)
+
+            _append_ai_provider_warning(warnings_fr, use_ai=use_ai)
+            _append_ai_provider_warning(warnings_ar, use_ai=use_ai)
+            _append_ai_provider_warning(warnings_en, use_ai=use_ai)
 
             payload, report = _build_bilingual_payload(df_fr, df_ar, df_en=df_en)
             if payload is None:
@@ -3167,6 +3709,7 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
                 draft_rows = notes_obj.get('tables') if isinstance(notes_obj.get('tables'), list) else None
                 draft_columns = notes_obj.get('columns_order') if isinstance(notes_obj.get('columns_order'), list) and notes_obj.get('columns_order') else None
                 draft_i18n = notes_obj.get('tables_i18n') if isinstance(notes_obj.get('tables_i18n'), dict) else {}
+                draft_i18n_payload = notes_obj.get('data_json_i18n_draft') if isinstance(notes_obj.get('data_json_i18n_draft'), dict) else None
 
                 if draft_rows is not None:
                     df_fr = pd.DataFrame(draft_rows)
@@ -3177,7 +3720,26 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
                     draft_rows_ar = draft_i18n.get('ar') if isinstance(draft_i18n.get('ar'), list) else None
                     draft_rows_en = draft_i18n.get('en') if isinstance(draft_i18n.get('en'), list) else None
 
-                    if draft_rows_ar:
+                    # Prefer canonical i18n payload produced during preview/import; it preserves
+                    # localized value labels exactly as validated by backend.
+                    payload_rows = list(draft_i18n_payload.get('rows') or []) if draft_i18n_payload else []
+                    payload_columns = list(draft_i18n_payload.get('canonical_columns') or []) if draft_i18n_payload else []
+                    can_use_payload_directly = bool(
+                        draft_i18n_payload
+                        and payload_rows
+                        and payload_columns
+                        and list(df_fr.columns) == payload_columns
+                        and len(payload_rows) == len(df_fr)
+                    )
+
+                    if can_use_payload_directly:
+                        report = draft_i18n_payload.get('validation_report') if isinstance(draft_i18n_payload.get('validation_report'), dict) else {
+                            'matched': True,
+                            'rows_total': len(payload_rows),
+                            'source': 'draft_payload',
+                        }
+                        _persist_bilingual_table(sous_theme, df_fr, draft_i18n_payload, report)
+                    elif draft_rows_ar:
                         df_ar = pd.DataFrame(draft_rows_ar).reindex(columns=list(df_fr.columns), fill_value='').fillna('')
                         df_en = None
                         if draft_rows_en:
@@ -3204,6 +3766,7 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
                 for field in [
                     'definition_text', 'unite_text', 'indication_text', 'source_text', 'periodicite_text', 'couverture_text',
                     'definition_text_ar', 'unite_text_ar', 'indication_text_ar', 'source_text_ar', 'periodicite_text_ar', 'couverture_text_ar',
+                    'definition_text_en', 'unite_text_en', 'indication_text_en', 'source_text_en', 'periodicite_text_en', 'couverture_text_en',
                 ]:
                     if field in meta:
                         setattr(sous_theme, field, meta.get(field))

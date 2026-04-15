@@ -9,6 +9,7 @@ class CookieOrHeaderTokenAuthentication(TokenAuthentication):
     """Authenticate using Authorization header first, then HttpOnly auth cookie."""
 
     def authenticate(self, request):
+        # Keep explicit Authorization header strict: invalid headers must fail fast.
         result = super().authenticate(request)
         if result is not None:
             return result
@@ -26,7 +27,12 @@ class CookieOrHeaderTokenAuthentication(TokenAuthentication):
             if not csrf_cookie or not csrf_header or not secrets.compare_digest(str(csrf_cookie), str(csrf_header)):
                 raise exceptions.AuthenticationFailed('CSRF validation failed for cookie authentication')
 
-        return self.authenticate_credentials(key)
+        try:
+            return self.authenticate_credentials(key)
+        except exceptions.AuthenticationFailed:
+            # Ignore stale/invalid auth cookies so public AllowAny endpoints still work.
+            # Protected endpoints remain protected by permission classes.
+            return None
 
     def authenticate_credentials(self, key):
         user, token = super().authenticate_credentials(key)
