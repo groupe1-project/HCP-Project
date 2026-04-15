@@ -19,8 +19,23 @@ powershell -ExecutionPolicy Bypass -File .\scripts\eval_start.ps1
 
 Ce script:
 - build + demarre Docker Compose
+- demarre aussi Ollama (IA) dans Docker
+- telecharge automatiquement le modele IA `qwen2.5:7b-instruct`
 - cree/actualise les comptes de demonstration
 - affiche les URLs et identifiants de test
+
+### Option rapide (PC faible, sans IA)
+
+Depuis la racine du projet:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\eval_start_no_ai.ps1
+```
+
+Ce mode:
+- lance l'application sans assistant IA
+- evite le telechargement du modele Ollama
+- convient aux machines avec peu de RAM/disque
 
 ### Option manuelle
 
@@ -40,6 +55,7 @@ Tu dois voir:
 - `hcp_db` (PostgreSQL)
 - `hcp_backend` (Django + API)
 - `hcp_frontend` (Nginx + React build)
+- `hcp_ollama` (Assistant IA local, sans installation Ollama hors Docker)
 
 ## 4. Acces application
 
@@ -82,6 +98,12 @@ Option manuelle:
 docker compose down
 ```
 
+Si tu as demarre en mode sans IA:
+
+```powershell
+docker compose -f docker-compose.yml -f docker-compose.noai.yml down
+```
+
 Pour supprimer aussi les donnees Postgres:
 
 ```bash
@@ -101,6 +123,8 @@ Option B (image prebuild):
 ## 8. Notes importantes
 
 - Cette version est orientee evaluation locale.
+- Aucun besoin d'installer Ollama sur le PC evaluateur: le service IA est inclus dans Docker Compose.
+- Au premier demarrage, le telechargement du modele IA peut prendre plusieurs minutes selon la connexion internet.
 - Le backend tourne avec `DJANGO_DEBUG=true` dans `docker-compose.yml`.
 - Pour un vrai deploiement production internet, il faudra:
   - HTTPS/TLS

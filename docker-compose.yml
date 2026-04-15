@@ -22,6 +22,8 @@ services:
     depends_on:
       db:
         condition: service_healthy
+      ollama:
+        condition: service_started
     environment:
       DJANGO_DEBUG: "true"
       DJANGO_SECRET_KEY: "docker-dev-secret-key-change-me"
@@ -39,8 +41,22 @@ services:
       DJANGO_CORS_ALLOW_CREDENTIALS: "true"
       DJANGO_CSP_ENABLED: "false"
       DJANGO_EMAIL_BACKEND: "django.core.mail.backends.console.EmailBackend"
+      OLLAMA_ENABLED: "true"
+      OLLAMA_BASE_URL: "http://ollama:11434"
+      OLLAMA_MODEL: "qwen2.5:7b-instruct"
+      ASSISTANT_PREFER_OLLAMA: "true"
+      ASSISTANT_ALLOW_GEMINI_FALLBACK: "false"
+      ASSISTANT_OLLAMA_MODEL: "qwen2.5:7b-instruct"
     expose:
       - "8000"
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: hcp_ollama
+    volumes:
+      - ollama_data:/root/.ollama
+    expose:
+      - "11434"
 
   frontend:
     build:
@@ -54,3 +70,4 @@ services:
 
 volumes:
   pg_data:
+  ollama_data:

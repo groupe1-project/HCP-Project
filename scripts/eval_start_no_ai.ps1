@@ -4,23 +4,23 @@ $ErrorActionPreference = 'Stop'
 $repoRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $repoRoot
 
-Write-Host "[1/6] Verification Docker CLI..." -ForegroundColor Cyan
+Write-Host "[1/5] Verification Docker CLI..." -ForegroundColor Cyan
 if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
     throw "Docker CLI introuvable. Installez Docker Desktop puis reessayez."
 }
 
-Write-Host "[2/6] Verification Docker Engine..." -ForegroundColor Cyan
+Write-Host "[2/5] Verification Docker Engine..." -ForegroundColor Cyan
 docker info *> $null
 
-Write-Host "[3/6] Build + demarrage stack..." -ForegroundColor Cyan
-docker compose up --build -d
+Write-Host "[3/5] Build + demarrage stack (mode sans IA)..." -ForegroundColor Cyan
+docker compose -f docker-compose.yml -f docker-compose.noai.yml up --build -d
 
-Write-Host "[4/6] Attente backend et Ollama prets..." -ForegroundColor Cyan
+Write-Host "[4/5] Attente backend pret..." -ForegroundColor Cyan
 $maxAttempts = 30
 $backendReady = $false
 for ($i = 1; $i -le $maxAttempts; $i++) {
     try {
-        docker compose exec -T backend python manage.py check *> $null
+        docker compose -f docker-compose.yml -f docker-compose.noai.yml exec -T backend python manage.py check *> $null
         $backendReady = $true
         break
     } catch {
@@ -32,25 +32,7 @@ if (-not $backendReady) {
     throw "Le backend n'est pas pret apres attente. Verifiez: docker compose logs -f backend"
 }
 
-$ollamaReady = $false
-for ($i = 1; $i -le $maxAttempts; $i++) {
-    try {
-        docker compose exec -T ollama ollama list *> $null
-        $ollamaReady = $true
-        break
-    } catch {
-        Start-Sleep -Seconds 2
-    }
-}
-
-if (-not $ollamaReady) {
-    throw "Ollama n'est pas pret apres attente. Verifiez: docker compose logs -f ollama"
-}
-
-Write-Host "[4.5/6] Telechargement/verif modele IA Ollama..." -ForegroundColor Cyan
-docker compose exec -T ollama ollama pull qwen2.5:7b-instruct
-
-Write-Host "[5/6] Provision comptes de demonstration..." -ForegroundColor Cyan
+Write-Host "[4.5/5] Provision comptes de demonstration..." -ForegroundColor Cyan
 $seedCode = @"
 from core.models import CustomUser
 
@@ -69,17 +51,19 @@ upsert_user('saisisseur_demo', 'saisisseur@demo.local', 'SAISISSEUR', 'Saisi123!
 print('demo users ready')
 "@
 
-docker compose exec -T backend python manage.py shell -c $seedCode
+docker compose -f docker-compose.yml -f docker-compose.noai.yml exec -T backend python manage.py shell -c $seedCode
 
-Write-Host "[6/6] Etat des conteneurs" -ForegroundColor Cyan
-docker compose ps
+Write-Host "[5/5] Etat des conteneurs" -ForegroundColor Cyan
+docker compose -f docker-compose.yml -f docker-compose.noai.yml ps
 
-Write-Host "" 
-Write-Host "Application prete pour evaluation:" -ForegroundColor Green
+Write-Host ""
+Write-Host "Application prete pour evaluation (mode sans IA):" -ForegroundColor Green
 Write-Host "- Visiteur   : http://localhost:8080/"
 Write-Host "- Admin      : http://localhost:8080/admin/login"
 Write-Host "- Saisisseur : http://localhost:8080/saisisseur/login"
-Write-Host "" 
+Write-Host ""
 Write-Host "Comptes demo:" -ForegroundColor Yellow
 Write-Host "- ADMIN      -> admin@demo.local / Admin123!Demo"
 Write-Host "- SAISISSEUR -> saisisseur@demo.local / Saisi123!Demo"
+Write-Host ""
+Write-Host "Note: Assistant IA desactive dans ce mode." -ForegroundColor Yellow

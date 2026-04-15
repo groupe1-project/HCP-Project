@@ -1,0 +1,7 @@
+services:
+  backend:
+    environment:
+      AI_FEATURES_ENABLED: "false"
+      OLLAMA_ENABLED: "false"
+      ASSISTANT_PREFER_OLLAMA: "false"
+      ASSISTANT_ALLOW_GEMINI_FALLBACK: "false"
