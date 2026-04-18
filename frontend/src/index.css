@@ -194,3 +194,9 @@ h6 {
 		transform: translateX(-50%);
 	}
 }
+
+/* While a modal is open, header controls must not stay interactive behind it. */
+body.modal-open-force .header-top-controls,
+body.modal-open-force .header-top-controls * {
+	pointer-events: none !important;
+}

@@ -1,4 +1,4 @@
-﻿import React, { Suspense, lazy, useState, useEffect } from 'react';
+import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
@@ -7700,7 +7700,7 @@ function App({ forceVisitor = false }) {
       )}
 
       {showSubThemeMeta && (
-         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+         <div className="fixed inset-0 modal-overlay bg-black/40 flex items-center justify-center z-[2147483000] p-4" onClick={(e) => e.stopPropagation()}>
            <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-lg flex flex-col">
              <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
                <h2 className="text-lg font-bold text-center">{t('metadata')}</h2>
@@ -7718,7 +7718,7 @@ function App({ forceVisitor = false }) {
          </div>
       )}
       {showThemeMeta && (
-         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4">
+         <div className="fixed inset-0 modal-overlay bg-black/40 flex items-center justify-center z-[2147483000] p-4" onClick={(e) => e.stopPropagation()}>
            <div className="bg-white border border-black p-4 rounded-2xl w-full max-w-3xl max-h-[88vh] overflow-hidden shadow-lg flex flex-col">
              <div className="bg-[#7A0A4A] text-white rounded-t-lg px-4 py-3">
                <h2 className="text-lg font-bold text-center">{t('metadata')}</h2>
