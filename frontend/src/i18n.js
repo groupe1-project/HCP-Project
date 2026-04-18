@@ -1,6 +1,40 @@
 import i18n from 'i18next';
 import { initReactI18next } from 'react-i18next';
 
+const SUPPORTED_LANGUAGES = ['fr', 'ar', 'en'];
+
+const normalizeLanguage = (value) => (SUPPORTED_LANGUAGES.includes(value) ? value : 'fr');
+
+const getLanguageStorageKeyForPath = (pathname) => {
+  const path = String(pathname || '/').toLowerCase();
+  if (path === '/' || path === '/visiteur' || path.startsWith('/visiteur/')) return 'app_lang_visitor';
+  if (path === '/admin' || path.startsWith('/admin/')) return 'app_lang_admin';
+  if (path === '/saisisseur' || path.startsWith('/saisisseur/')) return 'app_lang_saisisseur';
+  return null;
+};
+
+const getInitialLanguage = () => {
+  try {
+    if (typeof window === 'undefined') return 'fr';
+
+    const path = (window.location && window.location.pathname
+      ? window.location.pathname
+      : '/').toLowerCase();
+
+    // Login pages stay in FR regardless of previous language choices.
+    if (path === '/admin/login' || path === '/saisisseur/login') {
+      return 'fr';
+    }
+
+    const routeKey = getLanguageStorageKeyForPath(path);
+    if (!routeKey) return 'fr';
+
+    return normalizeLanguage(localStorage.getItem(routeKey) || 'fr');
+  } catch {
+    return 'fr';
+  }
+};
+
 const resources = {
   fr: {
     translation: {
@@ -296,7 +330,7 @@ i18n
   .use(initReactI18next)
   .init({
     resources,
-    lng: (() => { try { return localStorage.getItem('app_lang') || 'fr'; } catch { return 'fr'; } })(),
+    lng: getInitialLanguage(),
     fallbackLng: 'fr',
     interpolation: { escapeValue: false },
   });
