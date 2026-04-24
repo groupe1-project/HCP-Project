@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import axios from 'axios';
-import logoSmall from './Image2.png';
 import logoMain from './Image3.png';
 
 const API_BASE = import.meta.env.VITE_API_BASE_URL || '/api';

@@ -13,7 +13,7 @@ from contextvars import ContextVar
 import pandas as pd
 import string
 import secrets
-from collections import defaultdict
+from collections import Counter, defaultdict
 from django.utils import timezone
 from django.core.mail import send_mail
 from django.template.loader import render_to_string
@@ -38,7 +38,12 @@ logger = logging.getLogger(__name__)
 AI_PROVIDER_LAST = ContextVar('AI_PROVIDER_LAST', default='none')
 AI_PROVIDER_ATTEMPTED = ContextVar('AI_PROVIDER_ATTEMPTED', default=False)
 
+
+def _public_error_message(default_message='Une erreur est survenue. Veuillez réessayer.'):
+    return default_message
+
 ARABIC_CHAR_RE = re.compile(r'[\u0600-\u06FF]')
+ARABIC_DIGITS_TRANSLATION = str.maketrans('٠١٢٣٤٥٦٧٨٩۰۱۲۳۴۵۶۷۸۹', '01234567890123456789')
 
 SEMANTIC_LABELS = {
     'year': {'fr': 'Annee', 'ar': 'السنة'},
@@ -111,12 +116,14 @@ class HealthCheckView(APIView):
 
     def get(self, request):
         db_ok, db_error = self._db_ready()
+        expose_internal = _read_bool_env('HEALTH_EXPOSE_INTERNAL_STATUS', bool(getattr(settings, 'DEBUG', False)))
         checks = {
-            'db': {'ok': db_ok, 'error': db_error},
-            'secret_key_configured': bool(getattr(settings, 'SECRET_KEY', '').strip()) and settings.SECRET_KEY != 'unsafe-dev-key-change-me',
-            'allowed_hosts_configured': bool(getattr(settings, 'ALLOWED_HOSTS', [])),
-            'debug': bool(getattr(settings, 'DEBUG', False)),
+            'db': {'ok': db_ok, 'error': db_error if expose_internal else None},
         }
+        if expose_internal:
+            checks['secret_key_configured'] = bool(getattr(settings, 'SECRET_KEY', '').strip()) and settings.SECRET_KEY != 'unsafe-dev-key-change-me'
+            checks['allowed_hosts_configured'] = bool(getattr(settings, 'ALLOWED_HOSTS', []))
+            checks['debug'] = bool(getattr(settings, 'DEBUG', False))
 
         ready = bool(db_ok)
         payload = {
@@ -205,6 +212,102 @@ def _fallback_map_rows(df, expected_columns):
         mapped_rows.append(out)
 
     return mapped_rows
+
+
+def _normalize_province_value(value):
+    """Normalize province labels for robust order matching."""
+    text = _normalize_name(value)
+    if not text:
+        return ''
+    text = re.sub(r'\s*[-–—]\s*', '-', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    return text
+
+
+def _find_semantic_column(columns, semantic_key):
+    for col in (columns or []):
+        if _semantic_key_from_label(col) == semantic_key:
+            return str(col)
+    return None
+
+
+def _extract_ordered_unique_values(values, normalizer=None):
+    seen = set()
+    ordered = []
+    for raw in (values or []):
+        txt = _cell_to_text(raw)
+        if not txt:
+            continue
+        key = normalizer(txt) if normalizer else txt
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        ordered.append(txt)
+    return ordered
+
+
+def _extract_province_order_from_df(df):
+    if df is None or df.empty:
+        return []
+
+    province_col = _find_semantic_column([str(c) for c in df.columns], 'province')
+    if not province_col:
+        return []
+
+    return _extract_ordered_unique_values(df[province_col].tolist(), normalizer=_normalize_province_value)
+
+
+def _apply_province_order_to_rows(rows, province_order, province_col_name=None):
+    rows = list(rows or [])
+    if not rows:
+        return rows
+
+    if not province_col_name:
+        first_row = rows[0] if isinstance(rows[0], dict) else {}
+        province_col_name = _find_semantic_column(list(first_row.keys()), 'province')
+    if not province_col_name:
+        return rows
+
+    ordered = _extract_ordered_unique_values(province_order or [], normalizer=_normalize_province_value)
+    if not ordered:
+        return rows
+
+    rank = {
+        _normalize_province_value(name): idx
+        for idx, name in enumerate(ordered)
+        if _normalize_province_value(name)
+    }
+    default_rank = len(rank) + 1
+
+    indexed = list(enumerate(rows))
+    indexed.sort(
+        key=lambda pair: (
+            rank.get(_normalize_province_value((pair[1] or {}).get(province_col_name, '')), default_rank),
+            pair[0],
+        )
+    )
+    return [row for _, row in indexed]
+
+
+def _apply_province_order_to_dataframe(df, province_order=None):
+    if df is None or df.empty:
+        return df
+
+    columns = [str(c) for c in df.columns]
+    province_col = _find_semantic_column(columns, 'province')
+    if not province_col:
+        return df
+
+    effective_order = list(province_order or [])
+    if not effective_order:
+        effective_order = _extract_province_order_from_df(df)
+
+    rows = df.to_dict(orient='records')
+    ordered_rows = _apply_province_order_to_rows(rows, effective_order, province_col_name=province_col)
+    if ordered_rows == rows:
+        return df
+
+    return pd.DataFrame(ordered_rows, columns=columns)
 
 
 def _read_int_env(name, default_value, min_value=None, max_value=None):
@@ -552,7 +655,9 @@ def _run_gemini_mapping(df, expected_columns):
     for item in parsed['rows']:
         item = item if isinstance(item, dict) else {}
         sanitized.append({col: item.get(col, '') for col in expected_columns})
-    return sanitized
+
+    province_order = _extract_province_order_from_df(df)
+    return _apply_province_order_to_rows(sanitized, province_order)
 
 
 def _is_truthy(value):
@@ -796,7 +901,21 @@ def _cell_to_text(value):
 
 
 def _parse_number(value):
-    text = _cell_to_text(value).replace(' ', '').replace(',', '.')
+    text = _cell_to_text(value)
+    if not text:
+        return None
+
+    # Normalize Arabic/Persian digits and common locale separators.
+    text = text.translate(ARABIC_DIGITS_TRANSLATION)
+    text = (
+        text
+        .replace('\u00A0', ' ')   # NBSP
+        .replace('\u202F', ' ')   # NNBSP
+        .replace('\u2009', ' ')   # thin space
+        .replace('\u066C', '')    # Arabic thousands separator
+        .replace('\u066B', '.')   # Arabic decimal separator
+    )
+    text = text.replace(' ', '').replace(',', '.')
     if not text:
         return None
     try:
@@ -1301,13 +1420,18 @@ def _build_ai_column_profiles(df):
         header_key = _semantic_key_from_label(col)
         modality_key, modality_score = _infer_dimension_key_from_modalities(unique_values)
         is_value = col == value_col
-        is_year = header_key == 'year' or _is_year_like_values(sample_values)
+        year_like_values = _is_year_like_values(sample_values)
+        is_year = year_like_values
         semantic_key = None
 
         if is_value:
             semantic_key = 'value'
         elif is_year:
             semantic_key = 'year'
+        elif header_key == 'year' and modality_key and modality_score >= 2:
+            # Header can contain a global year label (e.g. "Annee 2020") while
+            # column values are actually provinces/modalities.
+            semantic_key = modality_key
         elif header_key and header_key != 'dimension':
             semantic_key = header_key
         elif modality_key and modality_score >= 2:
@@ -1528,6 +1652,32 @@ def _normalize_wide_metrics_to_long(df, lang='fr'):
     if not id_cols:
         return None
 
+    # Common sheet pattern: one id column header contains a global year label
+    # (e.g. "Annee 2020") while cells contain provinces/modalities.
+    year_col_name = _semantic_label_for_key('year', lang)
+    global_year_value = ''
+    for id_col in id_cols:
+        id_values = [_cell_to_text(v) for v in work[id_col].tolist() if _cell_to_text(v)]
+        if not id_values:
+            continue
+
+        id_col_label = str(id_col or '')
+        normalized_header = _normalize_semantic_token(id_col_label)
+        has_year_token = bool(re.search(r'(19|20)\d{2}(?:\s*[-/]\s*(19|20)\d{2})?', id_col_label))
+        has_year_keyword = bool(re.search(r'(annee|annees|année|années|year|years|periode|période|period)', normalized_header))
+        looks_like_year_header = _semantic_key_from_label(id_col) == 'year' or (has_year_token and has_year_keyword)
+
+        # Only treat as global-year header when values are clearly not years.
+        if not looks_like_year_header or _is_year_like_values(id_values):
+            continue
+
+        match = re.search(r'(19|20)\d{2}(?:\s*[-/]\s*(19|20)\d{2})?', id_col_label)
+        if not match:
+            continue
+
+        global_year_value = re.sub(r'\s+', '', match.group(0)).replace('/', '-')
+        break
+
     # Infer dimension name from common prefixes in measured columns.
     prefix_counts = {}
     split_map = {}
@@ -1543,8 +1693,9 @@ def _normalize_wide_metrics_to_long(df, lang='fr'):
     dim_name = _semantic_label_for_key('dimension', lang)
     selected_prefix_norm = None
     if prefix_counts:
-        selected_prefix_norm = max(prefix_counts.items(), key=lambda kv: kv[1])[0]
-        if prefix_counts[selected_prefix_norm] >= 2:
+        candidate_prefix_norm = max(prefix_counts.items(), key=lambda kv: kv[1])[0]
+        if prefix_counts[candidate_prefix_norm] >= 2:
+            selected_prefix_norm = candidate_prefix_norm
             # Keep original-case prefix from first matching column.
             for c in measure_cols:
                 pref_suf = split_map.get(c)
@@ -1575,6 +1726,8 @@ def _normalize_wide_metrics_to_long(df, lang='fr'):
                 modality = mcol
 
             rec = dict(base)
+            if global_year_value and year_col_name not in rec:
+                rec[year_col_name] = global_year_value
             rec[dim_name] = modality
             rec[_semantic_label_for_key('value', lang)] = int(num) if float(num).is_integer() else num
             records.append(rec)
@@ -1583,7 +1736,11 @@ def _normalize_wide_metrics_to_long(df, lang='fr'):
         return None
 
     long_df = pd.DataFrame(records)
-    ordered_cols = [*id_cols, dim_name, _semantic_label_for_key('value', lang)]
+    ordered_cols = list(id_cols)
+    if global_year_value and year_col_name in long_df.columns and year_col_name not in ordered_cols:
+        insert_at = 1 if ordered_cols else 0
+        ordered_cols.insert(insert_at, year_col_name)
+    ordered_cols.extend([dim_name, _semantic_label_for_key('value', lang)])
     ordered_cols = [c for c in ordered_cols if c in long_df.columns]
     long_df = long_df[ordered_cols]
     return long_df
@@ -1619,6 +1776,7 @@ def _normalize_import_dataframe(excel_file, use_ai=True):
 
     df = df.fillna('')
     df.columns = [str(c or '').strip() for c in df.columns]
+    df = _apply_province_order_to_dataframe(df)
     return df, warnings
 
 
@@ -1669,22 +1827,70 @@ def _pick_value_column(df):
     return best_col
 
 
-def _build_bilingual_payload(df_fr, df_ar, df_en=None):
+def _select_best_matching_value_column(df_target, ref_numbers, preferred_col=None):
+    """Pick target value column that best matches reference numeric distribution."""
+    cols = [str(c) for c in df_target.columns]
+    if not cols:
+        return preferred_col
+
+    ref_list = [round(float(v), 9) for v in (ref_numbers or []) if v is not None]
+    if not ref_list:
+        return preferred_col or _pick_value_column(df_target)
+    ref_counter = Counter(ref_list)
+    ref_len = len(ref_list)
+
+    candidates = []
+    if preferred_col in cols:
+        candidates.append(preferred_col)
+    for c in cols:
+        if c not in candidates:
+            candidates.append(c)
+
+    best_col = preferred_col if preferred_col in cols else None
+    best_score = -1.0
+
+    for col in candidates:
+        parsed = [_parse_number(v) for v in df_target[col].tolist()]
+        nums = [round(float(v), 9) for v in parsed if v is not None]
+        if not nums:
+            continue
+
+        target_counter = Counter(nums)
+        overlap = sum((ref_counter & target_counter).values())
+        denom = float(max(ref_len, len(nums)))
+        score = overlap / denom if denom > 0 else 0.0
+
+        # Small semantic preference when scores are tied.
+        if _semantic_key_from_label(col) == 'value':
+            score += 1e-6
+
+        if score > best_score:
+            best_score = score
+            best_col = col
+
+    return best_col or preferred_col or _pick_value_column(df_target)
+
+
+def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, source_cols_en=None):
     """
     Build canonical bilingual dataset from two aligned FR/AR analytical tables.
     Returns: payload, validation_report
     """
     cols_fr = [str(c) for c in df_fr.columns]
-    cols_ar = [str(c) for c in df_ar.columns]
-    cols_en = [str(c) for c in df_en.columns] if df_en is not None else []
+    cols_ar_aligned = [str(c) for c in df_ar.columns]
+    cols_en_aligned = [str(c) for c in df_en.columns] if df_en is not None else []
+
+    # Keep original uploaded headers for labels when available.
+    cols_ar_labels = [str(c) for c in (source_cols_ar or cols_ar_aligned)]
+    cols_en_labels = [str(c) for c in (source_cols_en or cols_en_aligned)] if df_en is not None else []
 
     report = {
         'rows_fr': int(len(df_fr)),
         'rows_ar': int(len(df_ar)),
         'rows_en': int(len(df_en)) if df_en is not None else 0,
         'cols_fr': int(len(cols_fr)),
-        'cols_ar': int(len(cols_ar)),
-        'cols_en': int(len(cols_en)) if cols_en else 0,
+        'cols_ar': int(len(cols_ar_aligned)),
+        'cols_en': int(len(cols_en_aligned)) if cols_en_aligned else 0,
         'value_mismatches': 0,
         'matched': False,
         'errors': [],
@@ -1698,7 +1904,7 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
         report['errors'].append('Le nombre de lignes FR/AR est different.')
         return None, report
 
-    if len(cols_fr) != len(cols_ar):
+    if len(cols_fr) != len(cols_ar_aligned):
         report['errors'].append('Le nombre de colonnes FR/AR est different.')
         return None, report
 
@@ -1706,7 +1912,7 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
         if len(df_fr) != len(df_en):
             report['errors'].append('Le nombre de lignes FR/EN est different.')
             return None, report
-        if len(cols_fr) != len(cols_en):
+        if len(cols_fr) != len(cols_en_aligned):
             report['errors'].append('Le nombre de colonnes FR/EN est different.')
             return None, report
 
@@ -1716,49 +1922,104 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
         return None, report
 
     value_col_idx = cols_fr.index(value_col_fr)
-    value_col_ar = cols_ar[value_col_idx]
+    value_col_ar = _pick_value_column(df_ar)
+    fr_numbers_ref = [
+        _parse_number(df_fr.iloc[ridx, value_col_idx])
+        for ridx in range(len(df_fr))
+    ]
+    fallback_ar_col = cols_ar_aligned[value_col_idx] if value_col_idx < len(cols_ar_aligned) else None
+    value_col_ar = _select_best_matching_value_column(
+        df_ar,
+        fr_numbers_ref,
+        preferred_col=value_col_ar or fallback_ar_col,
+    )
+    if not value_col_ar:
+        report['errors'].append('Impossible de detecter la colonne de valeur dans le fichier AR.')
+        return None, report
+    value_col_idx_ar = cols_ar_aligned.index(value_col_ar)
 
     mismatches = []
     for ridx in range(len(df_fr)):
         fr_num = _parse_number(df_fr.iloc[ridx, value_col_idx])
-        ar_num = _parse_number(df_ar.iloc[ridx, value_col_idx])
+        ar_num = _parse_number(df_ar.iloc[ridx, value_col_idx_ar])
         if fr_num is None and ar_num is None:
             continue
         if fr_num is None or ar_num is None:
-            mismatches.append({'row': ridx + 1, 'fr': df_fr.iloc[ridx, value_col_idx], 'ar': df_ar.iloc[ridx, value_col_idx]})
+            mismatches.append({'row': ridx + 1, 'fr': df_fr.iloc[ridx, value_col_idx], 'ar': df_ar.iloc[ridx, value_col_idx_ar]})
             continue
         if abs(float(fr_num) - float(ar_num)) > 1e-9:
             mismatches.append({'row': ridx + 1, 'fr': fr_num, 'ar': ar_num})
 
     report['value_mismatches'] = len(mismatches)
     if mismatches:
-        report['errors'].append('Les valeurs numeriques FR/AR ne correspondent pas.')
-        report['mismatch_samples'] = mismatches[:20]
-        return None, report
+        fr_numbers = []
+        ar_numbers = []
+        for ridx in range(len(df_fr)):
+            fr_num = _parse_number(df_fr.iloc[ridx, value_col_idx])
+            ar_num = _parse_number(df_ar.iloc[ridx, value_col_idx_ar])
+            if fr_num is not None:
+                fr_numbers.append(round(float(fr_num), 9))
+            if ar_num is not None:
+                ar_numbers.append(round(float(ar_num), 9))
+
+        # AI normalization can reorder rows while keeping equivalent numeric content.
+        # Accept this case when FR/AR multisets are strictly identical.
+        if len(fr_numbers) == len(ar_numbers) and Counter(fr_numbers) == Counter(ar_numbers):
+            report['value_mismatch_samples'] = mismatches[:20]
+            report['value_alignment_mode'] = 'multiset'
+        else:
+            report['errors'].append('Les valeurs numeriques FR/AR ne correspondent pas.')
+            report['mismatch_samples'] = mismatches[:20]
+            return None, report
 
     if df_en is not None:
+        value_col_en = _pick_value_column(df_en)
+        fallback_en_col = cols_en_aligned[value_col_idx] if value_col_idx < len(cols_en_aligned) else None
+        value_col_en = _select_best_matching_value_column(
+            df_en,
+            fr_numbers_ref,
+            preferred_col=value_col_en or fallback_en_col,
+        )
+        if not value_col_en:
+            report['errors'].append('Impossible de detecter la colonne de valeur dans le fichier EN.')
+            return None, report
+        value_col_idx_en = cols_en_aligned.index(value_col_en)
         mismatches_en = []
         for ridx in range(len(df_fr)):
             fr_num = _parse_number(df_fr.iloc[ridx, value_col_idx])
-            en_num = _parse_number(df_en.iloc[ridx, value_col_idx])
+            en_num = _parse_number(df_en.iloc[ridx, value_col_idx_en])
             if fr_num is None and en_num is None:
                 continue
             if fr_num is None or en_num is None:
-                mismatches_en.append({'row': ridx + 1, 'fr': df_fr.iloc[ridx, value_col_idx], 'en': df_en.iloc[ridx, value_col_idx]})
+                mismatches_en.append({'row': ridx + 1, 'fr': df_fr.iloc[ridx, value_col_idx], 'en': df_en.iloc[ridx, value_col_idx_en]})
                 continue
             if abs(float(fr_num) - float(en_num)) > 1e-9:
                 mismatches_en.append({'row': ridx + 1, 'fr': fr_num, 'en': en_num})
         if mismatches_en:
-            report['errors'].append('Les valeurs numeriques FR/EN ne correspondent pas.')
-            report['mismatch_samples_en'] = mismatches_en[:20]
-            return None, report
+            fr_numbers = []
+            en_numbers = []
+            for ridx in range(len(df_fr)):
+                fr_num = _parse_number(df_fr.iloc[ridx, value_col_idx])
+                en_num = _parse_number(df_en.iloc[ridx, value_col_idx_en])
+                if fr_num is not None:
+                    fr_numbers.append(round(float(fr_num), 9))
+                if en_num is not None:
+                    en_numbers.append(round(float(en_num), 9))
+
+            if len(fr_numbers) == len(en_numbers) and Counter(fr_numbers) == Counter(en_numbers):
+                report['value_mismatch_samples_en'] = mismatches_en[:20]
+                report['value_alignment_mode_en'] = 'multiset'
+            else:
+                report['errors'].append('Les valeurs numeriques FR/EN ne correspondent pas.')
+                report['mismatch_samples_en'] = mismatches_en[:20]
+                return None, report
 
     canonical_columns = []
     column_labels = {}
     used_cols = set()
     for idx, fr_col in enumerate(cols_fr):
-        ar_col = cols_ar[idx]
-        en_col = cols_en[idx] if cols_en else fr_col
+        ar_col = cols_ar_labels[idx] if idx < len(cols_ar_labels) else fr_col
+        en_col = cols_en_labels[idx] if cols_en_labels and idx < len(cols_en_labels) else fr_col
         base_code = _safe_code_from_label(fr_col, f'col_{idx + 1}')
         code = base_code
         suffix = 2
@@ -1772,9 +2033,17 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
     value_col_code = canonical_columns[value_col_idx]
     value_labels = {}
     rows = []
+    rows_by_language = {
+        'fr': [],
+        'ar': [],
+        'en': [],
+    }
 
     for ridx in range(len(df_fr)):
         row_obj = {}
+        row_fr = {}
+        row_ar = {}
+        row_en = {}
         for cidx, col_code in enumerate(canonical_columns):
             fr_val = df_fr.iloc[ridx, cidx]
             ar_val = df_ar.iloc[ridx, cidx]
@@ -1782,7 +2051,11 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
 
             if cidx == value_col_idx:
                 parsed = _parse_number(fr_val)
-                row_obj[col_code] = parsed if parsed is not None else fr_val
+                value_out = parsed if parsed is not None else fr_val
+                row_obj[col_code] = value_out
+                row_fr[col_code] = value_out
+                row_ar[col_code] = value_out
+                row_en[col_code] = value_out
                 continue
 
             fr_txt = _cell_to_text(fr_val)
@@ -1802,8 +2075,17 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
                 'en': en_txt or fr_txt,
             }
             row_obj[col_code] = val_code
+            row_fr[col_code] = fr_txt
+            row_ar[col_code] = ar_txt or fr_txt
+            row_en[col_code] = en_txt or fr_txt
 
         rows.append(row_obj)
+        rows_by_language['fr'].append(row_fr)
+        rows_by_language['ar'].append(row_ar)
+        rows_by_language['en'].append(row_en)
+
+    if df_en is None:
+        rows_by_language.pop('en', None)
 
     report['matched'] = True
 
@@ -1814,16 +2096,17 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None):
         'column_labels': column_labels,
         'value_labels': value_labels,
         'rows': rows,
+        'rows_by_language': rows_by_language,
         'source_columns': {
             'fr': cols_fr,
-            'ar': cols_ar,
-            'en': cols_en,
+            'ar': cols_ar_labels,
+            'en': cols_en_labels,
         },
         'build_info': {
             'row_count': len(rows),
             'value_column_fr': value_col_fr,
             'value_column_ar': value_col_ar,
-            'value_column_en': cols_en[value_col_idx] if cols_en else value_col_fr,
+            'value_column_en': value_col_en if cols_en_aligned else value_col_fr,
         },
     }
     return payload, report
@@ -1888,6 +2171,12 @@ def _align_df_rows_to_columns(df_source, target_columns):
     return out
 
 
+def _align_df_columns_to_target(df_source, target_columns):
+    """Return a DataFrame aligned to target columns by positional index."""
+    rows = _align_df_rows_to_columns(df_source, target_columns)
+    return pd.DataFrame(rows, columns=[str(c) for c in target_columns])
+
+
 def _maybe_build_bilingual_payload(df_fr, file_ar, file_en=None, use_ai=True):
     if not file_ar:
         return None, None, [], []
@@ -1898,16 +2187,30 @@ def _maybe_build_bilingual_payload(df_fr, file_ar, file_en=None, use_ai=True):
         pass
 
     df_ar, warnings_ar = _normalize_import_dataframe(file_ar, use_ai=use_ai)
+    source_cols_ar = [str(c) for c in df_ar.columns]
+    target_columns = [str(c) for c in df_fr.columns]
+    if target_columns:
+        df_ar = _align_df_columns_to_target(df_ar, target_columns)
     warnings_en = []
     df_en = None
+    source_cols_en = []
     if file_en:
         try:
             file_en.seek(0)
         except Exception:
             pass
         df_en, warnings_en = _normalize_import_dataframe(file_en, use_ai=use_ai)
+        source_cols_en = [str(c) for c in df_en.columns]
+        if target_columns:
+            df_en = _align_df_columns_to_target(df_en, target_columns)
 
-    payload, report = _build_bilingual_payload(df_fr, df_ar, df_en=df_en)
+    payload, report = _build_bilingual_payload(
+        df_fr,
+        df_ar,
+        df_en=df_en,
+        source_cols_ar=source_cols_ar,
+        source_cols_en=source_cols_en,
+    )
     return payload, report, warnings_ar, warnings_en
 
 
@@ -3910,10 +4213,10 @@ L'équipe HCP
             logger.exception('Erreur création utilisateur')
             if 'send' in str(e).lower() or 'smtp' in str(e).lower() or 'email' in str(e).lower():
                 return Response(
-                    {'error': f"Impossible d'envoyer l'email d'identifiants: {str(e)}"},
+                    {'error': "Impossible d'envoyer l'email d'identifiants. Vérifiez la configuration email serveur."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': _public_error_message("Erreur lors de la création utilisateur.")}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=False, methods=['post'])
     def create_request(self, request):
@@ -3943,7 +4246,7 @@ L'équipe HCP
             return Response(serializer.data, status=status.HTTP_201_CREATED)
         except Exception as e:
             logger.exception('Erreur création demande')
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': _public_error_message("Erreur lors de la création de la demande.")}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['patch'])
     def update_statut(self, request, pk=None):
@@ -4016,7 +4319,7 @@ L'équipe HCP
             return Response(serializer.data, status=status.HTTP_200_OK)
         except Exception as e:
             logger.exception('Erreur mise à jour demande')
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': _public_error_message("Erreur lors de la mise à jour de la demande.")}, status=status.HTTP_400_BAD_REQUEST)
     
     @action(detail=True, methods=['post'])
     def reset_password(self, request, pk=None):
@@ -4068,7 +4371,7 @@ L'équipe HCP
                 user.password = old_password_hash
                 user.save(update_fields=['password'])
                 return Response(
-                    {'error': f"Réinitialisation annulée: impossible d'envoyer l'email ({str(e)})"},
+                    {'error': "Réinitialisation annulée: impossible d'envoyer l'email."},
                     status=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 )
             
@@ -4078,7 +4381,7 @@ L'équipe HCP
             )
         except Exception as e:
             logger.exception('Erreur réinitialisation mot de passe')
-            return Response({'error': str(e)}, status=status.HTTP_400_BAD_REQUEST)
+            return Response({'error': _public_error_message("Erreur lors de la réinitialisation du mot de passe.")}, status=status.HTTP_400_BAD_REQUEST)
 
 
 class PublicThemeViewSet(viewsets.ReadOnlyModelViewSet):

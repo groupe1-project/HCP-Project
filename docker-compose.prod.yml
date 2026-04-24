@@ -1,0 +1,105 @@
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: hcp_db_prod
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pg_data_prod:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER} -d ${POSTGRES_DB}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  backend:
+    build:
+      context: .
+      dockerfile: Dockerfile.backend
+    container_name: hcp_backend_prod
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      ollama:
+        condition: service_started
+    environment:
+      DJANGO_DEBUG: "false"
+      DJANGO_SECRET_KEY: ${DJANGO_SECRET_KEY:?DJANGO_SECRET_KEY is required}
+      DJANGO_ALLOWED_HOSTS: ${DJANGO_ALLOWED_HOSTS:?DJANGO_ALLOWED_HOSTS is required}
+      POSTGRES_DB: ${POSTGRES_DB:?POSTGRES_DB is required}
+      POSTGRES_USER: ${POSTGRES_USER:?POSTGRES_USER is required}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      POSTGRES_HOST: db
+      POSTGRES_PORT: "5432"
+      DJANGO_CORS_ALLOWED_ORIGINS: ${DJANGO_CORS_ALLOWED_ORIGINS:?DJANGO_CORS_ALLOWED_ORIGINS is required}
+      DJANGO_CSRF_TRUSTED_ORIGINS: ${DJANGO_CSRF_TRUSTED_ORIGINS:?DJANGO_CSRF_TRUSTED_ORIGINS is required}
+      DJANGO_AUTH_TOKEN_COOKIE_SECURE: "true"
+      DJANGO_SESSION_COOKIE_SAMESITE: "Lax"
+      DJANGO_CSRF_COOKIE_SAMESITE: "Lax"
+      DJANGO_CORS_ALLOW_CREDENTIALS: "true"
+      DJANGO_CSP_ENABLED: "true"
+      DJANGO_CSP_REPORT_ONLY: "false"
+      DJANGO_SECURE_SSL_REDIRECT: "true"
+      DJANGO_SESSION_COOKIE_SECURE: "true"
+      DJANGO_CSRF_COOKIE_SECURE: "true"
+      DJANGO_SECURE_HSTS_SECONDS: "31536000"
+      DJANGO_SECURE_HSTS_INCLUDE_SUBDOMAINS: "true"
+      DJANGO_SECURE_HSTS_PRELOAD: "true"
+      DJANGO_AUTH_COOKIE_REQUIRE_CSRF: "true"
+      DJANGO_EXPOSE_RESET_CODE_IN_RESPONSE: "false"
+      HEALTH_EXPOSE_INTERNAL_STATUS: "false"
+      DJANGO_EMAIL_BACKEND: ${DJANGO_EMAIL_BACKEND:-django.core.mail.backends.smtp.EmailBackend}
+      DJANGO_EMAIL_HOST: ${DJANGO_EMAIL_HOST:-smtp.gmail.com}
+      DJANGO_EMAIL_PORT: ${DJANGO_EMAIL_PORT:-587}
+      DJANGO_EMAIL_USE_TLS: ${DJANGO_EMAIL_USE_TLS:-true}
+      DJANGO_EMAIL_HOST_USER: ${DJANGO_EMAIL_HOST_USER:-}
+      DJANGO_EMAIL_HOST_PASSWORD: ${DJANGO_EMAIL_HOST_PASSWORD:-}
+      DJANGO_DEFAULT_FROM_EMAIL: ${DJANGO_DEFAULT_FROM_EMAIL:-noreply@hcp.ma}
+      AI_FEATURES_ENABLED: ${AI_FEATURES_ENABLED:-true}
+      OLLAMA_ENABLED: ${OLLAMA_ENABLED:-true}
+      OLLAMA_BASE_URL: ${OLLAMA_BASE_URL:-http://ollama:11434}
+      OLLAMA_MODEL: ${OLLAMA_MODEL:-qwen2.5:7b-instruct}
+      ASSISTANT_PREFER_OLLAMA: ${ASSISTANT_PREFER_OLLAMA:-true}
+      ASSISTANT_ALLOW_GEMINI_FALLBACK: ${ASSISTANT_ALLOW_GEMINI_FALLBACK:-false}
+      ASSISTANT_OLLAMA_MODEL: ${ASSISTANT_OLLAMA_MODEL:-qwen2.5:7b-instruct}
+    expose:
+      - "8000"
+    healthcheck:
+      test: ["CMD-SHELL", "python manage.py check --deploy --fail-level WARNING"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  frontend:
+    build:
+      context: .
+      dockerfile: Dockerfile.frontend
+    container_name: hcp_frontend_prod
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_started
+    ports:
+      - "${FRONTEND_BIND_ADDRESS:-127.0.0.1}:${FRONTEND_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O /dev/null http://127.0.0.1/ || exit 1"]
+      interval: 30s
+      timeout: 5s
+      retries: 5
+
+  ollama:
+    image: ollama/ollama:latest
+    container_name: hcp_ollama_prod
+    restart: unless-stopped
+    volumes:
+      - ollama_data_prod:/root/.ollama
+    expose:
+      - "11434"
+
+volumes:
+  pg_data_prod:
+  ollama_data_prod:

@@ -192,9 +192,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     confirmLabel: 'OK',
     cancelLabel: 'Annuler',
   });
-  const [toast, setToast] = useState(null);
   const popupResolverRef = React.useRef(null);
-  const toastTimeoutRef = React.useRef(null);
 
   const inferTone = (message = '') => {
     const text = String(message || '').toLowerCase();
@@ -239,15 +237,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
       border: 'border-[#B03372]',
       iconBg: 'bg-[#f4e3ed] text-[#7A0A4A]',
     };
-  };
-
-  const showToast = (message, type = 'info') => {
-    setToast({ message: String(message || ''), type });
-    if (toastTimeoutRef.current) window.clearTimeout(toastTimeoutRef.current);
-    toastTimeoutRef.current = window.setTimeout(() => {
-      setToast(null);
-      toastTimeoutRef.current = null;
-    }, 3200);
   };
 
   const alert = (message, title = 'Information') => {
@@ -384,9 +373,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
 
   useEffect(() => {
     return () => {
-      if (toastTimeoutRef.current) {
-        window.clearTimeout(toastTimeoutRef.current);
-      }
       if (popupResolverRef.current) {
         popupResolverRef.current(false);
         popupResolverRef.current = null;
@@ -425,7 +411,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     } catch {
       setSaisisseurSeenReviewMarkers({});
     }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isSaisisseur]);
 
   const getAssignmentAdminReviewNotification = (assignment) => {
@@ -2266,15 +2251,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
     return Number.isNaN(date.getTime()) ? value : date.toLocaleDateString();
   };
 
-  const formatWorkflowActionLabel = (action) => {
-    const key = String(action || '').toLowerCase();
-    if (key === 'submit') return 'Soumission';
-    if (key === 'approve') return 'Validation admin';
-    if (key === 'reject') return 'Correction demandee';
-    if (key === 'draft_save') return 'Brouillon enregistre';
-    return action || 'Evenement';
-  };
-
   const computeTableCompletionScore = (rows, columns) => {
     if (!Array.isArray(rows) || rows.length === 0) return 0;
     const cols = Array.isArray(columns) && columns.length > 0
@@ -2308,7 +2284,7 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
   const normalizeMetaLabel = (key) => {
     const base = String(key || '')
       .replace(/_(ar|en)$/i, '')
-      .replace(/[_\-]+/g, ' ')
+      .replace(/[_-]+/g, ' ')
       .trim();
     if (!base) return 'Champ';
     return base.charAt(0).toUpperCase() + base.slice(1);
@@ -3315,16 +3291,6 @@ const AdministratorsPage = ({ isSaisisseur = false }) => {
                 {popup.confirmLabel}
               </button>
             </div>
-          </div>
-        </div>
-      )}
-
-      {toast && (
-        <div className={`fixed bottom-6 right-6 z-[13000] max-w-[90vw] rounded-xl border ${getToneUi(toast.type).border} bg-white shadow-[0_16px_32px_rgba(122,10,74,0.22)] overflow-hidden`}>
-          <div className={`h-1.5 bg-gradient-to-r ${getToneUi(toast.type).header}`} />
-          <div className="px-4 py-3 text-sm font-medium text-[#4d1734] flex items-center gap-2">
-            <span className={`w-6 h-6 rounded-full flex items-center justify-center text-xs font-black ${getToneUi(toast.type).iconBg}`}>{getToneUi(toast.type).icon}</span>
-            <span>{toast.message}</span>
           </div>
         </div>
       )}

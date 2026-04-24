@@ -132,3 +132,33 @@ Option B (image prebuild):
   - `DJANGO_DEBUG=false`
   - politique CSP stricte
   - gestion de sauvegarde DB
+
+## 9. Mode production securise (nouveau)
+
+Un fichier dedie a ete ajoute: `docker-compose.prod.yml`.
+
+### Preparation
+
+1. Copier `.env.production.example` vers `.env.production`
+2. Renseigner des valeurs reelles (secret Django, domaine, credentials DB)
+
+### Demarrage production
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml up --build -d
+```
+
+### Arret production
+
+```bash
+docker compose --env-file .env.production -f docker-compose.prod.yml down
+```
+
+### Ce qui est durci dans ce mode
+
+- `DJANGO_DEBUG=false`
+- CSP enforcee (`DJANGO_CSP_REPORT_ONLY=false`)
+- Cookies securises + CSRF requis
+- HSTS + redirection HTTPS active
+- endpoint `/health/` sans details internes
+- variables sensibles sorties du compose vers `.env.production`

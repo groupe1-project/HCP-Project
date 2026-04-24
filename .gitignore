@@ -1,5 +1,6 @@
 # Local secrets
 .env
+.env.local
 
 # Python cache
 __pycache__/
@@ -17,3 +18,6 @@ db.sqlite3
 
 # Generated delivery artifacts
 dist_delivery/
+
+# Local TLS certs for intranet HTTPS
+docker/nginx/certs/
