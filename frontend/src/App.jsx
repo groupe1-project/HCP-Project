@@ -158,7 +158,7 @@ const LangSelector = ({ t, i18n }) => {
   );
 };
 
-function App({ forceVisitor = false }) {
+export function App({ forceVisitor = false }) {
   const { t, i18n } = useTranslation();
   const createMetadataState = () => ({
     definition_text: '',
@@ -4064,19 +4064,19 @@ function App({ forceVisitor = false }) {
 
     const displayGroupCols = groupCols;
 
-    const uniquePeriods = Array.from(new Set(rows.map(r => String(r?.[periodCol] ?? '')).filter(v => v !== '')));
-    const sortedPeriods = uniquePeriods.sort((a, b) => {
-      const na = Number(String(a).replace(/,/g, '.'));
-      const nb = Number(String(b).replace(/,/g, '.'));
-      const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
-      if (bothNumeric) return na - nb;
-      return String(a).localeCompare(String(b), localeCode, { numeric: true, sensitivity: 'base' });
+    const seenPeriods = new Set();
+    const sortedPeriods = [];
+    rows.forEach((r) => {
+      const periodVal = String(r?.[periodCol] ?? '');
+      if (!periodVal || seenPeriods.has(periodVal)) return;
+      seenPeriods.add(periodVal);
+      sortedPeriods.push(periodVal);
     });
 
     const valueLooksRate = /(%|taux|ratio|pourcentage|ظ†ط³ط¨ط©)/i.test(String(valueCol).toLowerCase());
     const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
 
-    const byGroup = {};
+    const byGroup = new Map();
     rows.forEach(row => {
       const dimensions = {};
       displayGroupCols.forEach(col => {
@@ -4086,24 +4086,25 @@ function App({ forceVisitor = false }) {
       const periodVal = String(row?.[periodCol] ?? '');
       if (!periodVal) return;
 
-      if (!byGroup[groupKey]) {
+      if (!byGroup.has(groupKey)) {
         const isTotal = displayGroupCols.some(col => isTotalToken(dimensions[col]));
-        byGroup[groupKey] = { key: groupKey, dimensions, values: {}, stats: {}, isTotal };
+        byGroup.set(groupKey, { key: groupKey, dimensions, values: {}, stats: {}, isTotal });
       }
+      const groupEntry = byGroup.get(groupKey);
 
       const rawVal = row?.[valueCol];
       const num = Number(String(rawVal ?? '').replace(/,/g, '.'));
       if (!Number.isNaN(num)) {
-        const prev = byGroup[groupKey].stats[periodVal] || { sum: 0, count: 0 };
+        const prev = groupEntry.stats[periodVal] || { sum: 0, count: 0 };
         prev.sum += num;
         prev.count += 1;
-        byGroup[groupKey].stats[periodVal] = prev;
-      } else if (byGroup[groupKey].values[periodVal] === undefined) {
-        byGroup[groupKey].values[periodVal] = rawVal ?? '';
+        groupEntry.stats[periodVal] = prev;
+      } else if (groupEntry.values[periodVal] === undefined) {
+        groupEntry.values[periodVal] = rawVal ?? '';
       }
     });
 
-    const rowsOut = Object.values(byGroup).map(item => {
+    const rowsOut = Array.from(byGroup.values()).map(item => {
       const values = { ...(item.values || {}) };
       Object.entries(item.stats || {}).forEach(([period, st]) => {
         const sum = Number(st?.sum || 0);
@@ -4111,18 +4112,6 @@ function App({ forceVisitor = false }) {
         values[period] = shouldSum ? sum : (count > 0 ? (sum / count) : '');
       });
       return { ...item, values };
-    }).sort((a, b) => {
-      for (const col of displayGroupCols) {
-        const av = String(a?.dimensions?.[col] ?? '');
-        const bv = String(b?.dimensions?.[col] ?? '');
-        const ai = isTotalToken(av);
-        const bi = isTotalToken(bv);
-        if (ai && !bi) return -1;
-        if (!ai && bi) return 1;
-        const cmp = av.localeCompare(bv, localeCode, { sensitivity: 'base' });
-        if (cmp !== 0) return cmp;
-      }
-      return 0;
     });
 
     return {
@@ -4175,16 +4164,6 @@ function App({ forceVisitor = false }) {
     const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
     const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble|المجموع|إجمالي)/i.test(String(val ?? '').toLowerCase());
 
-    const compareSmart = (a, b) => {
-      const sa = String(a ?? '');
-      const sb = String(b ?? '');
-      const na = Number(sa.replace(/,/g, '.'));
-      const nb = Number(sb.replace(/,/g, '.'));
-      const bothNumeric = !Number.isNaN(na) && !Number.isNaN(nb);
-      if (bothNumeric) return na - nb;
-      return sa.localeCompare(sb, localeCode, { numeric: true, sensitivity: 'base' });
-    };
-
     const leavesMap = new Map();
     const rowMap = new Map();
     const statsMap = new Map();
@@ -4219,13 +4198,7 @@ function App({ forceVisitor = false }) {
       statsMap.set(cellKey, prev);
     });
 
-    const leaves = Array.from(leavesMap.values()).sort((a, b) => {
-      for (let i = 0; i < hierarchyCols.length; i++) {
-        const cmp = compareSmart(a.values[i], b.values[i]);
-        if (cmp !== 0) return cmp;
-      }
-      return 0;
-    });
+    const leaves = Array.from(leavesMap.values());
 
     const rowsOut = Array.from(rowMap.values()).map(r => {
       const cells = {};
@@ -4240,14 +4213,6 @@ function App({ forceVisitor = false }) {
         }
       });
       return { ...r, cells };
-    }).sort((a, b) => {
-      if (a.isTotal && !b.isTotal) return -1;
-      if (!a.isTotal && b.isTotal) return 1;
-      for (const col of rowCols) {
-        const cmp = compareSmart(a?.dimensions?.[col], b?.dimensions?.[col]);
-        if (cmp !== 0) return cmp;
-      }
-      return 0;
     });
 
     const headerRows = hierarchyCols.map((col, level) => {
@@ -4286,6 +4251,16 @@ function App({ forceVisitor = false }) {
 
   const canVisitorVerticalView = Boolean(isVisitor && visitorVerticalMatrix?.canVertical);
   const activeVisitorView = (canVisitorVerticalView && visitorTableView === 'vertical') ? 'vertical' : 'horizontal';
+  const visitorHorizontalPeriodCount = Math.max((visitorMatrix?.periods || []).length, 1);
+  const visitorHorizontalGroupCount = (visitorMatrix?.displayGroupCols || []).length;
+  const visitorHorizontalTotalColumns = visitorHorizontalPeriodCount + visitorHorizontalGroupCount;
+  const visitorHorizontalContainerClass = !isVisitor || activeVisitorView === 'vertical' || !visitorMatrix?.canPivot
+    ? 'w-full'
+    : (visitorHorizontalTotalColumns <= 2
+      ? 'w-[64%] max-w-full mx-auto md:min-w-[520px]'
+      : (visitorHorizontalTotalColumns === 3
+        ? 'w-[86%] max-w-full mx-auto md:min-w-[760px]'
+        : 'w-full'));
 
   // Gestion des graphiques
   const handleAddOrUpdateChart = async () => {
@@ -6959,7 +6934,7 @@ function App({ forceVisitor = false }) {
                   </div>
                 )}
 
-                <div className={`${isVisitor ? 'border-2 border-[#A85A84] rounded-xl bg-white shadow-[0_2px_12px_rgba(106,31,82,0.14)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} overflow-auto max-h-[28rem]`}>
+                <div className={`${isVisitor ? 'border-2 border-[#A85A84] rounded-xl bg-white shadow-[0_2px_12px_rgba(106,31,82,0.14)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} ${visitorHorizontalContainerClass} overflow-auto max-h-[28rem]`}>
                   {isVisitor && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical ? (
                     <>
                       <div className="sticky top-0 z-20 bg-white border-b border-[#CCB47F] px-4 py-2 text-xs text-[#3F2A1F] font-medium">
@@ -7085,17 +7060,33 @@ function App({ forceVisitor = false }) {
                           </>
                         )}
                       </div>
-                      <table className="w-full border-collapse text-base">
-                      <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
-                        <tr>
-                          {(visitorMatrix.displayGroupCols || []).map(col => (
-                            <th key={col} className="p-4 border-r border-[#7b1e5a] min-w-[170px] text-center uppercase tracking-wide font-bold text-base">{translateDataValue(col)}</th>
-                          ))}
-                          {visitorMatrix.periods.map((period, idx) => (
-                            <th key={period} className={`p-4 border-r border-[#7b1e5a] min-w-[110px] text-center font-bold text-base ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
-                          ))}
-                        </tr>
-                      </thead>
+                      {(() => {
+                        const periodCount = Math.max((visitorMatrix.periods || []).length, 1);
+                        const groupColsLayout = visitorMatrix.displayGroupCols || [];
+                        const totalCols = periodCount + groupColsLayout.length;
+                        const denseLayout = totalCols >= 4;
+                        const periodWidthClass = denseLayout
+                          ? 'min-w-[95px]'
+                          : (periodCount === 1 ? 'min-w-[160px]' : 'min-w-[120px]');
+                        const groupWidthClass = denseLayout ? 'min-w-[120px]' : 'min-w-[150px]';
+                        // Merge repeated values across all grouping columns (not only Province/Milieu).
+                        // This keeps behavior consistent for any column order configured in visitor view.
+                        const mergeGroupColumnCount = groupColsLayout.length;
+
+                        return (
+                          <table className={`w-full ${denseLayout ? 'table-auto text-base' : 'table-fixed text-lg'} border-collapse`}>
+                          <thead className="sticky top-[33px] z-10 bg-gradient-to-r from-[#7A0A4A] to-[#B03372] text-white border-b border-[#7b1e5a] shadow-[inset_0_-1px_0_0_rgba(123,30,90,0.55)]">
+                            <tr>
+                              {groupColsLayout.map((col, colIndex) => (
+                                <th key={col} className={`px-2 py-2 border-r border-[#7b1e5a] text-center uppercase tracking-wide font-bold ${denseLayout ? 'text-base' : 'text-lg'} ${groupWidthClass}`}>
+                                  {translateDataValue(col)}
+                                </th>
+                              ))}
+                              {visitorMatrix.periods.map((period, idx) => (
+                                <th key={period} className={`px-2 py-2 border-r border-[#7b1e5a] ${periodWidthClass} text-center font-bold ${denseLayout ? 'text-base' : 'text-lg'} ${idx === visitorMatrix.periods.length - 1 ? 'bg-[#8a2f67]' : ''}`}>{period}</th>
+                              ))}
+                            </tr>
+                          </thead>
                       <tbody>
                         {(() => {
                           const displayedRows = showAll ? (visitorMatrix.rows || []) : (visitorMatrix.rows || []).slice(0, 8);
@@ -7127,17 +7118,6 @@ function App({ forceVisitor = false }) {
                               while (j < rowCount) {
                                 const sameVal = String(displayedRows[j]?.dimensions?.[col] ?? '—') === curVal;
                                 if (!sameVal) break;
-                                let samePrefix = true;
-                                for (let p = 0; p < colIndex; p++) {
-                                  const prevCol = groupCols[p];
-                                  const leftAtI = String(displayedRows[i]?.dimensions?.[prevCol] ?? '—');
-                                  const leftAtJ = String(displayedRows[j]?.dimensions?.[prevCol] ?? '—');
-                                  if (leftAtI !== leftAtJ) {
-                                    samePrefix = false;
-                                    break;
-                                  }
-                                }
-                                if (!samePrefix) break;
                                 j += 1;
                               }
                               spans[col][i] = j - i;
@@ -7149,29 +7129,30 @@ function App({ forceVisitor = false }) {
                           return displayedRows.map((row, i) => (
                             <tr key={row.key || i} className={`${row.isTotal ? 'bg-[#f5f5f5] font-semibold' : (i % 2 === 0 ? 'bg-white' : 'bg-[#fafafa]')} border-b border-[#CCB47F]`}>
                               {groupCols.map((col, colIndex) => {
-                                const span = spans[col][i] || 0;
-                                if (span === 0) return null;
+                                const computedSpan = spans[col][i] || 0;
+                                const mergeThisCol = colIndex < mergeGroupColumnCount;
+                                const span = mergeThisCol ? computedSpan : 1;
+                                if (mergeThisCol && span === 0) return null;
                                 const value = String(row?.dimensions?.[col] ?? '—');
-                                const isTotalCell = /(total|totale|tous|toutes|tout|ensemble)/i.test(value.toLowerCase());
-                                const isMergedCell = span > 1;
-                                const mergedSizeClass = span >= 10 ? 'text-2xl leading-tight' : (span >= 4 ? 'text-xl leading-tight' : (span >= 2 ? 'text-lg' : ''));
+                                const isMergedCell = mergeThisCol && span > 1;
+                                const mergedLabelSizeClass = denseLayout ? 'text-lg md:text-xl' : 'text-xl';
+                                const regularLabelSizeClass = denseLayout ? 'text-base' : 'text-lg';
                                 return (
-                                  <td key={`${row.key}-${col}`} rowSpan={span} className={`p-4 border-r border-[#D6BE8C] text-[#3F2A1F] ${isMergedCell ? 'text-center align-middle' : 'text-left align-top'}`}>
-                                    <span className={`font-semibold ${isMergedCell ? mergedSizeClass : ''}`}>{translateDataValue(value)}</span>
-                                    {isTotalCell && colIndex === groupCols.length - 1 && (
-                                      <span className="ml-2 inline-block text-[10px] px-2 py-0.5 rounded-full bg-[#7A0A4A] text-white uppercase tracking-wide">{t('total')}</span>
-                                    )}
+                                  <td key={`${row.key}-${col}`} rowSpan={span > 1 ? span : undefined} className={`px-2 py-1.5 border-r border-[#D6BE8C] text-[#3F2A1F] ${isMergedCell ? 'text-center align-middle' : 'text-center align-middle'}`}>
+                                    <span className={`font-semibold leading-tight ${isMergedCell ? mergedLabelSizeClass : regularLabelSizeClass}`}>{translateDataValue(value)}</span>
                                   </td>
                                 );
                               })}
                               {visitorMatrix.periods.map(period => (
-                                  <td key={`${row.key}-${period}`} className={`p-4 border-r border-[#DCC897] text-center align-middle text-[#4A062E] text-base tabular-nums ${period === latestPeriod ? 'bg-[#f7f7f7] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
+                                  <td key={`${row.key}-${period}`} className={`px-2 py-1.5 border-r border-[#DCC897] text-center align-middle text-[#4A062E] ${denseLayout ? 'text-base' : 'text-lg'} tabular-nums ${period === latestPeriod ? 'bg-[#f7f7f7] font-semibold' : ''}`}>{formatValue(row.values?.[period])}</td>
                               ))}
                             </tr>
                           ));
                         })()}
                       </tbody>
                     </table>
+                        );
+                      })()}
                     </>
                   ) : (
                     <table className="w-full border-collapse text-base">
@@ -7205,18 +7186,6 @@ function App({ forceVisitor = false }) {
                               while (j < rowCount) {
                                 const sameVal = String((displayedRows[j] && displayedRows[j][col]) ?? '') === curVal;
                                 if (!sameVal) break;
-                                let samePrefix = true;
-                                for (let p = 0; p < colIndex; p++) {
-                                  const prevCol = visibleColumnsForRender[p];
-                                  if (isValueColumn(prevCol)) continue;
-                                  const leftAtI = String((displayedRows[i] && displayedRows[i][prevCol]) ?? '');
-                                  const leftAtJ = String((displayedRows[j] && displayedRows[j][prevCol]) ?? '');
-                                  if (leftAtI !== leftAtJ) {
-                                    samePrefix = false;
-                                    break;
-                                  }
-                                }
-                                if (!samePrefix) break;
                                 j += 1;
                               }
                               spans[col][i] = j - i;

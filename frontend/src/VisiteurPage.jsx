@@ -1,5 +1,5 @@
 import React from 'react';
-import App from './App';
+import { App } from './App';
 
 export default function VisiteurPage() {
   // Le composant visiteur réutilise l'`App` en mode visiteur.
