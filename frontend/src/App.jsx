@@ -1,4 +1,4 @@
-import React, { Suspense, lazy, useState, useEffect } from 'react';
+﻿import React, { Suspense, lazy, useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import axios from 'axios';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell, ScatterChart, Scatter, Legend } from 'recharts';
@@ -766,6 +766,30 @@ function App({ forceVisitor = false }) {
     .map((item) => getLocalizedColumnLabel(item, langOverride))
     .filter(Boolean);
 
+  const resolveConfiguredColumnsForRows = (configuredItems, rowColumns, langOverride = null) => {
+    const sourceCols = Array.isArray(rowColumns) ? rowColumns : [];
+    const sourceLookup = buildSourceColumnLookup(sourceCols);
+    const resolved = [];
+    const seen = new Set();
+
+    (configuredItems || []).forEach((item) => {
+      const localized = getLocalizedColumnLabel(item, langOverride);
+      const candidate = resolveSourceColumn(item, sourceLookup)
+        || resolveSourceColumn(localized, sourceLookup)
+        || resolveSourceColumn(getCanonicalColumnCode(item) || '', sourceLookup)
+        || (sourceCols.includes(localized) ? localized : '')
+        || localized
+        || String(item || '').trim();
+      if (!candidate) return;
+      const key = normalizeDataToken(candidate);
+      if (!key || seen.has(key)) return;
+      seen.add(key);
+      resolved.push(candidate);
+    });
+
+    return resolved;
+  };
+
   const parseVisitorDefaultsObject = (rawVal) => {
     if (rawVal === null || rawVal === undefined) return {};
     if (typeof rawVal === 'object') return rawVal || {};
@@ -882,6 +906,77 @@ function App({ forceVisitor = false }) {
     if (bilingualLabelLookup.valueColumnCode && canonical === bilingualLabelLookup.valueColumnCode) return true;
     const normalized = normalizeDataToken(canonical);
     return /(valeur|value|values|metric|mesure|measure|amount|count|nombre|effectif|montant|ratio|taux|pourcentage|percent|قيمة|القيمة|نسبة|المؤشر)/i.test(normalized);
+  };
+
+  const looksLikeYearValue = (value) => {
+    const raw = String(value ?? '').trim();
+    if (!raw) return false;
+    return /^(19|20)\d{2}$/.test(raw) || /^(19|20)\d{2}\s*[-/]\s*(19|20)\d{2}$/.test(raw);
+  };
+
+  const inferNumericValueColumn = (columns, rows) => {
+    const cols = Array.isArray(columns) ? columns : [];
+    const dataset = Array.isArray(rows) ? rows : [];
+    let best = null;
+
+    cols.forEach((col) => {
+      if (isPeriodColumnIdentifier(col)) return;
+
+      let nonEmpty = 0;
+      let numeric = 0;
+      dataset.forEach((row) => {
+        const raw = row?.[col];
+        if (raw === null || raw === undefined || String(raw).trim() === '') return;
+        nonEmpty += 1;
+        const n = Number(String(raw).replace(/,/g, '.').replace(/\s+/g, ''));
+        if (!Number.isNaN(n)) numeric += 1;
+      });
+
+      if (nonEmpty === 0) return;
+      const ratio = numeric / nonEmpty;
+      if (!best || ratio > best.ratio || (ratio === best.ratio && numeric > best.numeric)) {
+        best = { col, ratio, numeric, nonEmpty };
+      }
+    });
+
+    if (!best) return null;
+    if (best.numeric < 2) return null;
+    if (best.ratio < 0.5) return null;
+    return best.col;
+  };
+
+  const inferPeriodColumnFromValues = (columns, rows, excludedCol = null) => {
+    const cols = Array.isArray(columns) ? columns : [];
+    const dataset = Array.isArray(rows) ? rows : [];
+    let best = null;
+
+    cols.forEach((col) => {
+      if (excludedCol && normalizeDataToken(col) === normalizeDataToken(excludedCol)) return;
+      let nonEmpty = 0;
+      let yearLike = 0;
+      const uniqueVals = new Set();
+
+      dataset.forEach((row) => {
+        const raw = row?.[col];
+        if (raw === null || raw === undefined || String(raw).trim() === '') return;
+        nonEmpty += 1;
+        const txt = String(raw).trim();
+        uniqueVals.add(txt);
+        if (looksLikeYearValue(txt)) yearLike += 1;
+      });
+
+      if (nonEmpty === 0) return;
+      const ratio = yearLike / nonEmpty;
+      const score = ratio * 100 + Math.min(uniqueVals.size, 25);
+      if (!best || score > best.score) {
+        best = { col, ratio, uniqueCount: uniqueVals.size, score };
+      }
+    });
+
+    if (!best) return null;
+    if (best.ratio < 0.5) return null;
+    if (best.uniqueCount < 1) return null;
+    return best.col;
   };
 
   // Translate a data value (column name or cell value) from French → Arabic.
@@ -1108,6 +1203,18 @@ function App({ forceVisitor = false }) {
     const notes = parseAssignmentNotes(linkedAssignment.notes);
     const draftSubTheme = { ...subTheme };
     const draftI18nTables = (notes.tables_i18n && typeof notes.tables_i18n === 'object') ? notes.tables_i18n : {};
+    const draftI18nPayload = (notes.data_json_i18n_draft && typeof notes.data_json_i18n_draft === 'object')
+      ? notes.data_json_i18n_draft
+      : null;
+    const hasDraftI18nPayload = Boolean(
+      draftI18nPayload
+      && Array.isArray(draftI18nPayload.canonical_columns)
+      && draftI18nPayload.canonical_columns.length > 0
+      && (
+        (Array.isArray(draftI18nPayload.rows) && draftI18nPayload.rows.length > 0)
+        || (Array.isArray(draftI18nPayload?.rows_by_language?.fr) && draftI18nPayload.rows_by_language.fr.length > 0)
+      )
+    );
 
     const preferredDraftRows = (() => {
       if (Array.isArray(notes.tables) && notes.tables.length > 0) {
@@ -1125,10 +1232,17 @@ function App({ forceVisitor = false }) {
     if (Array.isArray(preferredDraftRows)) {
       draftSubTheme.data = preferredDraftRows;
       draftSubTheme.data_json = preferredDraftRows;
-      // In draft mode, always render from draft rows (not from persisted i18n payload)
-      // to avoid showing stale visitor/admin published tables with empty mapped cells.
-      draftSubTheme.data_is_bilingual = false;
-      draftSubTheme.data_json_i18n = {};
+      // Keep bilingual payload available in draft mode so AR/EN rendering and
+      // canonical column resolution still work while editing as saisisseur.
+      if (hasDraftI18nPayload) {
+        draftSubTheme.data_is_bilingual = true;
+        draftSubTheme.data_json_i18n = draftI18nPayload;
+      }
+    }
+
+    if (hasDraftI18nPayload) {
+      draftSubTheme.data_is_bilingual = true;
+      draftSubTheme.data_json_i18n = draftI18nPayload;
     }
 
     if (Array.isArray(notes.columns_order) && notes.columns_order.length > 0) {
@@ -1187,6 +1301,9 @@ function App({ forceVisitor = false }) {
       tables: tableRows || [],
       columns_order: tableColumns || [],
       charts: savedCharts || [],
+      data_json_i18n_draft: (selectedSubTheme?.data_json_i18n && typeof selectedSubTheme.data_json_i18n === 'object')
+        ? selectedSubTheme.data_json_i18n
+        : undefined,
       meta: {
         definition_text: selectedSubTheme?.definition_text || '',
         definition_text_ar: selectedSubTheme?.definition_text_ar || '',
@@ -3023,24 +3140,39 @@ function App({ forceVisitor = false }) {
   const executeClassicImport = async (file, fileAr = null, fileEn = null) => {
     if (!file) return;
     if (isSaisisseur) {
-      const imported = await readExcelRows(file);
-      if (!imported.columns.length) throw new Error('Le fichier importe est vide ou sans colonnes exploitables.');
-      const importedAr = fileAr ? await readExcelRows(fileAr) : null;
-      const importedEn = fileEn ? await readExcelRows(fileEn) : null;
-      const targetColumns = imported.columns;
-      const draftI18nTables = {
-        fr: imported.rows,
-      };
-      if (importedAr?.rows?.length) {
-        draftI18nTables.ar = mapRowsToTargetColumns(importedAr.rows, importedAr.columns, targetColumns);
-      }
-      if (importedEn?.rows?.length) {
-        draftI18nTables.en = mapRowsToTargetColumns(importedEn.rows, importedEn.columns, targetColumns);
-      }
-      await saveDraftAssignmentForSaisisseur({ tables: imported.rows, columns_order: targetColumns, tables_i18n: draftI18nTables }, 'En cours');
-      setEditTableColumns(imported.columns);
-      setEditTableRows(imported.rows);
-      alert('Import effectue en brouillon (saisisseur) avec gestion FR/AR/EN.');
+      const fd = new FormData();
+      fd.append('file', file);
+      if (fileAr) fd.append('file_ar', fileAr);
+      if (fileEn) fd.append('file_en', fileEn);
+      fd.append('free_schema', 'true');
+
+      const result = await axios.post(`${API_BASE}/sousthemes/${selectedSubTheme.id}/import-preview/`, fd);
+      const rows = Array.isArray(result?.data?.data) ? result.data.data : [];
+      const targetColumns = Array.isArray(result?.data?.columns_order) && result.data.columns_order.length > 0
+        ? result.data.columns_order
+        : (rows[0] ? Object.keys(rows[0]) : []);
+      if (!targetColumns.length) throw new Error('Impossible de déterminer les colonnes cibles après import classique.');
+
+      const draftI18nTables = (result?.data?.tables_i18n && typeof result.data.tables_i18n === 'object')
+        ? result.data.tables_i18n
+        : { fr: rows };
+      const draftI18nPayload = (result?.data?.data_json_i18n_preview && typeof result.data.data_json_i18n_preview === 'object')
+        ? result.data.data_json_i18n_preview
+        : undefined;
+
+      await saveDraftAssignmentForSaisisseur(
+        {
+          tables: rows,
+          columns_order: targetColumns,
+          tables_i18n: draftI18nTables,
+          data_json_i18n_draft: draftI18nPayload,
+        },
+        'En cours'
+      );
+      setEditTableColumns(targetColumns);
+      setEditTableRows(rows);
+      const warningText = formatWarningsForAlert(result?.data?.warnings);
+      alert(warningText ? `Import brouillon effectue\n${warningText}` : 'Import brouillon effectue.');
       return;
     }
 
@@ -3079,8 +3211,19 @@ function App({ forceVisitor = false }) {
       const draftI18nTables = (result?.data?.tables_i18n && typeof result.data.tables_i18n === 'object')
         ? result.data.tables_i18n
         : { fr: mappedRows };
+      const draftI18nPayload = (result?.data?.data_json_i18n_preview && typeof result.data.data_json_i18n_preview === 'object')
+        ? result.data.data_json_i18n_preview
+        : undefined;
 
-      await saveDraftAssignmentForSaisisseur({ tables: mappedRows, columns_order: targetColumns, tables_i18n: draftI18nTables }, 'En cours');
+      await saveDraftAssignmentForSaisisseur(
+        {
+          tables: mappedRows,
+          columns_order: targetColumns,
+          tables_i18n: draftI18nTables,
+          data_json_i18n_draft: draftI18nPayload,
+        },
+        'En cours'
+      );
       setEditTableColumns(targetColumns);
       setEditTableRows(mappedRows);
       const warningText = formatWarningsForAlert(result?.data?.warnings);
@@ -3269,20 +3412,20 @@ function App({ forceVisitor = false }) {
   const getExportSnapshot = () => {
     if (!selectedSubTheme) return null;
 
-    if (isVisitor && visitorMatrix?.canPivot) {
-      if (activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
-        const headers = [
-          ...(visitorVerticalMatrix.rowCols || []),
-          ...((visitorVerticalMatrix.leaves || []).map(leaf => (leaf.values || []).join(' / ')))
-        ];
-        const rows = (visitorVerticalMatrix.rows || []).map(row => {
-          const left = (visitorVerticalMatrix.rowCols || []).map(col => row?.dimensions?.[col] ?? '');
-          const right = (visitorVerticalMatrix.leaves || []).map(leaf => row?.cells?.[leaf.key] ?? '');
-          return [...left, ...right];
-        });
-        return { headers, rows, view: 'vertical' };
-      }
+    if (isVisitor && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
+      const headers = [
+        ...(visitorVerticalMatrix.rowCols || []),
+        ...((visitorVerticalMatrix.leaves || []).map(leaf => (leaf.values || []).join(' / ')))
+      ];
+      const rows = (visitorVerticalMatrix.rows || []).map(row => {
+        const left = (visitorVerticalMatrix.rowCols || []).map(col => row?.dimensions?.[col] ?? '');
+        const right = (visitorVerticalMatrix.leaves || []).map(leaf => row?.cells?.[leaf.key] ?? '');
+        return [...left, ...right];
+      });
+      return { headers, rows, view: 'vertical' };
+    }
 
+    if (isVisitor && visitorMatrix?.canPivot) {
       const headers = [
         ...(visitorMatrix.displayGroupCols || []),
         ...(visitorMatrix.periods || [])
@@ -3386,7 +3529,7 @@ function App({ forceVisitor = false }) {
 
     let finalHeaders = snapshot.headers;
 
-    if (isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
+    if (isVisitor && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
       const rowCols = visitorVerticalMatrix.rowCols || [];
       const leaves = visitorVerticalMatrix.leaves || [];
       const headerRows = visitorVerticalMatrix.headerRows || [];
@@ -3549,7 +3692,7 @@ function App({ forceVisitor = false }) {
 
     const headerStart = tableStartRow;
     const bodyStart = (() => {
-      if (isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
+      if (isVisitor && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical) {
         return tableStartRow + (visitorVerticalMatrix.headerRows || []).length;
       }
       return tableStartRow + 1;
@@ -3827,9 +3970,14 @@ function App({ forceVisitor = false }) {
           : rowBasedColumns;
 
     if (isVisitor) {
-      return (selectedSubTheme.visitor_visible_columns && selectedSubTheme.visitor_visible_columns.length)
-        ? localizeConfiguredColumns(selectedSubTheme.visitor_visible_columns)
-        : fallbackColumns;
+      const configuredVisitorColumns = Array.isArray(selectedSubTheme.visitor_visible_columns)
+        ? selectedSubTheme.visitor_visible_columns
+        : [];
+      if (configuredVisitorColumns.length > 0) {
+        const resolvedVisitorColumns = resolveConfiguredColumnsForRows(configuredVisitorColumns, rowBasedColumns);
+        if (resolvedVisitorColumns.length > 0) return resolvedVisitorColumns;
+      }
+      return fallbackColumns;
     }
     if (isSaisisseur) {
       return rowBasedColumns.length > 0 ? rowBasedColumns : fallbackColumns;
@@ -3845,7 +3993,10 @@ function App({ forceVisitor = false }) {
     if (!selectedSubTheme) return [];
     if (isVisitor) {
       const raw = (selectedSubTheme.visitor_filters && selectedSubTheme.visitor_filters.length) ? selectedSubTheme.visitor_filters : (selectedSubTheme.filtres_disponibles || []);
-      return localizeConfiguredColumns(raw);
+      const rows = getTableRows(selectedSubTheme) || [];
+      const rowBasedColumns = rows[0] ? Object.keys(rows[0]) : [];
+      const resolvedFilters = resolveConfiguredColumnsForRows(raw, rowBasedColumns);
+      return resolvedFilters.length > 0 ? resolvedFilters : localizeConfiguredColumns(raw);
     }
     if (isSaisisseur) {
       return selectedSubTheme.filtres_disponibles || [];
@@ -3861,15 +4012,54 @@ function App({ forceVisitor = false }) {
     if (!isVisitor || !selectedSubTheme) return null;
 
     const cols = (visibleColumnsForRender || []).filter(Boolean);
+    const rows = filteredData || [];
+    const sourceLookup = buildSourceColumnLookup(cols);
 
-    const periodCol = cols.find(c => isPeriodColumnIdentifier(c)) || null;
-    const valueCol = cols.find(c => isValueColumnIdentifier(c)) || null;
+    const resolvedCanonicalValueCol = bilingualLabelLookup.valueColumnCode
+      ? (resolveSourceColumn(bilingualLabelLookup.valueColumnCode, sourceLookup) || null)
+      : null;
+
+    const periodFromCanonical = (() => {
+      const canonicalCols = Array.isArray(bilingualLabelLookup.canonicalColumns)
+        ? bilingualLabelLookup.canonicalColumns
+        : [];
+      for (const code of canonicalCols) {
+        if (!isPeriodColumnIdentifier(code)) continue;
+        const resolved = resolveSourceColumn(code, sourceLookup);
+        if (resolved) return resolved;
+      }
+      return null;
+    })();
+
+    const valueCol = resolvedCanonicalValueCol
+      || cols.find(c => isValueColumnIdentifier(c))
+      || inferNumericValueColumn(cols, rows)
+      || null;
+
+    const periodCol = periodFromCanonical
+      || cols.find(c => isPeriodColumnIdentifier(c))
+      || inferPeriodColumnFromValues(cols, rows, valueCol)
+      || null;
 
     const groupCols = cols.filter(c => c !== periodCol && c !== valueCol);
     const canPivot = Boolean(periodCol && valueCol && groupCols.length > 0);
-    if (!canPivot) return { canPivot: false };
+    if (!canPivot) {
+      const reasons = [];
+      if (!periodCol) reasons.push('Colonne période introuvable');
+      if (!valueCol) reasons.push('Colonne valeur introuvable');
+      if (groupCols.length === 0) reasons.push('Aucune colonne de regroupement');
+      return {
+        canPivot: false,
+        reason: reasons.join(' • ') || 'Configuration insuffisante',
+        periodCol,
+        valueCol,
+        groupCols,
+        displayGroupCols: groupCols,
+        periods: [],
+        rows: [],
+      };
+    }
 
-    const rows = filteredData || [];
     const isTotalToken = (val) => /(total|totale|tous|toutes|tout|ensemble|المجموع|إجمالي)/i.test(String(val ?? '').toLowerCase());
 
     const displayGroupCols = groupCols;
@@ -3942,24 +4132,44 @@ function App({ forceVisitor = false }) {
       groupCols,
       displayGroupCols,
       periods: sortedPeriods,
-      rows: rowsOut
+      rows: rowsOut,
+      reason: ''
     };
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isVisitor, selectedSubTheme, visibleColumnsForRender, filteredData]);
+  }, [isVisitor, selectedSubTheme, visibleColumnsForRender, filteredData, bilingualLabelLookup.canonicalColumns, bilingualLabelLookup.valueColumnCode]);
 
   const visitorVerticalMatrix = React.useMemo(() => {
-    if (!isVisitor || !selectedSubTheme || !visitorMatrix?.canPivot) return { canVertical: false };
+    if (!isVisitor || !selectedSubTheme) {
+      return { canVertical: false, reason: 'Mode visiteur inactif' };
+    }
 
     const cols = (visibleColumnsForRender || []).filter(Boolean);
-    const valueCol = visitorMatrix.valueCol;
-    if (!valueCol) return { canVertical: false };
+    const rows = filteredData || [];
+    const sourceLookup = buildSourceColumnLookup(cols);
+    const resolvedCanonicalValueCol = bilingualLabelLookup.valueColumnCode
+      ? (resolveSourceColumn(bilingualLabelLookup.valueColumnCode, sourceLookup) || null)
+      : null;
+    const valueCol = visitorMatrix?.valueCol
+      || resolvedCanonicalValueCol
+      || cols.find(c => isValueColumnIdentifier(c))
+      || inferNumericValueColumn(cols, rows)
+      || null;
+    if (!valueCol) return { canVertical: false, reason: 'Colonne valeur introuvable' };
 
-    const hierarchyRaw = localizeConfiguredColumns(Array.isArray(selectedSubTheme?.visitor_pivot_columns) ? selectedSubTheme.visitor_pivot_columns : []);
-    const hierarchyCols = hierarchyRaw.filter(c => cols.includes(c) && c !== valueCol);
-    if (!hierarchyCols || hierarchyCols.length === 0) return { canVertical: false };
+    const hierarchyRaw = Array.isArray(selectedSubTheme?.visitor_pivot_columns) ? selectedSubTheme.visitor_pivot_columns : [];
+    const hierarchyResolved = resolveConfiguredColumnsForRows(hierarchyRaw, cols);
+    let hierarchyCols = hierarchyResolved.filter(c => cols.includes(c) && normalizeDataToken(c) !== normalizeDataToken(valueCol));
+    if (!hierarchyCols || hierarchyCols.length === 0) {
+      const fallbackHierarchySource = (visitorMatrix?.groupCols && visitorMatrix.groupCols.length > 0)
+        ? visitorMatrix.groupCols
+        : cols;
+      const fallbackHierarchy = fallbackHierarchySource
+        .filter(c => cols.includes(c) && normalizeDataToken(c) !== normalizeDataToken(valueCol));
+      hierarchyCols = fallbackHierarchy;
+    }
+    if (!hierarchyCols || hierarchyCols.length === 0) return { canVertical: false, reason: 'Aucune hiérarchie exploitable' };
 
     const rowCols = cols.filter(c => c !== valueCol && !hierarchyCols.includes(c));
-    const rows = filteredData || [];
 
     const valueLooksRate = /(%|taux|ratio|pourcentage|ظ†ط³ط¨ط©)/i.test(String(valueCol).toLowerCase());
     const shouldSum = Boolean(selectedSubTheme?.est_sommable) && !valueLooksRate;
@@ -4063,6 +4273,7 @@ function App({ forceVisitor = false }) {
 
     return {
       canVertical: leaves.length > 0,
+      reason: leaves.length > 0 ? '' : 'Aucune donnée après application des filtres',
       hierarchyCols,
       rowCols,
       leaves,
@@ -6726,22 +6937,30 @@ function App({ forceVisitor = false }) {
                   </div>
                 )}
 
-                {isVisitor && visitorMatrix?.canPivot && (
-                  <div className="flex gap-2 items-center">
-                    <button
-                      onClick={() => setVisitorTableView('horizontal')}
-                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'horizontal' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')}`}
-                    >{t('horizontal_view')}</button>
-                    <button
-                      onClick={() => canVisitorVerticalView && setVisitorTableView('vertical')}
-                      disabled={!canVisitorVerticalView}
-                      className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'vertical' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
-                    >{t('vertical_view')}</button>
+                {isVisitor && (
+                  <div className="space-y-2">
+                    <div className="flex gap-2 items-center">
+                      <button
+                        onClick={() => setVisitorTableView('horizontal')}
+                        className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'horizontal' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')}`}
+                      >{t('horizontal_view')}</button>
+                      <button
+                        onClick={() => canVisitorVerticalView && setVisitorTableView('vertical')}
+                        disabled={!canVisitorVerticalView}
+                        className={`px-4 py-2 border rounded-lg font-bold text-sm shadow-sm transition-colors ${activeVisitorView === 'vertical' ? (isVisitor ? 'bg-[#7A0A4A] text-white border-[#b74a86]' : 'bg-[#7A0A4A] text-white border-[#5E0738]') : (isVisitor ? 'bg-white text-[#5E0738] border-[#B88FA4] hover:bg-[#f3f3f3]' : 'bg-white text-[#5E0738] border-[#CCB47F] hover:bg-[#f3f3f3]')} ${!canVisitorVerticalView ? 'opacity-50 cursor-not-allowed' : ''}`}
+                      >{t('vertical_view')}</button>
+                    </div>
+
+                    {!canVisitorVerticalView && (
+                      <div className="text-xs text-[#7A0A4A] bg-[#fdf4f8] border border-[#e8c7d8] rounded-md px-3 py-2">
+                        Vue verticale indisponible: {visitorVerticalMatrix?.reason || visitorMatrix?.reason || 'configuration incomplète'}.
+                      </div>
+                    )}
                   </div>
                 )}
 
                 <div className={`${isVisitor ? 'border-2 border-[#A85A84] rounded-xl bg-white shadow-[0_2px_12px_rgba(106,31,82,0.14)]' : 'border-2 border-black rounded-lg bg-white shadow-inner'} overflow-auto max-h-[28rem]`}>
-                  {isVisitor && visitorMatrix?.canPivot && activeVisitorView === 'vertical' ? (
+                  {isVisitor && activeVisitorView === 'vertical' && visitorVerticalMatrix?.canVertical ? (
                     <>
                       <div className="sticky top-0 z-20 bg-white border-b border-[#CCB47F] px-4 py-2 text-xs text-[#3F2A1F] font-medium">
                         <span>{t('row_count', { count: (visitorVerticalMatrix.rows || []).length })}</span>

@@ -1663,9 +1663,16 @@ def _normalize_wide_metrics_to_long(df, lang='fr'):
 
         id_col_label = str(id_col or '')
         normalized_header = _normalize_semantic_token(id_col_label)
+        label_without_year = re.sub(r'(19|20)\d{2}(?:\s*[-/]\s*(19|20)\d{2})?', ' ', id_col_label)
         has_year_token = bool(re.search(r'(19|20)\d{2}(?:\s*[-/]\s*(19|20)\d{2})?', id_col_label))
-        has_year_keyword = bool(re.search(r'(annee|annees|année|années|year|years|periode|période|period)', normalized_header))
-        looks_like_year_header = _semantic_key_from_label(id_col) == 'year' or (has_year_token and has_year_keyword)
+        has_year_keyword = bool(re.search(r'(annee|annees|année|années|year|years|periode|période|period|سنة|السنة|سنوات|الفترة|التاريخ)', normalized_header))
+        header_semantic = _semantic_key_from_label(id_col)
+        header_semantic_without_year = _semantic_key_from_label(label_without_year)
+        looks_like_year_header = (
+            header_semantic == 'year'
+            or header_semantic_without_year == 'year'
+            or (has_year_token and has_year_keyword)
+        )
 
         # Only treat as global-year header when values are clearly not years.
         if not looks_like_year_header or _is_year_like_values(id_values):
@@ -1871,6 +1878,125 @@ def _select_best_matching_value_column(df_target, ref_numbers, preferred_col=Non
     return best_col or preferred_col or _pick_value_column(df_target)
 
 
+def _promote_embedded_year_header_column(df_source, lang='fr'):
+    """Recover explicit year column when year is embedded in an identifier header (e.g. 'Annee 2014', 'سنة 2014')."""
+    if df_source is None or df_source.empty:
+        return df_source, False
+
+    work = df_source.copy()
+    cols = [str(c) for c in work.columns]
+    year_col_name = _semantic_label_for_key('year', lang)
+    if year_col_name in cols:
+        return work, False
+
+    for idx, col in enumerate(cols):
+        label = str(col or '')
+        normalized_header = _normalize_semantic_token(label)
+        has_year_token = bool(re.search(r'(19|20)\d{2}(?:\s*[-/]\s*(19|20)\d{2})?', label))
+        has_year_keyword = bool(re.search(r'(annee|annees|année|années|year|years|periode|période|period|سنة|السنة|سنوات|الفترة|التاريخ)', normalized_header))
+        looks_like_year_header = _semantic_key_from_label(label) == 'year' or (has_year_token and has_year_keyword)
+        if not looks_like_year_header:
+            continue
+
+        values = [_cell_to_text(v) for v in work[col].tolist() if _cell_to_text(v)]
+        if not values or _is_year_like_values(values):
+            continue
+
+        match = re.search(r'(19|20)\d{2}(?:\s*[-/]\s*(19|20)\d{2})?', label)
+        if not match:
+            continue
+        year_value = re.sub(r'\s+', '', match.group(0)).replace('/', '-')
+
+        insert_at = min(idx + 1, len(cols))
+        work.insert(insert_at, year_col_name, year_value)
+        return work, True
+
+    return work, False
+
+
+def _build_semantic_column_alignment(reference_columns, source_columns, reference_value_idx=None, source_value_idx=None):
+    """Align source columns to reference columns using value/label semantics before positional fallback."""
+    ref_cols = [str(c) for c in (reference_columns or [])]
+    src_cols = [str(c) for c in (source_columns or [])]
+    mapping = [-1 for _ in ref_cols]
+    used_src = set()
+
+    def _is_valid_src(idx):
+        return isinstance(idx, int) and 0 <= idx < len(src_cols)
+
+    # 1) Pin value columns first when available.
+    if (
+        isinstance(reference_value_idx, int)
+        and 0 <= reference_value_idx < len(ref_cols)
+        and _is_valid_src(source_value_idx)
+    ):
+        mapping[reference_value_idx] = source_value_idx
+        used_src.add(source_value_idx)
+
+    # 2) Exact normalized header match.
+    src_by_norm = defaultdict(list)
+    for sidx, scol in enumerate(src_cols):
+        src_by_norm[_normalize_column_name(scol)].append(sidx)
+
+    for ridx, rcol in enumerate(ref_cols):
+        if mapping[ridx] != -1:
+            continue
+        key = _normalize_column_name(rcol)
+        for candidate in src_by_norm.get(key, []):
+            if candidate in used_src:
+                continue
+            mapping[ridx] = candidate
+            used_src.add(candidate)
+            break
+
+    # 3) Semantic key match when unique enough.
+    src_by_semantic = defaultdict(list)
+    for sidx, scol in enumerate(src_cols):
+        sem = _semantic_key_from_label(scol)
+        if sem:
+            src_by_semantic[sem].append(sidx)
+
+    for ridx, rcol in enumerate(ref_cols):
+        if mapping[ridx] != -1:
+            continue
+        sem = _semantic_key_from_label(rcol)
+        if not sem:
+            continue
+        candidates = [sidx for sidx in src_by_semantic.get(sem, []) if sidx not in used_src]
+        if not candidates:
+            continue
+
+        # Prefer a candidate with same normalized header when possible.
+        ref_norm = _normalize_column_name(rcol)
+        chosen = None
+        for candidate in candidates:
+            if _normalize_column_name(src_cols[candidate]) == ref_norm:
+                chosen = candidate
+                break
+        if chosen is None:
+            chosen = candidates[0]
+
+        mapping[ridx] = chosen
+        used_src.add(chosen)
+
+    # 4) Stable positional fallback then first remaining free source column.
+    for ridx in range(len(ref_cols)):
+        if mapping[ridx] != -1:
+            continue
+        if ridx < len(src_cols) and ridx not in used_src:
+            mapping[ridx] = ridx
+            used_src.add(ridx)
+            continue
+        for sidx in range(len(src_cols)):
+            if sidx in used_src:
+                continue
+            mapping[ridx] = sidx
+            used_src.add(sidx)
+            break
+
+    return mapping
+
+
 def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, source_cols_en=None):
     """
     Build canonical bilingual dataset from two aligned FR/AR analytical tables.
@@ -1905,6 +2031,14 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, sour
         return None, report
 
     if len(cols_fr) != len(cols_ar_aligned):
+        df_ar_recovered, recovered_ar = _promote_embedded_year_header_column(df_ar, lang=_detect_dataframe_language(df_ar))
+        if recovered_ar:
+            df_ar = df_ar_recovered
+            cols_ar_aligned = [str(c) for c in df_ar.columns]
+            cols_ar_labels = cols_ar_aligned
+            report['cols_ar'] = int(len(cols_ar_aligned))
+
+    if len(cols_fr) != len(cols_ar_aligned):
         report['errors'].append('Le nombre de colonnes FR/AR est different.')
         return None, report
 
@@ -1912,6 +2046,13 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, sour
         if len(df_fr) != len(df_en):
             report['errors'].append('Le nombre de lignes FR/EN est different.')
             return None, report
+        if len(cols_fr) != len(cols_en_aligned):
+            df_en_recovered, recovered_en = _promote_embedded_year_header_column(df_en, lang='en')
+            if recovered_en:
+                df_en = df_en_recovered
+                cols_en_aligned = [str(c) for c in df_en.columns]
+                cols_en_labels = cols_en_aligned
+                report['cols_en'] = int(len(cols_en_aligned))
         if len(cols_fr) != len(cols_en_aligned):
             report['errors'].append('Le nombre de colonnes FR/EN est different.')
             return None, report
@@ -2014,12 +2155,29 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, sour
                 report['mismatch_samples_en'] = mismatches_en[:20]
                 return None, report
 
+    col_map_ar = _build_semantic_column_alignment(
+        cols_fr,
+        cols_ar_aligned,
+        reference_value_idx=value_col_idx,
+        source_value_idx=value_col_idx_ar,
+    )
+    col_map_en = []
+    if df_en is not None:
+        col_map_en = _build_semantic_column_alignment(
+            cols_fr,
+            cols_en_aligned,
+            reference_value_idx=value_col_idx,
+            source_value_idx=value_col_idx_en,
+        )
+
     canonical_columns = []
     column_labels = {}
     used_cols = set()
     for idx, fr_col in enumerate(cols_fr):
-        ar_col = cols_ar_labels[idx] if idx < len(cols_ar_labels) else fr_col
-        en_col = cols_en_labels[idx] if cols_en_labels and idx < len(cols_en_labels) else fr_col
+        ar_idx = col_map_ar[idx] if idx < len(col_map_ar) else idx
+        en_idx = col_map_en[idx] if (col_map_en and idx < len(col_map_en)) else idx
+        ar_col = cols_ar_labels[ar_idx] if 0 <= ar_idx < len(cols_ar_labels) else fr_col
+        en_col = cols_en_labels[en_idx] if cols_en_labels and 0 <= en_idx < len(cols_en_labels) else fr_col
         base_code = _safe_code_from_label(fr_col, f'col_{idx + 1}')
         code = base_code
         suffix = 2
@@ -2046,8 +2204,10 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, sour
         row_en = {}
         for cidx, col_code in enumerate(canonical_columns):
             fr_val = df_fr.iloc[ridx, cidx]
-            ar_val = df_ar.iloc[ridx, cidx]
-            en_val = df_en.iloc[ridx, cidx] if df_en is not None else fr_val
+            ar_idx = col_map_ar[cidx] if cidx < len(col_map_ar) else cidx
+            en_idx = col_map_en[cidx] if (col_map_en and cidx < len(col_map_en)) else cidx
+            ar_val = df_ar.iloc[ridx, ar_idx] if 0 <= ar_idx < len(cols_ar_aligned) else ''
+            en_val = df_en.iloc[ridx, en_idx] if (df_en is not None and 0 <= en_idx < len(cols_en_aligned)) else ''
 
             if cidx == value_col_idx:
                 parsed = _parse_number(fr_val)
@@ -2071,13 +2231,13 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, sour
 
             existing[val_code] = {
                 'fr': fr_txt,
-                'ar': ar_txt or fr_txt,
-                'en': en_txt or fr_txt,
+                'ar': ar_txt,
+                'en': en_txt,
             }
             row_obj[col_code] = val_code
             row_fr[col_code] = fr_txt
-            row_ar[col_code] = ar_txt or fr_txt
-            row_en[col_code] = en_txt or fr_txt
+            row_ar[col_code] = ar_txt
+            row_en[col_code] = en_txt
 
         rows.append(row_obj)
         rows_by_language['fr'].append(row_fr)
@@ -2107,6 +2267,8 @@ def _build_bilingual_payload(df_fr, df_ar, df_en=None, source_cols_ar=None, sour
             'value_column_fr': value_col_fr,
             'value_column_ar': value_col_ar,
             'value_column_en': value_col_en if cols_en_aligned else value_col_fr,
+            'column_map_ar': col_map_ar,
+            'column_map_en': col_map_en,
         },
     }
     return payload, report
@@ -2188,9 +2350,6 @@ def _maybe_build_bilingual_payload(df_fr, file_ar, file_en=None, use_ai=True):
 
     df_ar, warnings_ar = _normalize_import_dataframe(file_ar, use_ai=use_ai)
     source_cols_ar = [str(c) for c in df_ar.columns]
-    target_columns = [str(c) for c in df_fr.columns]
-    if target_columns:
-        df_ar = _align_df_columns_to_target(df_ar, target_columns)
     warnings_en = []
     df_en = None
     source_cols_en = []
@@ -2201,8 +2360,6 @@ def _maybe_build_bilingual_payload(df_fr, file_ar, file_en=None, use_ai=True):
             pass
         df_en, warnings_en = _normalize_import_dataframe(file_en, use_ai=use_ai)
         source_cols_en = [str(c) for c in df_en.columns]
-        if target_columns:
-            df_en = _align_df_columns_to_target(df_en, target_columns)
 
     payload, report = _build_bilingual_payload(
         df_fr,
@@ -4027,12 +4184,13 @@ class UserThemeAssignmentViewSet(viewsets.ModelViewSet):
                     # localized value labels exactly as validated by backend.
                     payload_rows = list(draft_i18n_payload.get('rows') or []) if draft_i18n_payload else []
                     payload_columns = list(draft_i18n_payload.get('canonical_columns') or []) if draft_i18n_payload else []
+                    payload_rows_fr = list((draft_i18n_payload.get('rows_by_language') or {}).get('fr') or []) if draft_i18n_payload else []
                     can_use_payload_directly = bool(
                         draft_i18n_payload
                         and payload_rows
                         and payload_columns
-                        and list(df_fr.columns) == payload_columns
                         and len(payload_rows) == len(df_fr)
+                        and (not payload_rows_fr or len(payload_rows_fr) == len(df_fr))
                     )
 
                     if can_use_payload_directly:

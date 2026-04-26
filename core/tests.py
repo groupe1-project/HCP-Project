@@ -7,6 +7,7 @@ import pandas as pd
 
 from .models import CustomUser
 from .models import Theme, SousTheme
+from .views import _build_bilingual_payload, _normalize_wide_metrics_to_long
 
 
 class HealthEndpointTests(TestCase):
@@ -180,6 +181,111 @@ class ImportWorkflowTests(TestCase):
 		self.assertEqual(payload.get('columns_order'), ['Annee', 'Valeur'])
 		self.assertTrue(any('fallback heuristique' in msg for msg in payload.get('warnings', [])))
 		self.assertEqual(payload.get('data'), [{'Annee': '2025', 'Valeur': 42}])
+
+	def test_build_bilingual_payload_aligns_reordered_ar_en_columns(self):
+		df_fr = pd.DataFrame([
+			{'Annee': '2024', 'Province': 'Beni Mellal', 'Sexe': 'Masculin', 'Valeur': 10},
+			{'Annee': '2024', 'Province': 'Azilal', 'Sexe': 'Feminin', 'Valeur': 12},
+		])
+
+		# Same logical table but with reordered columns in AR and EN files.
+		df_ar = pd.DataFrame([
+			{'القيمة': 10, 'الجنس': 'ذكر', 'الإقليم': 'بني ملال', 'السنة': '2024'},
+			{'القيمة': 12, 'الجنس': 'أنثى', 'الإقليم': 'أزيلال', 'السنة': '2024'},
+		])
+		df_en = pd.DataFrame([
+			{'Value': 10, 'Gender': 'Male', 'Province': 'Beni Mellal', 'Year': '2024'},
+			{'Value': 12, 'Gender': 'Female', 'Province': 'Azilal', 'Year': '2024'},
+		])
+
+		payload, report = _build_bilingual_payload(
+			df_fr,
+			df_ar,
+			df_en=df_en,
+			source_cols_ar=list(df_ar.columns),
+			source_cols_en=list(df_en.columns),
+		)
+
+		self.assertIsNotNone(payload)
+		self.assertTrue(report.get('matched'))
+
+		province_code = next(code for code, labels in payload['column_labels'].items() if labels.get('fr') == 'Province')
+		sexe_code = next(code for code, labels in payload['column_labels'].items() if labels.get('fr') == 'Sexe')
+
+		self.assertEqual(payload['column_labels'][province_code].get('ar'), 'الإقليم')
+		self.assertEqual(payload['column_labels'][province_code].get('en'), 'Province')
+		self.assertEqual(payload['column_labels'][sexe_code].get('ar'), 'الجنس')
+		self.assertEqual(payload['column_labels'][sexe_code].get('en'), 'Gender')
+
+		self.assertEqual(payload['rows_by_language']['ar'][0][province_code], 'بني ملال')
+		self.assertEqual(payload['rows_by_language']['ar'][0][sexe_code], 'ذكر')
+		self.assertEqual(payload['rows_by_language']['en'][1][sexe_code], 'Female')
+
+	def test_build_bilingual_payload_keeps_missing_ar_en_cells_empty(self):
+		df_fr = pd.DataFrame([
+			{'Annee': '2024', 'Sexe': 'Masculin', 'Valeur': 10},
+		])
+		df_ar = pd.DataFrame([
+			{'السنة': '2024', 'الجنس': '', 'القيمة': 10},
+		])
+		df_en = pd.DataFrame([
+			{'Year': '2024', 'Gender': '', 'Value': 10},
+		])
+
+		payload, report = _build_bilingual_payload(
+			df_fr,
+			df_ar,
+			df_en=df_en,
+			source_cols_ar=list(df_ar.columns),
+			source_cols_en=list(df_en.columns),
+		)
+
+		self.assertIsNotNone(payload)
+		self.assertTrue(report.get('matched'))
+
+		sexe_code = next(code for code, labels in payload['column_labels'].items() if labels.get('fr') == 'Sexe')
+		value_code = payload['rows'][0][sexe_code]
+		entry = payload['value_labels'][sexe_code][value_code]
+
+		self.assertEqual(entry.get('ar'), '')
+		self.assertEqual(entry.get('en'), '')
+		self.assertEqual(payload['rows_by_language']['ar'][0][sexe_code], '')
+		self.assertEqual(payload['rows_by_language']['en'][0][sexe_code], '')
+
+	def test_normalize_wide_metrics_to_long_ar_year_header_keeps_year_column(self):
+		df_ar = pd.DataFrame([
+			{'سنة 2014': 'أزيلال', 'المجموع': 554001, 'قروي': 453317, 'حضري': 100684},
+			{'سنة 2014': 'بني ملال', 'المجموع': 550678, 'قروي': 224670, 'حضري': 326008},
+		])
+
+		normalized = _normalize_wide_metrics_to_long(df_ar, lang='ar')
+		self.assertIsNotNone(normalized)
+		self.assertEqual(len(list(normalized.columns)), 4)
+		self.assertIn('السنة', list(normalized.columns))
+
+	def test_build_bilingual_payload_recovers_ar_embedded_year_header(self):
+		df_fr = pd.DataFrame([
+			{'Province': 'Azilal', 'Annee': '2014', 'Milieu': 'Total', 'Valeur': 554001},
+			{'Province': 'Azilal', 'Annee': '2014', 'Milieu': 'Rural', 'Valeur': 453317},
+			{'Province': 'Azilal', 'Annee': '2014', 'Milieu': 'Urbain', 'Valeur': 100684},
+		])
+
+		# AR table already long but missing explicit year column.
+		df_ar = pd.DataFrame([
+			{'سنة 2014': 'أزيلال', 'الوسط': 'المجموع', 'القيمة': 554001},
+			{'سنة 2014': 'أزيلال', 'الوسط': 'قروي', 'القيمة': 453317},
+			{'سنة 2014': 'أزيلال', 'الوسط': 'حضري', 'القيمة': 100684},
+		])
+
+		payload, report = _build_bilingual_payload(
+			df_fr,
+			df_ar,
+			source_cols_ar=list(df_ar.columns),
+		)
+
+		self.assertIsNotNone(payload)
+		self.assertTrue(report.get('matched'))
+		self.assertEqual(report.get('cols_fr'), report.get('cols_ar'))
 
 
 class ThemePermissionsTests(TestCase):
